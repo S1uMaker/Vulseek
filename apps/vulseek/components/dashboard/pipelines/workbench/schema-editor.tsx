@@ -9,10 +9,20 @@ import {
 	schemaReferrers,
 } from "@/lib/pipeline-editor/definition-helpers";
 import type { PipelineEditorAction } from "@/lib/pipeline-editor/pipeline-editor-state";
+import {
+	emptyPropertyDraft,
+	formStateToSchema,
+	isRecord,
+	PATH_PROPERTY_TYPE,
+	PROPERTY_TYPES,
+	SCHEMA_TYPES,
+	schemaToFormState,
+} from "@/lib/pipeline-editor/schema-form";
 import { cn } from "@/lib/utils";
 import {
 	EntityDiagnostics,
 	JsonField,
+	PathOfReferenceField,
 	SectionHeading,
 	SelectField,
 	TextField,
@@ -22,98 +32,10 @@ import {
 /**
  * Schema editor: a bounded Form mode for common JSON Schema properties and
  * an unrestricted JSON Schema mode. "Used by" lists referencing stages and
- * edges; "References" lists schemas this schema points at. Selecting either
- * navigates directly to the entity. Arbitrary recursive JSON Schema stays in
- * JSON mode — a generated form would mislead.
+ * edges; "References" lists schemas this schema points at (`$ref` / `$pathOf`).
+ * Selecting either navigates directly to the entity. Arbitrary recursive JSON
+ * Schema stays in JSON mode — a generated form would mislead.
  */
-
-const SCHEMA_TYPES = [
-	{ value: "object", label: "object" },
-	{ value: "array", label: "array" },
-	{ value: "string", label: "string" },
-	{ value: "number", label: "number" },
-	{ value: "integer", label: "integer" },
-	{ value: "boolean", label: "boolean" },
-	{ value: "null", label: "null" },
-] as const;
-
-type PropertyDraft = {
-	name: string;
-	originalName: string;
-	type: string;
-	description: string;
-	enumValues: unknown[];
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	Boolean(value) && typeof value === "object" && !Array.isArray(value);
-
-const schemaToFormState = (
-	schema: Record<string, unknown>,
-): { type: string; title: string; description: string; properties: PropertyDraft[]; required: string[]; itemsType: string } => {
-	const properties = (schema.properties as Record<string, unknown>) ?? {};
-	return {
-		type: typeof schema.type === "string" ? schema.type : "object",
-		title: typeof schema.title === "string" ? schema.title : "",
-		description: typeof schema.description === "string" ? schema.description : "",
-		properties: Object.entries(properties).map(([name, value]) => {
-			const property = (value ?? {}) as Record<string, unknown>;
-			return {
-				name,
-				originalName: name,
-				type: typeof property.type === "string" ? property.type : "string",
-				description: typeof property.description === "string" ? property.description : "",
-				enumValues: Array.isArray(property.enum) ? property.enum : [],
-			};
-		}),
-		required: Array.isArray(schema.required) ? (schema.required as string[]) : [],
-		itemsType:
-			typeof (schema.items as Record<string, unknown> | undefined)?.type === "string"
-				? ((schema.items as Record<string, unknown>).type as string)
-				: "string",
-	};
-};
-
-const formStateToSchema = (
-	form: ReturnType<typeof schemaToFormState>,
-	base: Record<string, unknown>,
-): Record<string, unknown> => {
-	const baseProperties = isRecord(base.properties) ? base.properties : {};
-	const properties: Record<string, unknown> = {};
-	for (const property of form.properties) {
-		if (!property.name.trim()) continue;
-		const basePropertyValue = baseProperties[property.originalName];
-		const baseProperty = isRecord(basePropertyValue) ? basePropertyValue : {};
-		const entry: Record<string, unknown> = { ...baseProperty, type: property.type };
-		if (property.description.trim()) entry.description = property.description;
-		else delete entry.description;
-		if (property.enumValues.length > 0) entry.enum = property.enumValues;
-		else delete entry.enum;
-		properties[property.name] = entry;
-	}
-	const next: Record<string, unknown> = {
-		...base,
-		type: form.type,
-	};
-	if (form.title) next.title = form.title;
-	else delete next.title;
-	if (form.description) next.description = form.description;
-	else delete next.description;
-	if (form.type === "object") {
-		next.properties = properties;
-		next.required = form.required.filter((name) => name in properties);
-		delete next.items;
-	} else if (form.type === "array") {
-		next.items = { type: form.itemsType };
-		delete next.properties;
-		delete next.required;
-	} else {
-		delete next.properties;
-		delete next.required;
-		delete next.items;
-	}
-	return next;
-};
 
 export type SchemaEditorProps = {
 	schemaId: string;
@@ -163,15 +85,20 @@ export const SchemaEditor = ({
 		);
 	};
 
+	const schemaIds = Object.keys(document.schemas);
+	const defaultPathOf = schemaIds.find((id) => id !== schemaId) ?? schemaIds[0] ?? "";
 	const usedBy = schemaReferrers(document, schemaId);
 	const references = React.useMemo(() => {
 		const refs = new Set<string>();
 		collectSchemaRefs(schema, refs);
 		return [...refs].filter((id) => id !== schemaId);
-	}, [schema]);
+	}, [schema, schemaId]);
 	const blockers = deleteBlockers(document, "schema", schemaId);
 	const advanced = Object.keys(schema).some(
-		(key) => !["type", "title", "description", "properties", "required", "items", "enum"].includes(key),
+		(key) =>
+			!["type", "title", "description", "properties", "required", "items", "enum", "$pathOf"].includes(
+				key,
+			),
 	);
 
 	return (
@@ -265,30 +192,36 @@ export const SchemaEditor = ({
 													setSchema(formStateToSchema(next, schema), `schema:${schemaId}:props`);
 												}}
 												className="h-8 w-full rounded-md border bg-background px-2 text-xs"
-												/>
-												<TextAreaField
-													label="Description (optional)"
-													value={property.description}
-													rows={2}
-													readOnly={readOnly}
-													placeholder="Describe this field"
-													onChange={(description) => setPropertyDescription(index, description)}
-												/>
-												<div className="grid grid-cols-2 gap-2">
+											/>
+											<TextAreaField
+												label="Description (optional)"
+												value={property.description}
+												rows={2}
+												readOnly={readOnly}
+												placeholder="Describe this field"
+												onChange={(description) => setPropertyDescription(index, description)}
+											/>
+											<div className="grid grid-cols-2 gap-2">
 												<select
 													value={property.type}
 													disabled={readOnly}
+													aria-label={`Type for ${property.name || "property"}`}
 													onChange={(event) => {
-														const properties = form.properties.map((p, i) =>
-															i === index ? { ...p, type: event.target.value } : p,
-														);
+														const type = event.target.value;
+														const properties = form.properties.map((p, i) => {
+															if (i !== index) return p;
+															if (type === PATH_PROPERTY_TYPE) {
+																return { ...p, type, pathOf: p.pathOf || defaultPathOf };
+															}
+															return { ...p, type };
+														});
 														const next = { ...form, properties };
 														setForm(next);
 														setSchema(formStateToSchema(next, schema), `schema:${schemaId}:props`);
 													}}
 													className="h-8 rounded-md border bg-background px-2 text-xs"
 												>
-													{SCHEMA_TYPES.map((option) => (
+													{PROPERTY_TYPES.map((option) => (
 														<option key={option.value} value={option.value}>
 															{option.label}
 														</option>
@@ -309,6 +242,27 @@ export const SchemaEditor = ({
 													Remove
 												</button>
 											</div>
+											{property.type === PATH_PROPERTY_TYPE ? (
+												<PathOfReferenceField
+													label="Path schema"
+													value={property.pathOf}
+													schemaIds={schemaIds}
+													readOnly={readOnly}
+													description="Task artifact path whose file content matches this schema."
+													onNavigateToSchema={(id) => onSelect({ type: "schema", id })}
+													onChange={(pathOf) => {
+														const properties = form.properties.map((p, i) =>
+															i === index ? { ...p, pathOf } : p,
+														);
+														const next = { ...form, properties };
+														setForm(next);
+														setSchema(
+															formStateToSchema(next, schema),
+															`schema:${schemaId}:props`,
+														);
+													}}
+												/>
+											) : null}
 										</div>
 									))}
 									{!readOnly ? (
@@ -317,10 +271,7 @@ export const SchemaEditor = ({
 											onClick={() => {
 												const next = {
 													...form,
-														properties: [
-															...form.properties,
-															{ name: "newProperty", originalName: "", type: "string", description: "", enumValues: [] },
-														],
+													properties: [...form.properties, emptyPropertyDraft()],
 												};
 												setForm(next);
 												setSchema(formStateToSchema(next, schema), `schema:${schemaId}:props`);
@@ -402,7 +353,7 @@ export const SchemaEditor = ({
 					<div className="rounded-md border bg-muted/30 p-3">
 						<p className="text-xs font-semibold text-foreground">References</p>
 						{references.length === 0 ? (
-							<p className="mt-1 text-xs text-muted-foreground">No nested $refs.</p>
+							<p className="mt-1 text-xs text-muted-foreground">No nested $refs or $pathOf.</p>
 						) : (
 							<ul className="mt-1 space-y-1">
 								{references.map((id) => (

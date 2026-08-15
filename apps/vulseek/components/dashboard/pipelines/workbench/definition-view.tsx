@@ -13,6 +13,8 @@ import {
 	diagnosticsForEntity,
 	duplicateDiagnostics,
 	entityCounts,
+	filterVisibleSchemaDiagnostics,
+	relatedSchemaIds,
 	schemaReferrers,
 } from "@/lib/pipeline-editor/definition-helpers";
 import type {
@@ -110,6 +112,8 @@ export const DefinitionView = ({
 		group: "groups",
 	};
 	const counts = entityCounts(document);
+	const visibleSchemaIds = relatedSchemaIds(document);
+	const visibleDiagnostics = filterVisibleSchemaDiagnostics(document, state.diagnostics);
 	const selected = state.selectedEntity;
 	const selectedMatchesSection =
 		selected &&
@@ -131,7 +135,7 @@ export const DefinitionView = ({
 	}, [selected?.type, selected?.id]);
 
 	const diagnosticsForSection = (kind: "stage" | "edge" | "schema" | "group") =>
-		state.diagnostics.filter((diagnostic) => diagnostic.entity?.type === kind);
+		visibleDiagnostics.filter((diagnostic) => diagnostic.entity?.type === kind);
 
 	const changeSection = (next: DefinitionSection) => {
 		setSection(next);
@@ -247,7 +251,7 @@ export const DefinitionView = ({
 			) : null}
 			{section === "schemas" ? (
 				<EntityList
-					items={Object.keys(document.schemas).map((id) => ({
+					items={visibleSchemaIds.map((id) => ({
 						id,
 						title: id,
 						subtitle: `${schemaReferrers(document, id).length} usage(s)`,

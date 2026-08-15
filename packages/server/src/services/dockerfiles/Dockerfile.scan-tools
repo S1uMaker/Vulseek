@@ -1,7 +1,7 @@
 FROM ubuntu:24.04 AS tools
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG CODEQL_VERSION="2.20.6"
+ARG CODEQL_VERSION="2.26.3"
 ARG RUST_TOOLCHAIN="stable"
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -153,8 +153,13 @@ RUN echo '#!/bin/bash' > /usr/local/bin/clangd-wrapper \
 
 RUN --mount=type=cache,id=vulseek-codeql-downloads,target=/root/.cache/vulseek-codeql,sharing=locked \
     mkdir -p /opt/codeql \
-    && if [ ! -s "/root/.cache/vulseek-codeql/codeql-linux64-${CODEQL_VERSION}.zip" ]; then \
-      curl -L "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip" \
+    && if [ -s "/root/.cache/vulseek-codeql/codeql-linux64-${CODEQL_VERSION}.zip" ] \
+      && unzip -tq "/root/.cache/vulseek-codeql/codeql-linux64-${CODEQL_VERSION}.zip" >/dev/null 2>&1; then \
+      :; \
+    else \
+      rm -f "/root/.cache/vulseek-codeql/codeql-linux64-${CODEQL_VERSION}.zip" \
+      && curl --fail --location --retry 3 \
+        "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip" \
         -o "/root/.cache/vulseek-codeql/codeql-linux64-${CODEQL_VERSION}.zip"; \
     fi \
     && unzip -q "/root/.cache/vulseek-codeql/codeql-linux64-${CODEQL_VERSION}.zip" -d /opt \

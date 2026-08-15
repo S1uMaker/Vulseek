@@ -161,9 +161,14 @@ const isResearchStage = (stageName: string | undefined) =>
 const resolveStagePersistent = async (
 	stage: Pick<
 		StageDefinition<PipelineContext, unknown, unknown>,
-		"persistent" | "runtimeConfig"
+		"persistent" | "runtimeConfig" | "goal"
 	>,
 ) => {
+	const goalSession = stage.runtimeConfig
+		? await stage.runtimeConfig.getGoalSession()
+		: null;
+	if (goalSession === "shared") return true;
+	if (goalSession === "per-task" || stage.goal === true) return false;
 	const runtimePersistent = stage.runtimeConfig
 		? await stage.runtimeConfig.getPersistent()
 		: null;
@@ -177,6 +182,11 @@ const resolveStageReuseContainer = async (
 	>,
 	stageName?: string,
 ) => {
+	const goalSession = stage.runtimeConfig
+		? await stage.runtimeConfig.getGoalSession()
+		: null;
+	if (goalSession === "shared") return true;
+	if (goalSession === "per-task") return false;
 	const runtimeReuseContainer = stage.runtimeConfig
 		? await stage.runtimeConfig.getReuseContainer()
 		: null;

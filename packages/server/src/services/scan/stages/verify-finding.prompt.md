@@ -29,7 +29,6 @@ Check whether the analysis report's factual claims, code paths, target descripti
 Do not judge security impact, exploitability, CVSS, EPSS, whether this is a bug, or whether it should be reported as a vulnerability. Those decisions belong to triage.
 Write a concise markdown sanity-check report to write_verify_report_to.
 Write every task artifact only under task_dir.
-Before returning, validate the structured JSON against the runtime-provided output.schema.json.
 Set id to {{taskId}}.
 Set reportPath to {{reportPath}}.
 Set runtimeSeconds to null if unknown.

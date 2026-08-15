@@ -25,6 +25,7 @@ import type {
 	PipelineEditorState,
 } from "@/lib/pipeline-editor/pipeline-editor-state";
 import { validDocument } from "@/lib/pipeline-editor/pipeline-editor-state";
+import { filterVisibleSchemaDiagnostics } from "@/lib/pipeline-editor/definition-helpers";
 import { cn } from "@/lib/utils";
 import { DefinitionView, type DrillLevel } from "./definition-view";
 import { QuickSwitcher } from "./quick-switcher";
@@ -171,9 +172,10 @@ export const PipelineWorkbench = ({
 		};
 	}, [readOnly, readOnlyYaml]);
 	const viewDocument = readOnly ? (readOnlyAnalysis?.document ?? null) : document;
-	const viewDiagnostics = readOnly
+	const rawViewDiagnostics = readOnly
 		? (readOnlyAnalysis?.diagnostics ?? [])
 		: state.diagnostics;
+	const viewDiagnostics = filterVisibleSchemaDiagnostics(viewDocument, rawViewDiagnostics);
 	const viewYaml = readOnly ? (readOnlyAnalysis?.yaml ?? "") : state.rawYamlBuffer;
 
 	const errorCount = viewDiagnostics.filter((d) => d.severity === "error").length;
@@ -368,10 +370,11 @@ export const PipelineWorkbench = ({
 											</div>
 										</div>
 										<div className="h-[calc(100%-2.25rem)]">
-											<PipelineInspector
-												document={viewDocument}
-												selection={state.selectedEntity as never}
-												onChange={(next) =>
+										<PipelineInspector
+											document={viewDocument}
+											selection={state.selectedEntity as never}
+											showPipelineSchemas={false}
+											onChange={(next) =>
 													dispatch({ type: "canvasModified", document: next })
 												}
 												onSelect={(entity) => {

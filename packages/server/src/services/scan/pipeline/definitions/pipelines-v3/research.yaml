@@ -1931,37 +1931,46 @@ schemas:
       - attackerModel
   goal-spec:
     type: object
+    description: Durable hunt contract after Craft self-red-team. Defines the outcome, not the method. Hunt and Surface read this file; it is not a shared /goal string. Every required field must be filled; empty strings are invalid.
     additionalProperties: false
     properties:
       goalId:
+        description: Stable id for this GoalSpec in the scan job. Use a short slug such as goal-1. Do not reuse ids across rewritten specs in the same job.
         type: string
         minLength: 1
       title:
+        description: Short human title of the hunt objective. One line, no method names, no file lists.
         type: string
         minLength: 1
       successCriteria:
+        description: Testable definition of done. A candidate counts only if it meets this. Close lazy outs here after red-team (for example "a real attacker-controlled path to the sink", not "mentioned a sink").
         type: string
         minLength: 1
       nonGoals:
+        description: Invalid attacker preconditions, out-of-scope classes, and outcomes that must not be counted as success. Include merged human nonGoals when present.
         type: array
         items:
           type: string
       attackerModel:
+        description: Attacker capabilities and position that Judge will enforce. Theoretical paths that need powers outside this model must be rejected.
         type: string
         minLength: 1
       stopCondition:
+        description: When a single Hunt task must stop. Always one candidate that meets successCriteria, or a justified exhaustion. Never "keep looking until time runs out".
         type: string
         minLength: 1
       persistenceLanguage:
+        description: Instruction Hunt must treat as standing policy. Must include that "no bugs found" is intermediate, not success, and that the agent must change method before giving up.
         type: string
         minLength: 1
       redTeamClosedLoopholes:
+        description: Lazy-agent loopholes Craft found (satisfy the letter without real work) and then closed in successCriteria or nonGoals. Each item names the loophole that was closed.
         type: array
         items:
           type: string
-      goalPrompt:
+      surfaceGuidance:
+        description: Optional planner notes for Surface (what a high-value surface looks like, suggested partition axes). Not a Hunt /goal and not a second success criterion.
         type: string
-        minLength: 1
     required:
       - goalId
       - title
@@ -1971,120 +1980,160 @@ schemas:
       - stopCondition
       - persistenceLanguage
       - redTeamClosedLoopholes
-      - goalPrompt
+  goal-craft-input:
+    type: object
+    description: Craft stage input. Only the scan-job snapshot. No threatDirection.
+    additionalProperties: false
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+    required:
+      - scanJob
   goal-craft-output:
     type: object
+    description: Craft stage output. Write the GoalSpec JSON artifact and return only its path.
     additionalProperties: false
     properties:
       goalSpecPath:
-        type: string
-        minLength: 1
-      goalSpec:
-        $ref: "#/schemas/goal-spec"
+        description: Container path of the written GoalSpec JSON artifact. Default /task/goal-spec.json.
+        $pathOf: "#/schemas/goal-spec"
     required:
       - goalSpecPath
-      - goalSpec
   hunt-goal:
     type: object
+    description: One dispatchable hunt surface under the GoalSpec lens. Surface emits these; Hunt receives exactly one. Do not put a vulnerability finding here.
     additionalProperties: false
     properties:
       huntGoalId:
+        description: Stable id for this hunt surface in the scan job. Unique among huntGoals emitted in this job. Example hg-auth-cookie-path.
         type: string
         minLength: 1
       title:
+        description: Short name of the surface (module, flow, or boundary). Not a vulnerability title.
         type: string
         minLength: 1
-      objective:
+      scopeStatement:
+        description: One-sentence lockbox for this surface. Hunt must stay inside it. Not a second successCriteria; GoalSpec remains the outcome.
         type: string
         minLength: 1
       focusPaths:
+        description: Repo-relative files or directories Hunt should stay inside. Empty array is allowed when the surface is not path-shaped.
         type: array
         items:
           type: string
       riskPathways:
+        description: Suspected source-to-sink or trust-boundary crossings to investigate. Descriptive, not confirmed findings.
         type: array
         items:
           type: string
       rationale:
-        type: string
-      partitionDimension:
+        description: Why this surface is high-value for the GoalSpec versus alternatives. Used by later Surface rounds to avoid repeating dead zones.
         type: string
     required:
       - huntGoalId
       - title
-      - objective
+      - scopeStatement
+      - focusPaths
   surface-dispatch:
     type: object
+    description: Surface planner output. First entry emits 2-8 diverse huntGoals. Later entries emit new huntGoals or declare global exhaustion. Surface does not hunt.
     additionalProperties: false
     properties:
       globalExhausted:
+        description: True only when no useful unexplored GoalSpec-relevant surface remains. Then huntGoals must be []. False whenever this output dispatches one or more huntGoals.
         type: boolean
       exhaustionReason:
+        description: Required when globalExhausted is true. Summarize covered partitions, dead zones, and why another slice would not help.
         type: string
       partitionDimension:
+        description: Slice axis used for the huntGoals in this dispatch (module, data-flow, interface, ...). Helps later rounds pick a different axis.
         type: string
       huntGoals:
+        description: Hunt surfaces to fan out this round. Empty if and only if globalExhausted is true. First round should be 2-8 diverse items; later rounds may emit fewer.
         type: array
         items:
           $ref: "#/schemas/hunt-goal"
     required:
       - globalExhausted
       - huntGoals
+    if:
+      properties:
+        globalExhausted:
+          const: true
+      required:
+        - globalExhausted
+    then:
+      required:
+        - exhaustionReason
   goal-candidate-finding:
     type: object
+    description: Exactly one vulnerability candidate from Hunt. Must meet GoalSpec.successCriteria. Not a theoretical note. Evidence must support claim. Never emit more than one per Hunt task.
     additionalProperties: false
     properties:
       candidateId:
+        description: Stable id for this candidate. Unique in the scan job. Do not reuse an id from a discarded attempt.
         type: string
         minLength: 1
       huntGoalId:
+        description: The huntGoalId of the assigned surface. Must match the Hunt task input.
         type: string
         minLength: 1
       title:
+        description: One-line finding title. Name the bug, not the file. Example "Unauthenticated path traversal in backup restore".
         type: string
         minLength: 1
       description:
+        description: What the bug is, how it manifests, and why it matters under the GoalSpec. Concrete. No filler.
         type: string
         minLength: 1
       vulnerabilityClass:
+        description: Bug class label such as path-traversal, sqli, idor, rce, authz-bypass. Prefer a conventional name over a novel phrase.
         type: string
       location:
+        description: Primary code location of the sink or violated check. filePath is required; line and symbol when known.
         type: object
         additionalProperties: false
         properties:
           filePath:
+            description: Repo-relative path of the primary vulnerable file.
             type: string
             minLength: 1
           line:
+            description: 1-based line of the sink or missing check. Null if the issue is file-wide and no single line is honest.
             type:
               - integer
               - "null"
           symbol:
+            description: Function, method, or handler name at the location. Null if unknown.
             type:
               - string
               - "null"
         required:
           - filePath
       claim:
+        description: Falsifiable statement Hunt is asserting. Example "attacker-controlled filename reaches fs.readFile without sanitization in restoreBackup". Judge tests this claim.
         type: string
         minLength: 1
       rootCauseKey:
+        description: Stable key for the underlying mistake, used by Dedup and Surface to avoid re-hunting the same root cause. Prefer a short slug of missing-check plus location, not the candidateId.
         type: string
         minLength: 1
       evidence:
+        description: Supporting observations. Each item is one fact (code, trace, or command result) that proves or bounds the claim.
         type: array
         items:
-          type: object
+          type: string
       attackerControl:
+        description: What the attacker actually controls to trigger the bug, consistent with GoalSpec.attackerModel.
         type: string
       preconditions:
+        description: Required setup that is still allowed by the attacker model. Do not list disallowed powers; those make the candidate invalid.
         type: array
         items:
           type: string
       quickDisproofAttempt:
+        description: How Hunt tried to kill the finding (wrong sink, sanitizer, auth gate). If disproof succeeded, do not emit this candidate.
         type: string
-      confidence:
-        type: number
     required:
       - candidateId
       - huntGoalId
@@ -2095,50 +2144,85 @@ schemas:
       - rootCauseKey
   goal-exhaustion-declaration:
     type: object
+    description: Hunt found no candidate that meets successCriteria after reasonable methods on this surface. "No bugs found" is not enough; methodsTried and coveredPaths must show real work.
     additionalProperties: false
     properties:
       huntGoalId:
+        description: The assigned huntGoalId being declared exhausted. Must match Hunt input.
         type: string
         minLength: 1
-      exhausted:
-        type: boolean
-        const: true
       methodsTried:
+        description: Distinct methods actually used (manual tracing, CodeQL query X, Semgrep rule Y, ...). Name what was run, not "various tools".
         type: array
         items:
           type: string
       coveredPaths:
+        description: Repo-relative files or flows inspected. Used by Surface to treat these as dead zones for this GoalSpec.
         type: array
         items:
           type: string
       reason:
+        description: Why this surface is exhausted under the GoalSpec. Mention remaining uncertainty only if it cannot be reduced with another reasonable method here.
         type: string
         minLength: 1
     required:
       - huntGoalId
-      - exhausted
       - methodsTried
       - coveredPaths
       - reason
   goal-hunt-output:
     type: object
+    description: Hunt envelope payload. Fill exactly one of candidate or exhaustion; the unused field must be null. Envelope route is candidate or exhausted.
     additionalProperties: false
     properties:
-      outcome:
-        type: string
-        enum:
-          - candidate
-          - exhausted
       candidate:
+        description: The single finding when this Hunt succeeds. Must be null when the surface is exhausted.
         anyOf:
           - $ref: "#/schemas/goal-candidate-finding"
           - type: "null"
       exhaustion:
+        description: Exhaustion record when the assigned surface is done with no qualifying finding. Must be null when emitting a candidate.
         anyOf:
           - $ref: "#/schemas/goal-exhaustion-declaration"
           - type: "null"
     required:
-      - outcome
+      - candidate
+      - exhaustion
+  goal-surface-input:
+    type: object
+    description: Surface planner input. First entry has feedback null. Re-entry carries a mapped downstream event. GoalSpec is a file path, not an inline object.
+    additionalProperties: false
+    properties:
+      goalSpecPath:
+        description: Path of the GoalSpec JSON artifact written by Craft.
+        $pathOf: "#/schemas/goal-spec"
+      repositoryPath:
+        description: Path of the repository domain-object artifact when one exists. Optional until a producer writes it.
+        $pathOf: "#/schemas/repository"
+      feedback:
+        description: Null on first entry. Required on re-entry.
+        anyOf:
+          - $ref: "#/schemas/surface-feedback"
+          - type: "null"
+    required:
+      - goalSpecPath
+      - feedback
+  goal-hunt-input:
+    type: object
+    description: Hunt stage input for one assigned surface. GoalSpec is a file path, not an inline object.
+    additionalProperties: false
+    properties:
+      goalSpecPath:
+        description: Path of the same GoalSpec JSON artifact Surface used.
+        $pathOf: "#/schemas/goal-spec"
+      huntGoal:
+        $ref: "#/schemas/hunt-goal"
+      repositoryPath:
+        description: Path of the repository domain-object artifact when one exists. Optional until a producer writes it.
+        $pathOf: "#/schemas/repository"
+    required:
+      - goalSpecPath
+      - huntGoal
   goal-judge-verdict:
     type: object
     additionalProperties: false
@@ -2198,26 +2282,43 @@ schemas:
       - references
   surface-feedback:
     type: object
+    description: Downstream event fed back into Surface on re-entry. Surface uses this to avoid dead zones and already-novel root causes. Hunt and Judge do not produce this object directly; the runner maps their outputs into it.
     additionalProperties: false
     properties:
       kind:
+        description: "Which event this is. hunt-exhausted a surface declared done. judge-reject Judge did not confirm. dedup-reject not novel. dedup-novel confirmed and novel."
         type: string
         enum:
-          - hunt-candidate
           - hunt-exhausted
           - judge-reject
           - dedup-reject
           - dedup-novel
       huntGoalId:
+        description: Hunt surface this event belongs to, when known.
         type: string
       candidateId:
+        description: Candidate id when this event is about a finding. Null for hunt-exhausted.
         type:
           - string
           - "null"
       summary:
+        description: Short fact Surface should remember (why rejected, what was covered, which rootCauseKey is now novel).
         type: string
       payload:
+        description: Structured facts for the planner. Only these keys are allowed.
         type: object
+        additionalProperties: false
+        properties:
+          rootCauseKey:
+            type: string
+          coveredPaths:
+            type: array
+            items:
+              type: string
+          methodsTried:
+            type: array
+            items:
+              type: string
     required:
       - kind
       - summary
@@ -2287,11 +2388,11 @@ stages:
       prompt: |
         You are the Research Scope stage for a generic security research job.
 
-        Read the target project source and `/task/inputs/task-input.json`. Define the attacker starting point, trusted domain, protected assets, deployment assumptions, permitted information sources, and success criteria supplied by the job. Do not invent project-specific assumptions. The minimum research deadline is {{researchDeadlineAt}}; include it in the scope artifact and do not conclude the research as exhausted before that deadline unless the job is explicitly stopped. Write the complete scope object to /task/scope.json.
+        Read the target project source and the task input. Define the attacker starting point, trusted domain, protected assets, deployment assumptions, permitted information sources, and success criteria supplied by the job. Do not invent project-specific assumptions. The minimum research deadline is {{researchDeadlineAt}}; include it in the scope artifact and do not conclude the research as exhausted before that deadline unless the job is explicitly stopped. Produce the complete scope artifact required by the output schema.
 
         Persist the scope as the reserved Track `__scope__` using the research-db skill. Use a stable Track ID derived from the current scan job (for example `scope-{{scanJobId}}`), create it with `approachFamily=scope`, `researchIdea=job scope`, `status=active`, and the complete scope object, or read and update it with the current revision when it already exists. Resolve conflicts with the documented three-round CAS loop. Do not include `__scope__` in the ordinary research tracks returned by Track Planning.
 
-        Return {"scopePath":"/task/scope.json"} in output only after the scope artifact and reserved Track write have succeeded.
+        Return the schema-defined scope manifest only after the scope artifact and reserved Track write have succeeded.
       prepareRepository: target
       includePolicy: false
       plugins: []
@@ -2322,7 +2423,7 @@ stages:
       prompt: |
         You are the Surface Mapping stage for a generic security research job.
 
-        Read the scope artifact before inspecting source. Enumerate attacker-facing entrypoints, trust boundaries, sources, sinks, runtime components, dependency flows, coverage, and open questions. Do not claim exploitability. Write the inventory to /task/surface-map.json and return {"surfaceMapPath":"/task/surface-map.json"} in output.
+        Read the scope artifact before inspecting source. Enumerate attacker-facing entrypoints, trust boundaries, sources, sinks, runtime components, dependency flows, coverage, and open questions. Do not claim exploitability. Produce the surface inventory artifact required by the output schema and return the schema-defined manifest.
       prepareRepository: none
       includePolicy: false
       plugins: []
@@ -2400,19 +2501,13 @@ stages:
 
         Read the scope and surface artifacts and inspect only the assigned track's target scope. Trace attacker-controlled data through parsing, guards, transformations, persistence, queues, and sinks. Record precise source evidence, quick disproof attempts, Research Findings, and materially new track suggestions.
 
-        Write each Finding as one strict JSON object in its own `/task/findings/<safe-finding-id>.json` file. Every Finding must use the strict Finding artifact shape and set `findingId` to exactly `trackKey:rootCauseKey`, with one colon separator and no `::`, spaces, or alternate delimiter. For example, `admin-dispatch-csrf:ajax-dismiss-pointer-commented-out-nonce`. Do not embed Finding objects in the Discovery Report and do not JSON-encode a Finding as a string.
+        Produce each Finding as one strict JSON artifact. Every Finding must use the strict Finding artifact shape and set `findingId` to exactly `trackKey:rootCauseKey`, with one colon separator and no `::`, spaces, or alternate delimiter. For example, `admin-dispatch-csrf:ajax-dismiss-pointer-commented-out-nonce`. Do not embed Finding objects in the Discovery Report and do not JSON-encode a Finding as a string.
 
-        Write the full report to `/task/discovery-report.json`. Its `findingPaths` array must contain the `/task/findings/*.json` paths in deterministic order. Validate the report and every Finding artifact before returning the report path and track identifier.
+        Produce the full Discovery Report artifact. Its `findingPaths` array must contain the Finding artifact paths in deterministic order. Validate the report and every Finding artifact before returning the report path and track identifier.
 
         After validating each Finding artifact, persist it directly with the `research-db create-finding` command. Use the exact current Track ID and the stable Finding ID from the artifact. If the Finding already exists, read it and use the revision conflict loop; never silently overwrite a different Finding. Update the owning Track's absolute `findingIds` set only with IDs that this Track owns, using `update-track` and its expected revision. A successful Discovery task must leave the database rows committed before returning its report.
 
-        Before ending the turn, you must also write `/task/output.json` yourself. It must be the final structured envelope, not a prose response:
-
-        ```json
-        {"route":null,"exit":false,"output":{"trackId":"<the assigned track identifier>","discoveryReportPath":"/task/discovery-report.json"}}
-        ```
-
-        Replace the placeholder with the exact assigned `trackId`. This write is mandatory even when the report contains no Findings. Re-open `/task/output.json` and validate it against `/task/output.schema.json` immediately before ending the turn.
+        Return the structured result required by the stage schema, including the exact assigned `trackId` and discovery report path. This is mandatory even when the report contains no Findings.
       prepareRepository: none
       includePolicy: false
       plugins: []
@@ -2446,7 +2541,7 @@ stages:
 
         Review only the current Track supplied in the task input. Read the discovery report for current-track context and use `research-db list-findings` to inspect persisted Findings owned by this Track. The report's `findingPaths` belong to the producing Discovery task; do not dereference those paths from this task. Track portfolio creation, deduplication, ordering, and changes to other Tracks belong exclusively to the serial Track Planning stage. Do not create, block, exhaust, rank, or otherwise mutate another Track from this task.
 
-        Return exactly one structured decision object with these fields: `trackKey`, `decision`, `summary`, `findingIds`, `coverageGaps`, `nextStep`, `blockReason`, and `reopenCondition`. `trackKey` must exactly match the current Track. `decision` must be one of `continue`, `finding-found`, `new-surface`, `blocked`, or `exhausted`; the pipeline route must use the same value. Put only non-empty Finding IDs owned by the current Track in `findingIds`, and use an empty array unless the decision is `finding-found`. Use a non-empty `blockReason` for `blocked`; otherwise use `null` when not applicable. Use `null` for `nextStep` or `reopenCondition` when not applicable. Do not return the legacy `continueTracks`, `newTracks`, `blockedTracks`, or `exhaustedTracks` buckets. Do not create a separate review file or return a `reviewPath`. Do not confirm a vulnerability.
+        Return the structured Track Review result required by the stage schema. Keep trackKey aligned with the current Track and do not confirm a vulnerability.
 
         Before returning, update only the current Track through `research-db update-track` with an absolute `status`, `nextStep`, `blockReason`, `reopenCondition`, `coverage`, and `evidenceRefs` patch as applicable. Read the Track first, pass its current revision, and resolve a conflict by rereading and recomputing this Track's decision. Never create, block, exhaust, rank, or update another Track.
       prepareRepository: none
@@ -2514,7 +2609,7 @@ stages:
       prompt: |
         You are the independent Finding Review stage.
 
-        Read the Finding and validation artifacts. Recheck the source-to-sink path independently, challenge omitted guards and deployment assumptions, and choose exactly one decision: confirmed, needs-more-evidence, or false-positive. When decision is confirmed, confirmedPrimitive must contain stable primitiveId, name, capability, requiredInput, producedCapability, trustLevel, and evidenceRefs. For needs-more-evidence or false-positive, set confirmedPrimitive to {}. Return the Finding ID, decision, a short summary of the review rationale, challenges, required evidence, and confirmed primitive. Do not write a separate review file or return a reviewPath. Do not broaden into unrelated discovery.
+        Read the Finding and validation artifacts. Recheck the source-to-sink path independently, challenge omitted guards and deployment assumptions, and choose the decision required by the stage schema. Do not broaden into unrelated discovery.
 
         Using the research-db skill, persist the review directly before returning: read the Finding revision, then use `update-finding` with an absolute `status`, `latestReviewDecision`, and `requiredEvidence`. For a confirmed primitive, use `create-primitive` or the revision conflict loop for an existing primitive. For a non-confirmed decision, do not create a primitive. A conflict must be reread and resolved by the Agent; no TypeScript Registry effect will apply this result.
       prepareRepository: none
@@ -2582,7 +2677,7 @@ stages:
       prompt: |
         You are the independent Chain Review stage for exactly one exploit chain.
 
-        Read the current chain and its referenced Finding evidence. Audit every transition, trust boundary, input/output compatibility, deployment condition, and primitive gap. Choose exactly one route decision: accepted, revise-chain, primitive-gap, or invalid-finding. When the decision is invalid-finding, set invalidFindingId to the affected Finding ID; otherwise set it to null. Treat other chains and Findings as read-only context. Do not mutate or invalidate a Finding in this stage; the downstream Finding Validation stage owns that state transition. Return only the required structured review fields. Do not create a separate review file or return a reviewPath.
+        Read the current chain and its referenced Finding evidence. Audit every transition, trust boundary, input/output compatibility, deployment condition, and primitive gap. Choose the decision required by the stage schema. Treat other chains and Findings as read-only context. Do not mutate or invalidate a Finding in this stage; the downstream Finding Validation stage owns that state transition.
 
         Using the research-db skill, before returning update only the current Chain with `update-chain`, using its expected revision and an absolute `status` matching the decision (`accepted`, `revise-chain`, or `primitive-gap`). On a revision conflict, reread the Chain and retry or abandon with an explicit conflict explanation. Never update another Chain or a Finding from this stage.
       prepareRepository: none
@@ -2650,7 +2745,7 @@ stages:
       prompt: |
         You are the independent Exploit Review stage for exactly one exploit chain.
 
-        Read the source-only validation and current chain. Check that each transition follows from source evidence and that no hidden credentials, privileged setup, or unsupported environment assumption was used. Choose confirmed, runtime-retry, chain-revision, or finding-revalidation. When the decision is finding-revalidation, set invalidFindingId to the affected Finding ID; otherwise set it to null. Treat other chains and Findings as read-only context. Do not mutate or invalidate a Finding in this stage; the downstream Finding Validation stage owns that state transition. Return only the required structured review fields. Do not create a separate review file or return a reviewPath.
+        Read the source-only validation and current chain. Check that each transition follows from source evidence and that no hidden credentials, privileged setup, or unsupported environment assumption was used. Choose the decision required by the stage schema. Treat other chains and Findings as read-only context. Do not mutate or invalidate a Finding in this stage; the downstream Finding Validation stage owns that state transition.
 
         Using the research-db skill, persist the review on the current Chain with `update-chain` before returning. Use an absolute status (`confirmed`, `runtime-retry`, or `chain-revision` mapped to the chain schema), pass the current revision, and resolve conflicts by rereading. Never update a Finding or another Chain.
       prepareRepository: none
@@ -2684,7 +2779,7 @@ stages:
       prompt: |
         You are the final Research Report stage.
 
-        Use research-db and the supplied artifacts to produce an evidence-backed report against the configured success criteria. Include the attacker model, source-to-sink path, trust boundaries, confirmed primitives, chain prerequisites, rejected routes, limitations, and confidence. Write the report to /task/reports/final-report.md and return its path, chainId, and verdict.
+        Use research-db and the supplied artifacts to produce an evidence-backed report against the configured success criteria. Include the attacker model, source-to-sink path, trust boundaries, confirmed primitives, chain prerequisites, rejected routes, limitations, and confidence. Produce the report artifact required by the output schema and return its path, chainId, and verdict.
 
         Use the research-db skill to read the final Chain state and revision directly from the Registry before writing the report. The report file and task output are the report source; there is no TypeScript Registry effect or report event to invoke.
       prepareRepository: none
@@ -2804,6 +2899,7 @@ edges:
     route:
       key: continue
       default: true
+      description: Continue work on the current track.
   - id: track-review-to-surface-map
     name: track-review-to-surface-map
     from: track-review
@@ -2823,6 +2919,7 @@ edges:
         required: true
     route:
       key: new-surface
+      description: Create or assign another surface for the current track.
   - id: track-review-to-finding-validation
     name: track-review-to-finding-validation
     from: track-review
@@ -2849,6 +2946,7 @@ edges:
         required: true
     route:
       key: finding-found
+      description: Send the discovered Finding for independent validation.
   - id: track-review-exhausted-to-track-plan
     name: track-review-exhausted-to-track-plan
     from: track-review
@@ -2873,6 +2971,7 @@ edges:
         required: true
     route:
       key: exhausted
+      description: Mark the current track exhausted when reasonable methods are complete.
   - id: track-review-blocked-to-track-plan
     name: track-review-blocked-to-track-plan
     from: track-review
@@ -2897,6 +2996,7 @@ edges:
         required: true
     route:
       key: blocked
+      description: Return the current track to planning with an explicit blocker.
   - id: finding-validation-to-finding-review
     name: finding-validation-to-finding-review
     from: finding-validation
@@ -2947,6 +3047,7 @@ edges:
     route:
       key: needs-more-evidence
       default: true
+      description: Request more evidence before accepting the Finding.
   - id: finding-review-to-track-plan
     name: finding-review-to-track-plan
     from: finding-review
@@ -2971,6 +3072,7 @@ edges:
         required: true
     route:
       key: false-positive
+      description: Reject the Finding as unsupported by the evidence.
   - id: finding-review-to-chain-synthesis
     name: finding-review-to-chain-synthesis
     from: finding-review
@@ -2995,6 +3097,7 @@ edges:
         required: true
     route:
       key: confirmed
+      description: Accept the Finding and synthesize an exploit chain.
   - id: chain-synthesis-to-chain-review
     name: chain-synthesis-to-chain-review
     from: chain-synthesis
@@ -3041,6 +3144,7 @@ edges:
     route:
       key: revise-chain
       default: true
+      description: Revise the chain before attempting exploit validation.
   - id: chain-review-to-track-plan
     name: chain-review-to-track-plan
     from: chain-review
@@ -3066,6 +3170,7 @@ edges:
         required: true
     route:
       key: primitive-gap
+      description: Return to planning because a required primitive is missing.
   - id: chain-review-to-finding-validation
     name: chain-review-to-finding-validation
     from: chain-review
@@ -3091,6 +3196,7 @@ edges:
         required: true
     route:
       key: invalid-finding
+      description: Return the affected Finding for revalidation.
   - id: chain-review-to-exploit-validation
     name: chain-review-to-exploit-validation
     from: chain-review
@@ -3116,6 +3222,7 @@ edges:
         required: true
     route:
       key: accepted
+      description: Send the accepted chain to exploit validation.
   - id: exploit-validation-to-exploit-review
     name: exploit-validation-to-exploit-review
     from: exploit-validation
@@ -3165,6 +3272,7 @@ edges:
     route:
       key: runtime-retry
       default: true
+      description: Retry exploit validation when runtime evidence is insufficient.
   - id: exploit-review-to-chain-synthesis
     name: exploit-review-to-chain-synthesis
     from: exploit-review
@@ -3190,6 +3298,7 @@ edges:
         required: true
     route:
       key: chain-revision
+      description: Revise the chain after exploit review.
   - id: exploit-review-to-finding-validation
     name: exploit-review-to-finding-validation
     from: exploit-review
@@ -3215,6 +3324,7 @@ edges:
         required: true
     route:
       key: finding-revalidation
+      description: Revalidate the Finding when exploit review rejects its premise.
   - id: exploit-review-to-research-report
     name: exploit-review-to-research-report
     from: exploit-review
@@ -3235,4 +3345,5 @@ edges:
         required: true
     route:
       key: confirmed
+      description: Send the confirmed exploit chain to the research report.
 groups: []

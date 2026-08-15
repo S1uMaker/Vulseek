@@ -27,6 +27,8 @@ export type PipelineInspectorProps = {
 	selection: { type: "stage" | "edge" | "schema" | "group"; id: string } | null;
 	onChange: (document: PipelineDocumentV3) => void;
 	onSelect: (entity: { type: "stage" | "edge" | "schema" | "group"; id: string }) => void;
+	/** Keep the full schema registry in Definition/Raw YAML, not the canvas inspector. */
+	showPipelineSchemas?: boolean;
 };
 
 const roleOptions: Array<PipelineStageV3["role"]> = ["scan", "analysis", "verification"];
@@ -466,6 +468,20 @@ const EdgeInspector = ({
 				item.id === edge.id ? { ...item, ...patch } : item,
 			),
 		});
+	const updateRouteMetadata = (
+		patch: Partial<NonNullable<PipelineEdgeV3["route"]>>,
+	) => {
+		const routeKey = edge.route?.key;
+		if (!routeKey) return;
+		onChange({
+			...document,
+			edges: document.edges.map((item) =>
+				item.from === edge.from && item.route?.key === routeKey
+					? { ...item, route: { ...item.route, ...patch, key: routeKey } }
+					: item,
+		),
+		});
+	};
 
 	return (
 		<div className="space-y-5">
@@ -515,8 +531,12 @@ const EdgeInspector = ({
 					checked={Boolean(edge.route)}
 					onChange={(checked) =>
 						update({
-							route: checked
-								? { key: edge.route?.key ?? "default", default: edge.route?.default }
+						route: checked
+								? {
+										key: edge.route?.key ?? "default",
+										default: edge.route?.default,
+										description: edge.route?.description,
+									}
 								: undefined,
 						})
 					}
@@ -534,16 +554,23 @@ const EdgeInspector = ({
 								}
 							/>
 						</Field>
+						<Field label="Route description (optional)">
+							<Textarea
+								value={route.description ?? ""}
+								placeholder="Explain when this route should be selected"
+								onChange={(event) =>
+									updateRouteMetadata({
+										description: event.target.value.trim() || undefined,
+									})
+								}
+								rows={3}
+							/>
+						</Field>
 						<ToggleField
 							label="Default route"
 							checked={route.default ?? false}
 							onChange={(checked) =>
-								update({
-									route: {
-										key: route.key || "default",
-										default: checked,
-									},
-								})
+								updateRouteMetadata({ default: checked })
 							}
 						/>
 					</>
@@ -569,14 +596,6 @@ const EdgeInspector = ({
 			</Section>
 
 			<Section title="Output schema">
-				<Field label="Description">
-					<Input
-						value={edge.outputSchemaDescription ?? ""}
-						onChange={(event) =>
-							update({ outputSchemaDescription: event.target.value || undefined })
-						}
-					/>
-				</Field>
 				<SchemaReferenceField
 					label="Output schema"
 					value={edge.outputSchema}
@@ -669,9 +688,11 @@ const GroupInspector = ({
 const PipelineInspectorBody = ({
 	document,
 	onChange,
+	showPipelineSchemas,
 }: {
 	document: PipelineDocumentV3;
 	onChange: (document: PipelineDocumentV3) => void;
+	showPipelineSchemas: boolean;
 }) => {
 	const stageIds = Object.keys(document.stages);
 	const update = (patch: Partial<PipelineDocumentV3>) => onChange({ ...document, ...patch });
@@ -758,15 +779,17 @@ const PipelineInspectorBody = ({
 				</Field>
 			</Section>
 
-			<Section title="Schemas">
-				<Field label="Pipeline schemas">
-					<JsonEditor
-						value={document.schemas ?? {}}
-						onChange={(value) => update({ schemas: value as never })}
-						rows={8}
-					/>
-				</Field>
-			</Section>
+			{showPipelineSchemas ? (
+				<Section title="Schemas">
+					<Field label="Pipeline schemas">
+						<JsonEditor
+							value={document.schemas ?? {}}
+							onChange={(value) => update({ schemas: value as never })}
+							rows={8}
+						/>
+					</Field>
+				</Section>
+			) : null}
 		</div>
 	);
 };
@@ -780,6 +803,7 @@ export const PipelineInspector = ({
 	selection,
 	onChange,
 	onSelect,
+	showPipelineSchemas = true,
 }: PipelineInspectorProps) => {
 	const deleteEntity = React.useCallback(() => {
 		if (!selection) return;
@@ -823,7 +847,11 @@ export const PipelineInspector = ({
 					<h3 className="text-sm font-semibold">Pipeline</h3>
 				</div>
 				<div className="min-h-0 flex-1 overflow-y-auto p-4">
-					<PipelineInspectorBody document={document} onChange={onChange} />
+					<PipelineInspectorBody
+						document={document}
+						onChange={onChange}
+						showPipelineSchemas={showPipelineSchemas}
+					/>
 				</div>
 			</div>
 		);

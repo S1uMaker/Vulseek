@@ -17,7 +17,7 @@ goal-craft:
     prepareRepository: true
     includePolicy: true
   inputSchema:
-    type: object
+    $ref: "#/schemas/GoalCraftInput"
   outputSchema:
     $ref: "#/schemas/GoalCraftOutput"
 
@@ -30,8 +30,10 @@ goal-surface:
   concurrency: 1
   maxConcurrency: 1
   disableable: false
+  goal: true
   description: Goal-as-lens attack-surface planning and continuous hunt-goal dispatch.
   runtimeConfig:
+    goalSession: shared
     persistent: true
     reuseContainer: true
     cwd: /workspace/repo
@@ -39,7 +41,7 @@ goal-surface:
     promptFile: goal-surface.prompt.md
     includePolicy: true
   inputSchema:
-    type: object
+    $ref: "#/schemas/GoalSurfaceInput"
   outputSchema:
     $ref: "#/schemas/SurfaceDispatch"
 
@@ -61,7 +63,7 @@ goal-hunt:
     skills: [goal-hunt, codeql, semgrep, tree-sitter]
     promptFile: goal-hunt.prompt.md
   inputSchema:
-    type: object
+    $ref: "#/schemas/GoalHuntInput"
   outputSchema:
     $ref: "#/schemas/GoalHuntOutput"
   effects:

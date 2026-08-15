@@ -9,8 +9,12 @@ import {
 	diagnosticsForEntity,
 	duplicateDiagnostics,
 	entityCounts,
+	filterVisibleSchemaDiagnostics,
 	groupReferrers,
 	isDuplicateId,
+	relatedSchemaIds,
+	schemaIdFromPointer,
+	schemaPointer,
 	schemaReferrers,
 	stageReferrers,
 } from "@/lib/pipeline-editor/definition-helpers";
@@ -53,7 +57,7 @@ const document: PipelineDocumentV3 = {
 
 describe("entityCounts", () => {
 	it("counts every entity kind", () => {
-		expect(entityCounts(document)).toEqual({ stages: 2, edges: 1, schemas: 2, groups: 1 });
+		expect(entityCounts(document)).toEqual({ stages: 2, edges: 1, schemas: 1, groups: 1 });
 	});
 });
 
@@ -74,9 +78,59 @@ describe("schema reference resolution", () => {
 		expect([...refs].sort()).toEqual(["finding-schema", "other"]);
 	});
 
+	it("collects $pathOf pointers as schema references", () => {
+		const refs = new Set<string>();
+		collectSchemaRefs(
+			{
+				type: "object",
+				properties: {
+					modulePath: { $pathOf: "#/schemas/module" },
+					candidates: { type: "array", items: { $pathOf: "#/schemas/candidate" } },
+				},
+			},
+			refs,
+		);
+		expect([...refs].sort()).toEqual(["candidate", "module"]);
+	});
+
+	it("parses and builds #/schemas/<id> pointers", () => {
+		expect(schemaIdFromPointer("#/schemas/module")).toBe("module");
+		expect(schemaPointer("module")).toBe("#/schemas/module");
+		expect(schemaIdFromPointer("#/schemas/module/properties/x")).toBeNull();
+		expect(schemaIdFromPointer("https://example.com/schema")).toBeNull();
+		expect(schemaIdFromPointer(undefined)).toBeNull();
+	});
+
 	it("resolves stage and edge schema references", () => {
 		expect(schemaReferrers(document, "finding-schema").map((r) => `${r.kind}:${r.id}`).sort()).toEqual(["edge:d-to-r", "stage:discovery", "stage:review"]);
 		expect(schemaReferrers(document, "unused-schema")).toEqual([]);
+	});
+
+	it("includes transitively referenced schemas but hides global unused schemas", () => {
+		const withNestedSchema = {
+			...document,
+			schemas: {
+				...document.schemas,
+				"finding-schema": {
+					type: "object",
+					properties: { nested: { $ref: "#/schemas/nested-schema" } },
+				},
+				"nested-schema": { type: "object" },
+			},
+		};
+		expect(relatedSchemaIds(withNestedSchema)).toEqual([
+			"finding-schema",
+			"nested-schema",
+		]);
+		expect(schemaReferrers(withNestedSchema, "nested-schema").map((r) => `${r.kind}:${r.id}`)).toEqual([
+			"schema:finding-schema",
+		]);
+		expect(
+			filterVisibleSchemaDiagnostics(withNestedSchema, [
+				{ severity: "warning", code: "schema.unused", message: "hidden", entity: { type: "schema", id: "unused-schema" } },
+				{ severity: "warning", code: "schema.unused", message: "visible", entity: { type: "schema", id: "nested-schema" } },
+			]),
+		).toHaveLength(1);
 	});
 });
 

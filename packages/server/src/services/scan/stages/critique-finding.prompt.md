@@ -13,6 +13,4 @@ Follow the criticize skill for the detailed adversarial review checklist.
 Read candidate_json_path and draft_analysis_json_path before review.
 Use stance=convinced only when the analysis survives sanity/review checks and has enough evidence for verification.
 If you are convinced, set stance to convinced and bind reviewedAnalysisFingerprint to the draft analysis fingerprint supplied by the analysis agent.
-Before returning, validate the structured JSON against the runtime-provided output.schema.json.
 Use {{taskId}} as id.
-Always route back to analysis.

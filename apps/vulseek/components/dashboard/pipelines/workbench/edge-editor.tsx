@@ -49,6 +49,29 @@ export const EdgeEditor = ({
 
 	const patch = (next: PipelineEdgeV3, key: string) =>
 		dispatch({ type: "patch", ops: [{ op: "updateEdge", edgeId, edge: next }], key });
+	const patchRouteMetadata = (
+		updateRoute: (route: NonNullable<PipelineEdgeV3["route"]>) => NonNullable<PipelineEdgeV3["route"]>,
+		key: string,
+	) => {
+		const routeKey = edge.route?.key;
+		const matchingEdges = routeKey
+			? document.edges.filter(
+					(other) => other.from === edge.from && other.route?.key === routeKey,
+				)
+			: [edge];
+		dispatch({
+			type: "patch",
+			ops: matchingEdges.map((other) => ({
+				op: "updateEdge" as const,
+				edgeId: other.id,
+				edge: {
+					...other,
+					route: other.route ? updateRoute(other.route) : other.route,
+				},
+			})),
+			key,
+		});
+	};
 
 	const stageOptions = Object.keys(document.stages).map((id) => ({
 		value: id,
@@ -160,16 +183,33 @@ export const EdgeEditor = ({
 									checked={edge.route?.default ?? false}
 									readOnly={readOnly}
 									onChange={(isDefault) =>
-										patch(
-											edge.route
-												? { ...edge, route: { ...edge.route, default: isDefault } }
-												: { ...edge, route: { key: edge.name || edgeId, default: isDefault } },
+										edge.route
+										? patchRouteMetadata(
+											(route) => ({ ...route, default: isDefault }),
 											`edge:${edgeId}:routeDefault`,
 										)
-									}
+										: patch(
+												{ ...edge, route: { key: edge.name || edgeId, default: isDefault } },
+												`edge:${edgeId}:routeDefault`,
+											)
+								}
 								/>
 							</div>
 						</div>
+						<TextField
+							label="Route description (optional)"
+							value={edge.route?.description ?? ""}
+							readOnly={readOnly}
+							description="Explain when this route should be selected. Leave empty when the route is self-explanatory."
+							onChange={(description) =>
+								edge.route
+									? patchRouteMetadata(
+											(route) => ({ ...route, description: description.trim() || undefined }),
+											`edge:${edgeId}:routeDescription`,
+										)
+									: undefined
+						}
+						/>
 						{siblings.length > 0 || routedSiblings.length > 0 ? (
 							<div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
 								<p className="font-medium text-foreground">Sibling routes</p>
@@ -293,17 +333,6 @@ export const EdgeEditor = ({
 							onNavigateToSchema={(schemaId) => onSelect({ type: "schema", id: schemaId })}
 							onChange={(outputSchema) =>
 								patch({ ...edge, outputSchema }, `edge:${edgeId}:outputSchema`)
-							}
-						/>
-						<TextField
-							label="Output schema description"
-							value={edge.outputSchemaDescription ?? ""}
-							readOnly={readOnly}
-							onChange={(outputSchemaDescription) =>
-								patch(
-									{ ...edge, outputSchemaDescription: outputSchemaDescription || undefined },
-									`edge:${edgeId}:outputDesc`,
-								)
 							}
 						/>
 					</div>

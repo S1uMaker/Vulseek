@@ -24,12 +24,20 @@ import { nextUniqueId } from "@/lib/pipeline-editor/pipeline-layout";
 export type StageCreateDialogProps = {
 	existingIds: readonly string[];
 	onCreate: (id: string, stage: PipelineStageV3) => void;
+	/** Optional trigger for embedding the dialog in another toolbar. */
+	trigger?: React.ReactElement;
+	defaultGroup?: string;
 };
 
-const defaultStage = (id: string, name: string): PipelineStageV3 => ({
+const defaultStage = (
+	id: string,
+	name: string,
+	role: PipelineStageV3["role"],
+	group: string,
+): PipelineStageV3 => ({
 	name,
-	role: "scan",
-	group: "custom",
+	role,
+	group,
 	concurrency: 1,
 	disableable: true,
 	goal: false,
@@ -49,35 +57,55 @@ const defaultStage = (id: string, name: string): PipelineStageV3 => ({
 	},
 });
 
-export const StageCreateDialog = ({ existingIds, onCreate }: StageCreateDialogProps) => {
+export const StageCreateDialog = ({
+	existingIds,
+	onCreate,
+	trigger,
+	defaultGroup = "custom",
+}: StageCreateDialogProps) => {
 	const [open, setOpen] = React.useState(false);
 	const [slug, setSlug] = React.useState("");
 	const [name, setName] = React.useState("");
 	const [role, setRole] = React.useState<PipelineStageV3["role"]>("scan");
 	const [group, setGroup] = React.useState("custom");
 
-	const openDialog = () => {
+	const resetForm = () => {
 		const base = nextUniqueId("stage", new Set(existingIds));
 		setSlug(base);
 		setName("New Stage");
 		setRole("scan");
-		setGroup("custom");
+		setGroup(defaultGroup);
+	};
+
+	const openDialog = () => {
+		resetForm();
 		setOpen(true);
+	};
+
+	const handleOpenChange = (nextOpen: boolean) => {
+		if (nextOpen) resetForm();
+		setOpen(nextOpen);
 	};
 
 	const submit = () => {
 		const id = slug.trim() || nextUniqueId("stage", new Set(existingIds));
-		onCreate(id, defaultStage(id, name.trim() || "New Stage"));
+		if (existingIds.includes(id)) return;
+		onCreate(
+			id,
+			defaultStage(id, name.trim() || "New Stage", role, group.trim() || defaultGroup),
+		);
 		setOpen(false);
 	};
 
 	return (
-		<Dialog open={open} onOpenChange={setOpen}>
+		<Dialog open={open} onOpenChange={handleOpenChange}>
 			<DialogTrigger asChild>
-				<Button variant="outline" size="sm" onClick={openDialog}>
-					<Plus className="size-3.5" />
-					Add stage
-				</Button>
+				{trigger ?? (
+					<Button variant="outline" size="sm" onClick={openDialog}>
+						<Plus className="size-3.5" />
+						Add stage
+					</Button>
+				)}
 			</DialogTrigger>
 			<DialogContent className="sm:max-w-sm">
 				<DialogHeader>
@@ -99,7 +127,12 @@ export const StageCreateDialog = ({ existingIds, onCreate }: StageCreateDialogPr
 										.replace(/[^a-z0-9_-]/g, "-"),
 								)
 							}
-						/>
+							/>
+						{existingIds.includes(slug.trim()) ? (
+							<p className="text-xs text-red-600" role="alert">
+								A stage with this slug already exists.
+							</p>
+						) : null}
 					</div>
 					<div className="space-y-1">
 						<Label>Name</Label>
@@ -130,7 +163,9 @@ export const StageCreateDialog = ({ existingIds, onCreate }: StageCreateDialogPr
 					</div>
 				</div>
 				<DialogFooter>
-					<Button onClick={submit}>Create stage</Button>
+					<Button disabled={existingIds.includes(slug.trim())} onClick={submit}>
+						Create stage
+					</Button>
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>

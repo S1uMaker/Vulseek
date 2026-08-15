@@ -53,9 +53,9 @@ export type PipelineEdge<
 	route?: {
 		key: string;
 		default?: boolean;
+		description?: string;
 	};
 	outputSchema?: StructuredOutputSchemaSource;
-	outputSchemaDescription?: string;
 	transformOutput?: (input: {
 		ctx: TPipelineContext;
 		fromTaskId: string;
@@ -205,14 +205,16 @@ export const getStageRouteOutputSchemas = <
 		}
 		return {
 			routeKey: edge.route!.key,
-			description:
-				edge.outputSchemaDescription ||
-				`Output for route ${edge.route!.key} to ${edge.to.name}`,
+			...(edge.route?.description?.trim()
+				? { description: edge.route.description.trim() }
+				: {}),
 			schema,
 			default: edge.route?.default,
 		};
 	});
 };
+
+const stableJson = (value: unknown) => JSON.stringify(value);
 
 export const validatePipelineRouteConfiguration = <
 	TPipelineContext extends PipelineContext,
@@ -240,6 +242,32 @@ export const validatePipelineRouteConfiguration = <
 			throw new Error(
 				`Stage ${stage.name} must define exactly one default route key`,
 			);
+		}
+		const routeSchemas = new Map<string, string>();
+		const routeDescriptions = new Map<string, string>();
+		for (const edge of edges) {
+			const route = edge.route!;
+			const schema = edge.outputSchema ?? stage.outputSchema;
+			if (schema) {
+				const serialized = stableJson(schema);
+				const previous = routeSchemas.get(route.key);
+				if (previous && previous !== serialized) {
+					throw new Error(
+						`Stage ${stage.name} defines conflicting output schemas for route ${route.key}`,
+					);
+				}
+				routeSchemas.set(route.key, serialized);
+			}
+			const description = route.description?.trim();
+			if (description) {
+				const previous = routeDescriptions.get(route.key);
+				if (previous && previous !== description) {
+					throw new Error(
+						`Stage ${stage.name} defines conflicting descriptions for route ${route.key}`,
+					);
+				}
+				routeDescriptions.set(route.key, description);
+			}
 		}
 	}
 };

@@ -146,11 +146,14 @@ const convertStage = (
 				: {}),
 			disableable: stage.disableable,
 			goal: stage.goal,
-			runtime: {
-				kind: "agent",
-				...(runtimeConfig?.agentProfile
-					? { agentProfileId: runtimeConfig.agentProfile }
-					: {}),
+				runtime: {
+					kind: "agent",
+					...(runtimeConfig?.agentProfile
+						? { agentProfileId: runtimeConfig.agentProfile }
+						: {}),
+					...(runtimeConfig?.goalSession
+						? { goalSession: runtimeConfig.goalSession }
+						: {}),
 				...(runtimeConfig?.persistent != null
 					? { persistent: runtimeConfig.persistent }
 					: {}),
@@ -222,9 +225,6 @@ const convertEdge = (
 					edge.outputSchema,
 				) as Record<string, unknown>,
 			}
-		: {}),
-	...(edge.outputSchemaDescription
-		? { outputSchemaDescription: edge.outputSchemaDescription }
 		: {}),
 	...(edge.route ? { route: edge.route } : {}),
 });

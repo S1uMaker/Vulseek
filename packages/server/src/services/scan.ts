@@ -11,12 +11,11 @@ import { getGlobalContainerEnvironmentPairs } from "../utils/docker/utils";
 import {
 	execAsync,
 	execAsyncStream,
-	execFileAsync,
 } from "../utils/process/execAsync";
 import { getAgentProfileById } from "./ai";
 import { findApplicationById } from "./application";
 import { findComposeById } from "./compose";
-import { resolveDatasetToolsImage, resolveDatasetTrialRuntime } from "./dataset";
+import { resolveDatasetTrialRuntime } from "./dataset";
 import { buildTaskAgentProfileSnapshot } from "./scan/agent-profile-snapshot";
 import { findCandidateTaskLineage } from "./scan/api/candidate-records";
 import {
@@ -39,14 +38,12 @@ import {
 	writeTaskTextArtifact,
 } from "./scan/artifacts/task-artifact-paths";
 import {
-	buildCheckoutToolsImageTag,
 	buildCheckoutToolsStatus,
 	type CheckoutToolsDefinition,
-	type CheckoutToolsImageMetadata,
-	computeCheckoutToolsVersion,
 	createCheckoutToolsBuildManager,
-	matchesCheckoutToolsImageLabels,
-	resolveCheckoutToolsImageVariant,
+	inspectCheckoutToolsImage,
+	inspectRequiredToolsImageReference,
+	resolveCheckoutToolsDefinition,
 } from "./scan/checkout-tools";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "./scan/constants";
 import {
@@ -1357,66 +1354,6 @@ const buildScanDockerfileTemplate = async () => {
 	return await fs.readFile(templatePath, "utf-8");
 };
 
-const resolveCodexAcpForkPatchPath = async () => {
-	return await resolveDockerfileAssetPath("codex-acp-fork-1.1.2.patch");
-};
-
-const resolveAgentEventsPath = async () => {
-	const candidates = [
-		path.resolve(process.cwd(), "vendor/claude-replay/src/agent-events.mjs"),
-		path.resolve(
-			process.cwd(),
-			"../../vendor/claude-replay/src/agent-events.mjs",
-		),
-		path.resolve(
-			process.cwd(),
-			"node_modules/claude-replay/src/agent-events.mjs",
-		),
-		"/app/vendor/claude-replay/src/agent-events.mjs",
-		"/app/node_modules/claude-replay/src/agent-events.mjs",
-	];
-	for (const candidate of candidates) {
-		try {
-			if ((await fs.stat(candidate)).isFile()) return candidate;
-		} catch {}
-	}
-	throw new Error("Unable to locate claude-replay agent-events.mjs");
-};
-
-const resolveCheckoutToolsDefinition = async () => {
-	const [dockerfilePath, codexAcpPatchPath, acpDriverPath, agentEventsPath] =
-		await Promise.all([
-			resolveDockerfileAssetPath("Dockerfile.scan-tools"),
-			resolveCodexAcpForkPatchPath(),
-			resolveDockerfileAssetPath("vulseek-acp-driver.mjs"),
-			resolveAgentEventsPath(),
-		]);
-	const [dockerfile, codexAcpPatch, acpDriver, agentEvents] = await Promise.all(
-		[
-			fs.readFile(dockerfilePath, "utf8"),
-			fs.readFile(codexAcpPatchPath, "utf8"),
-			fs.readFile(acpDriverPath, "utf8"),
-			fs.readFile(agentEventsPath, "utf8"),
-		],
-	);
-	const version = computeCheckoutToolsVersion({
-		dockerfile,
-		codexAcpPatch,
-		acpDriver,
-		agentEvents,
-	});
-	const variant = resolveCheckoutToolsImageVariant();
-	return {
-		version,
-		variant,
-		imageTag: buildCheckoutToolsImageTag(version, variant),
-		dockerfile,
-		codexAcpPatchPath,
-		acpDriverPath,
-		agentEventsPath,
-	};
-};
-
 /** Resolve the current tools image without exposing checkout implementation details. */
 export const resolveCurrentCheckoutToolsImage = async () =>
 	(await resolveCheckoutToolsDefinition()).imageTag;
@@ -1492,38 +1429,6 @@ const resolveCheckoutDockerBuildResourceOptions = () => {
 			(memorySwap ? ` and memory-swap ${memorySwap}` : "") +
 			"\n",
 	};
-};
-
-const inspectCheckoutToolsImage = async (
-	definition: CheckoutToolsDefinition,
-): Promise<CheckoutToolsImageMetadata | null> => {
-	try {
-		const { stdout } = await execFileAsync("docker", [
-			"image",
-			"inspect",
-			definition.imageTag,
-		]);
-		const inspect = JSON.parse(stdout) as Array<{
-			Id?: string;
-			Created?: string;
-			Config?: { Labels?: Record<string, string> | null };
-		}>;
-		const image = inspect[0];
-		const labels = image?.Config?.Labels;
-		if (!image?.Id || !matchesCheckoutToolsImageLabels(definition, labels)) {
-			return null;
-		}
-		return {
-			...definition,
-			imageId: image.Id,
-			builtAt:
-				labels?.["com.fuzzing-peach.vulseek.scan-tools.built-at"] ||
-				image.Created ||
-				"",
-		};
-	} catch {
-		return null;
-	}
 };
 
 const executeCheckoutToolsBuild = async (input: {
@@ -2394,18 +2299,23 @@ const resolveScanExecutionContext = async (
 		}
 		const projectName = `dataset-${datasetRuntime.dataset.datasetId}`;
 		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.id}`;
-		const shouldValidateToolsImage = options?.validateDatasetToolsImage !== false;
-		const imageTag = shouldValidateToolsImage
-			? await resolveDatasetToolsImage()
-			: process.env.VULSEEK_SCAN_TOOLS_IMAGE?.trim() ||
-				process.env.VULSEEK_TOOLS_IMAGE?.trim() ||
-				"dataset-tools-image-not-required";
-		if (shouldValidateToolsImage) {
-			await execAsync(
-				`docker image inspect ${escapeSingleQuotes(imageTag)}`,
-			).catch(() => {
-				throw new Error(`Dataset scan tools image not found: ${imageTag}`);
+		const imageTag = datasetRuntime.toolsImageTag;
+		const imageDigest = datasetRuntime.toolsImageDigest;
+		if (!imageTag || !imageDigest) {
+			throw new Error(
+				`Dataset Profile ${datasetRuntime.profile.profileId} requires re-checkout to pin a scan tools image`,
+			);
+		}
+		if (options?.validateDatasetToolsImage !== false) {
+			const imageMatches = await inspectRequiredToolsImageReference({
+				imageTag,
+				imageId: imageDigest,
 			});
+			if (!imageMatches) {
+				throw new Error(
+					`Dataset scan tools image is missing or changed: ${imageTag}`,
+				);
+			}
 		}
 		const configuredHostRoot = resolveConfiguredScanContextHostPath();
 		if (!configuredHostRoot) {
@@ -4630,6 +4540,9 @@ const toStageConfigFromCompiled = (
 	outputSchema: stage.outputSchema ?? null,
 	runtimeConfig: {
 		agentProfile: stage.runtime.agentProfileId ?? null,
+		...(stage.runtime.goalSession
+			? { goalSession: stage.runtime.goalSession }
+			: {}),
 		persistent: stage.runtime.persistent ?? null,
 		reuseContainer: stage.runtime.reuseContainer ?? null,
 		nullableOutput: stage.runtime.nullableOutput ?? null,
@@ -4667,7 +4580,6 @@ const toEdgeConfigFromCompiled = (
 	foreach: edge.foreach ?? null,
 	input: edge.input ?? null,
 	outputSchema: edge.outputSchema ?? null,
-	outputSchemaDescription: edge.outputSchemaDescription ?? null,
 	artifacts: (edge.artifacts ?? []).map((artifact) => ({
 		from: artifact.from,
 		to: artifact.to,
@@ -4688,8 +4600,9 @@ const createCompiledStageRuntimeConfig = (
 	const runtime = stage.runtime;
 	return {
 		getConcurrency: async () => stage.concurrency,
-		getAgentProfile: async () => runtime.agentProfileId ?? null,
-		getPersistent: async () => runtime.persistent ?? null,
+	getAgentProfile: async () => runtime.agentProfileId ?? null,
+	getGoalSession: async () => runtime.goalSession ?? null,
+	getPersistent: async () => runtime.persistent ?? null,
 		getReuseContainer: async () => runtime.reuseContainer ?? null,
 		getNullableOutput: async () => runtime.nullableOutput ?? null,
 		getCwd: async () => runtime.cwd ?? null,
@@ -5229,7 +5142,7 @@ const runPipelineFromSnapshot = async (
 			name: context.projectName,
 		}).catch(() => {});
 		if (enqueueInitialRootTask) {
-			await createV3RootTask(context.scanJob, compiled);
+			await createV3RootTask(context, compiled);
 			console.log(
 				"[scan-v3]",
 				JSON.stringify({ event: "root.enqueued", scanJobId }),
@@ -5342,11 +5255,37 @@ const enqueueStageTask = async (
  * the expression resolver supplies from the frozen scan job row.
  */
 const createV3RootTask = async (
-	scanJob: ScanJob,
+	context: FullScanPipelineContext,
 	compiled: CompiledPipelineDefinition,
 ) => {
+	const scanJob = context.scanJob;
 	const rootStage = compiled.stages.find((stage) => stage.id === compiled.root);
 	const taskId = scanJob.repositoryTaskId || scanJob.scanJobId;
+	const taskName = rootStage?.name ?? compiled.root;
+	const taskDir = await resolveFullScanTaskRuntimeDir(context, {
+		taskId,
+		stageName: compiled.root,
+		taskName,
+	});
+	const repositoryPath = await writeTaskJsonArtifact({
+		taskDir,
+		relativePath: "inputs/repository.json",
+		value: {
+			id: scanJob.scanJobId,
+			name: context.projectName,
+			summary: `Repository context for ${context.projectName}`,
+			languages: [],
+			buildSystems: [],
+			runtimeDirectories: [],
+			downrankedDirectories: [],
+			notes: [],
+			targetRef: scanJob.targetRef ?? null,
+			targetTag: scanJob.targetTag ?? null,
+			commitSha: scanJob.commitSha ?? null,
+			baseSha: scanJob.baseSha ?? null,
+			commitWindow: scanJob.commitWindow ?? 3,
+		},
+	});
 	const input = {
 		run: {
 			scanJobId: scanJob.scanJobId,
@@ -5369,11 +5308,12 @@ const createV3RootTask = async (
 			maxTasks: scanJob.maxTasks ?? null,
 			deadlineAt: scanJob.deadlineAt ?? null,
 		},
+		repositoryPath,
 	};
 	await createTaskRepo({
 		taskId,
 		scanJobId: scanJob.scanJobId,
-		name: rootStage?.name ?? compiled.root,
+		name: taskName,
 		stageName: compiled.root,
 		status: "pending",
 		allowedJobStatuses: ["pending", "running"],

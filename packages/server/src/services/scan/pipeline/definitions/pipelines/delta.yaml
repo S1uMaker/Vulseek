@@ -60,7 +60,6 @@ delta:
         default: true
       outputSchema:
         $ref: "#/schemas/Analysis"
-      outputSchemaDescription: Draft analysisSchema result for critic review
       input:
         scanJob: "$input.scanJob"
         repositoryPath: "$input.repositoryPath"
@@ -85,7 +84,6 @@ delta:
         default: true
       outputSchema:
         $ref: "#/schemas/CriticResponse"
-      outputSchemaDescription: CriticResponse feedback for analysis
       input:
         scanJob: "$input.scanJob"
         repositoryPath: "$input.repositoryPath"
@@ -108,7 +106,6 @@ delta:
         default: false
       outputSchema:
         $ref: "#/schemas/FinalAnalysis"
-      outputSchemaDescription: Final critic-approved analysis result
       input:
         scanJob: "$input.scanJob"
         repositoryPath: "$input.repositoryPath"

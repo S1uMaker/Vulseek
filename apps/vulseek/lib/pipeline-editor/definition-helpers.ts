@@ -24,12 +24,67 @@ export type EntityReference = {
 	reason: string;
 };
 
+// ---------------------------------------------------------------------------
+// Schema visibility
+// ---------------------------------------------------------------------------
+
+/**
+ * Return the schemas that belong to the current pipeline's contracts.
+ * Generated V3 documents can contain the legacy global schema registry, so
+ * the editor must follow stage/edge references instead of showing every key.
+ * References nested inside a referenced schema are included transitively.
+ */
+export const relatedSchemaIds = (document: PipelineDocumentV3): string[] => {
+	const related = new Set<string>();
+	const pending: string[] = [];
+
+	const enqueue = (id: string) => {
+		if (!document.schemas[id] || related.has(id)) return;
+		related.add(id);
+		pending.push(id);
+	};
+
+	for (const stage of Object.values(document.stages)) {
+		for (const id of schemaRefsForStage(stage)) enqueue(id);
+	}
+	for (const edge of document.edges) {
+		for (const id of schemaRefsForEdge(edge)) enqueue(id);
+	}
+
+	while (pending.length > 0) {
+		const id = pending.pop()!;
+		const refs = new Set<string>();
+		collectSchemaRefs(document.schemas[id], refs);
+		for (const ref of refs) enqueue(ref);
+	}
+
+	const allSchemaIds = Object.keys(document.schemas);
+	// A new pipeline may define schemas before wiring its first contract. Keep
+	// those schemas editable until the first stage/edge reference exists.
+	return related.size > 0 ? allSchemaIds.filter((id) => related.has(id)) : allSchemaIds;
+};
+
+/** Hide legacy global-schema unused warnings outside the current pipeline. */
+export const filterVisibleSchemaDiagnostics = (
+	document: PipelineDocumentV3 | null,
+	diagnostics: PipelineDiagnostic[],
+): PipelineDiagnostic[] => {
+	if (!document) return diagnostics;
+	const visibleSchemaIds = new Set(relatedSchemaIds(document));
+	return diagnostics.filter(
+		(diagnostic) =>
+			diagnostic.code !== "schema.unused" ||
+			diagnostic.entity?.type !== "schema" ||
+			visibleSchemaIds.has(diagnostic.entity.id),
+	);
+};
+
 export const entityCounts = (
 	document: PipelineDocumentV3,
 ): { stages: number; edges: number; schemas: number; groups: number } => ({
 	stages: Object.keys(document.stages).length,
 	edges: document.edges.length,
-	schemas: Object.keys(document.schemas).length,
+	schemas: relatedSchemaIds(document).length,
 	groups: document.groups.length,
 });
 
@@ -37,9 +92,22 @@ export const entityCounts = (
 // Schema reference walking
 // ---------------------------------------------------------------------------
 
-const SCHEMA_REF_PREFIX = "#/schemas/";
+export const SCHEMA_REF_PREFIX = "#/schemas/";
 
-/** Collect every `#/schemas/<id>` reference inside a JSON Schema value. */
+/**
+ * Parse `#/schemas/<id>` into `<id>`. Returns null for missing, external, or
+ * nested JSON Pointers (`#/schemas/foo/properties/bar`).
+ */
+export const schemaIdFromPointer = (pointer: unknown): string | null => {
+	if (typeof pointer !== "string") return null;
+	if (!pointer.startsWith(SCHEMA_REF_PREFIX)) return null;
+	const id = pointer.slice(SCHEMA_REF_PREFIX.length);
+	return id.length > 0 && !id.includes("/") ? id : null;
+};
+
+export const schemaPointer = (id: string): string => `${SCHEMA_REF_PREFIX}${id}`;
+
+/** Collect every `#/schemas/<id>` reference inside a JSON Schema value, including `$ref` and `$pathOf`. */
 export const collectSchemaRefs = (value: unknown, out: Set<string>): void => {
 	if (typeof value === "string") {
 		if (value.startsWith(SCHEMA_REF_PREFIX)) {
@@ -124,6 +192,14 @@ export const schemaReferrers = (
 	for (const edge of document.edges) {
 		if (schemaRefsForEdge(edge).includes(schemaId)) {
 			refs.push({ kind: "edge", id: edge.id, reason: "Edge output schema reference." });
+		}
+	}
+	for (const [parentSchemaId, schema] of Object.entries(document.schemas)) {
+		if (parentSchemaId === schemaId) continue;
+		const nestedRefs = new Set<string>();
+		collectSchemaRefs(schema, nestedRefs);
+		if (nestedRefs.has(schemaId)) {
+			refs.push({ kind: "schema", id: parentSchemaId, reason: "Nested schema reference." });
 		}
 	}
 	return refs;

@@ -57,6 +57,11 @@ export const createStageRuntimeConfig = (
 				(stage) => stage.agentProfileId,
 				legacyConfig.getAgentProfile,
 			),
+		getGoalSession: async () =>
+			await fromCompiledOrLegacy(
+				(stage) => stage.goalSession,
+				legacyConfig.getGoalSession,
+			),
 		getPersistent: async () =>
 			await fromCompiledOrLegacy(
 				(stage) => stage.persistent,

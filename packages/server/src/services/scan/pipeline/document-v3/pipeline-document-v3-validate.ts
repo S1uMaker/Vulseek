@@ -67,6 +67,22 @@ const hasUnsupportedExpressionToken = (value: string): boolean => {
 const isInternalSchemaRef = (value: string): boolean =>
 	/^#\/schemas\/[A-Za-z0-9_-]+$/.test(value);
 
+/** Collect schema dependencies from nested JSON Schema and pipeline annotations. */
+const collectSchemaRefs = (value: unknown, refs: Set<string>): void => {
+	if (Array.isArray(value)) {
+		for (const item of value) collectSchemaRefs(item, refs);
+		return;
+	}
+	if (!value || typeof value !== "object") return;
+
+	for (const [key, child] of Object.entries(value)) {
+		if ((key === "$ref" || key === "$pathOf") && typeof child === "string" && isInternalSchemaRef(child)) {
+			refs.add(child.slice("#/schemas/".length));
+		}
+		collectSchemaRefs(child, refs);
+	}
+};
+
 const CONTAINER_WORK_DIRS = [
 	"/workspace",
 	"/workspace/repo",
@@ -242,6 +258,39 @@ export const validatePipelineDocumentV3 = (
 				),
 			);
 		}
+		const routeDescriptions = new Map<string, string>();
+		const routeSchemas = new Map<string, string>();
+		for (const edge of routed) {
+			const route = edge.route!;
+			const description = route.description?.trim();
+			if (description) {
+				const previous = routeDescriptions.get(route.key);
+				if (previous && previous !== description) {
+					diagnostics.push(
+						error(
+							"route.conflicting_description",
+							`route key "${route.key}" has conflicting descriptions on stage "${stageId}"`,
+							{ path: ["edges", edge.id, "route", "description"] },
+						),
+					);
+				}
+				routeDescriptions.set(route.key, previous ?? description);
+			}
+			if (edge.outputSchema) {
+				const serialized = JSON.stringify(edge.outputSchema);
+				const previous = routeSchemas.get(route.key);
+				if (previous && previous !== serialized) {
+					diagnostics.push(
+						error(
+							"route.conflicting_output_schema",
+							`route key "${route.key}" has conflicting output schemas on stage "${stageId}"`,
+							{ path: ["edges", edge.id, "outputSchema"] },
+						),
+					);
+				}
+				routeSchemas.set(route.key, previous ?? serialized);
+			}
+		}
 	}
 
 	// --- reachability (loops allowed) ---------------------------------------
@@ -268,10 +317,17 @@ export const validatePipelineDocumentV3 = (
 	}
 
 	// --- stages -------------------------------------------------------------
+	// Stage and edge references are roots. A referenced schema may itself depend
+	// on other schemas, so expand the complete dependency closure below before
+	// reporting missing or unused schema diagnostics.
 	const referencedSchemaIds = new Set<string>();
+	for (const edge of document.edges) {
+		collectSchemaRefs(edge.outputSchema, referencedSchemaIds);
+	}
 	for (const [stageId, stage] of Object.entries(document.stages)) {
 		for (const schema of [stage.inputSchema, stage.outputSchema]) {
 			if (!schema) continue;
+			collectSchemaRefs(schema, referencedSchemaIds);
 			const schemaRef = schema["$ref"];
 			if (typeof schemaRef === "string") {
 				if (isInternalSchemaRef(schemaRef)) {
@@ -361,6 +417,19 @@ export const validatePipelineDocumentV3 = (
 			);
 		}
 	}
+	const pendingSchemaIds = [...referencedSchemaIds];
+	while (pendingSchemaIds.length > 0) {
+		const schemaId = pendingSchemaIds.pop()!;
+		const schema = document.schemas[schemaId];
+		if (!schema) continue;
+		const dependencies = new Set<string>();
+		collectSchemaRefs(schema, dependencies);
+		for (const dependency of dependencies) {
+			if (referencedSchemaIds.has(dependency)) continue;
+			referencedSchemaIds.add(dependency);
+			pendingSchemaIds.push(dependency);
+		}
+	}
 
 	// --- schema refs exist --------------------------------------------------
 	for (const schemaId of referencedSchemaIds) {
@@ -376,7 +445,7 @@ export const validatePipelineDocumentV3 = (
 	for (const schemaId of Object.keys(document.schemas)) {
 		if (!referencedSchemaIds.has(schemaId)) {
 			diagnostics.push(
-				warn("schema.unused", `schema "${schemaId}" is not referenced by any stage or edge`, {
+				warn("schema.unused", `schema "${schemaId}" is not reachable from any stage or edge schema reference`, {
 					path: ["schemas", schemaId],
 					entity: { type: "schema", id: schemaId },
 				}),

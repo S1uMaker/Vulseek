@@ -1,6 +1,8 @@
 # TOB Goal Pipeline
 
 > 基于 [Trail of Bits `/goal` bug-hunting 实践](trail-of-bits-goal-bug-hunting.md) 设计的新型 scan pipeline。
+>
+> Craft / Surface / Hunt 的输入输出、`/goal` 循环与字段增删已改订于 [tob-goal-craft-surface-hunt-io.md](tob-goal-craft-surface-hunt-io.md)。下文 Stage 详情里的旧 I/O（threatDirection、内联 goalSpec、huntGoal.objective、共用 goalPrompt）以那份为准。
 
 ## 设计原则
 

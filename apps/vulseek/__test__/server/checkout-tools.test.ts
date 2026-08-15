@@ -6,6 +6,7 @@ import {
 	canRebuildCheckoutTools,
 	computeCheckoutToolsVersion,
 	createCheckoutToolsBuildManager,
+	inspectRequiredToolsImageReference,
 	matchesCheckoutToolsImageLabels,
 	resolveCheckoutToolsImageVariant,
 } from "@vulseek/server/services/scan/checkout-tools";
@@ -126,6 +127,7 @@ describe("checkout tools definition", () => {
 		expect(toolsDockerfile).toContain(
 			'com.fuzzing-peach.vulseek.scan-tools.variant="${VULSEEK_TOOLS_VARIANT}"',
 		);
+		expect(toolsDockerfile).toContain('ARG CODEQL_VERSION="2.26.3"');
 		expect(toolsDockerfile).not.toContain("# syntax=docker/dockerfile:1");
 		expect(toolsDockerfile).not.toContain("AS repository-source");
 		expect(toolsDockerfile).not.toContain("codex-acp-builder");
@@ -290,5 +292,16 @@ describe("checkout tools build manager", () => {
 		await expect(firstCheckout).rejects.toThrow("tools bootstrap failed");
 		await expect(secondCheckout).rejects.toThrow("tools bootstrap failed");
 		expect(manager.findBuild("tools-build-4")?.status).toBe("failed");
+	});
+});
+
+describe("pinned tools image references", () => {
+	it("rejects a missing or changed image reference", async () => {
+		await expect(
+			inspectRequiredToolsImageReference({
+				imageTag: "vulseek-scan-tools-dev:test-missing",
+				imageId: "sha256:expected-image",
+			}),
+		).resolves.toBe(false);
 	});
 });

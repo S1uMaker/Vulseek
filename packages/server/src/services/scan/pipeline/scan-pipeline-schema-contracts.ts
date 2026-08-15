@@ -303,7 +303,14 @@ const normalizePathOfSchema = (input: {
 			path: "artifact",
 		});
 		return {
-			schema: { type: "string" },
+			schema: {
+				type: "string",
+				...Object.fromEntries(
+					Object.entries(input.schema).filter(
+						([key]) => key !== PATH_OF_KEY && key !== "type",
+					),
+				),
+			},
 			artifactAnnotations: [
 				{
 					path: input.path,

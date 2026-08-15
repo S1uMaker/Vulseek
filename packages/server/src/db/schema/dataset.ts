@@ -88,8 +88,8 @@ export const datasetProfiles = pgTable(
 			.default("preparing"),
 		hostRoot: text("hostRoot").notNull(),
 		sourceDigest: text("sourceDigest"),
-		checkoutImage: text("checkoutImage"),
-		checkoutImageDigest: text("checkoutImageDigest"),
+		toolsImageTag: text("toolsImageTag"),
+		toolsImageDigest: text("toolsImageDigest"),
 		configSnapshot: jsonb("configSnapshot")
 			.$type<Record<string, unknown>>()
 			.notNull()

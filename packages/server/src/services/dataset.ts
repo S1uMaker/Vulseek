@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { db } from "@vulseek/server/db";
 import {
@@ -9,32 +8,28 @@ import {
 	datasetSamples,
 	datasets,
 } from "@vulseek/server/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, notInArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { execAsync, execAsyncStream } from "../utils/process/execAsync";
+import { execAsyncStream } from "../utils/process/execAsync";
 import {
 	assertDatasetPathInside,
 	datasetManifestRelativePath,
 	parseDatasetManifest,
 	validateDatasetManifest as validateDatasetManifestContract,
 } from "./dataset-manifest";
+import {
+	resolveRequiredToolsImage,
+} from "./scan/checkout-tools";
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`;
-
-const sanitizeSegment = (value: string) =>
-	value
-		.replace(/[\\/]+/g, "-")
-		.replace(/[^a-zA-Z0-9._-]/g, "-")
-		.replace(/-+/g, "-")
-		.replace(/^-|-$/g, "") || "unknown";
 
 export const validateDatasetManifest = validateDatasetManifestContract;
 const manifestRelativePath = datasetManifestRelativePath;
 
 type DatasetCheckoutPhase =
 	| "validating_source"
+	| "checking_tools"
 	| "reading_manifest"
-	| "building_image"
 	| "saving_profile"
 	| "completed"
 	| "failed";
@@ -55,7 +50,7 @@ type DatasetCheckoutTask = {
 	finishedAt?: string;
 	errorMessage?: string;
 	sampleCount?: number;
-	checkoutImage?: string;
+	toolsImageTag?: string;
 };
 
 const datasetCheckoutTasks = new Map<string, DatasetCheckoutTask>();
@@ -150,44 +145,6 @@ const readDatasetManifestInCheckoutContainer = async (
 	}
 };
 
-const buildCheckoutImage = async (profileId: string, toolsImage: string) => {
-	const tempDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "vulseek-dataset-image-"),
-	);
-	try {
-		const dockerfile = `FROM ${toolsImage}\nRUN mkdir -p /workspace/repo /workspace/dataset\n`;
-		await fs.writeFile(path.join(tempDir, "Dockerfile"), dockerfile);
-		const imageTag = `vulseek-dataset-profile-${sanitizeSegment(profileId)}:${nanoid(8)}`;
-		await execAsync(
-			`docker build --pull=false -t ${shellQuote(imageTag)} ${shellQuote(tempDir)}`,
-		);
-		const { stdout } = await execAsync(
-			`docker image inspect --format='{{.Id}}' ${shellQuote(imageTag)}`,
-		);
-		return { imageTag, imageDigest: stdout.trim() };
-	} finally {
-		await fs.rm(tempDir, { recursive: true, force: true });
-	}
-};
-
-export const resolveDatasetToolsImage = async () => {
-	const configured =
-		process.env.VULSEEK_SCAN_TOOLS_IMAGE?.trim() ||
-		process.env.VULSEEK_TOOLS_IMAGE?.trim();
-	if (configured) return configured;
-	const variant =
-		process.env.VULSEEK_TOOLS_IMAGE_VARIANT?.trim() ||
-		(process.env.NODE_ENV === "production" ? "release" : "dev");
-	const { stdout } = await execAsync(
-		`docker images --format '{{.Repository}}:{{.Tag}}' 'vulseek-scan-tools-${sanitizeSegment(variant)}:*' | head -n 1`,
-	);
-	const image = stdout.trim();
-	if (!image) {
-		throw new Error(`No ${variant} scan tools image is available`);
-	}
-	return image;
-};
-
 export const prepareDatasetProfile = async (
 	profileId: string,
 	progress: DatasetCheckoutProgressHandlers = {},
@@ -211,10 +168,7 @@ export const prepareDatasetProfile = async (
 		.where(eq(datasetProfiles.profileId, profileId));
 
 	try {
-		progress.onPhase?.(
-			"validating_source",
-			"Validating the local dataset path and scanner tools",
-		);
+		progress.onPhase?.("validating_source", "Validating the local dataset path");
 		if (
 			!row.profile.hostRoot.trim() ||
 			!path.isAbsolute(row.profile.hostRoot)
@@ -225,7 +179,8 @@ export const prepareDatasetProfile = async (
 		}
 		const hostRoot = path.resolve(row.profile.hostRoot);
 		const source = { type: "local" as const, path: hostRoot };
-		const toolsImage = await resolveDatasetToolsImage();
+		progress.onPhase?.("checking_tools", "Checking the shared scan tools image");
+		const toolsImage = await resolveRequiredToolsImage();
 		progress.onPhase?.(
 			"reading_manifest",
 			"Reading and validating dataset samples",
@@ -233,7 +188,7 @@ export const prepareDatasetProfile = async (
 		const manifest = parseDatasetManifest(
 			await readDatasetManifestInCheckoutContainer(
 				hostRoot,
-				toolsImage,
+				toolsImage.imageTag,
 				progress.onManifestProgress,
 			),
 		);
@@ -244,30 +199,66 @@ export const prepareDatasetProfile = async (
 			manifestSampleIds.has(sampleId),
 		);
 		progress.onPhase?.(
-			"building_image",
-			"Building the immutable checkout image",
-		);
-		const checkoutImage = await buildCheckoutImage(profileId, toolsImage);
-		progress.onPhase?.(
 			"saving_profile",
-			"Saving the sample index and checkout image",
+			"Saving the sample index and tools image reference",
 		);
 		await db.transaction(async (tx) => {
-			await tx
-				.delete(datasetSamples)
-				.where(eq(datasetSamples.profileId, profileId));
+			const referencedSamples = await tx
+				.select({ sampleId: datasetEvaluationTrials.sampleId })
+				.from(datasetEvaluationTrials)
+				.innerJoin(
+					datasetEvaluations,
+					eq(datasetEvaluationTrials.evaluationId, datasetEvaluations.evaluationId),
+				)
+				.where(eq(datasetEvaluations.profileId, profileId));
+			const referencedSampleIds = [
+				...new Set(referencedSamples.map((sample) => sample.sampleId)),
+			];
+			const manifestIds = manifest.samples.map((sample) => sample.id);
+			const staleSamplesWhere =
+				manifestIds.length === 0
+					? referencedSampleIds.length > 0
+						? and(
+								eq(datasetSamples.profileId, profileId),
+								notInArray(datasetSamples.sampleId, referencedSampleIds),
+							)
+						: eq(datasetSamples.profileId, profileId)
+					: referencedSampleIds.length > 0
+						? and(
+								eq(datasetSamples.profileId, profileId),
+								notInArray(datasetSamples.id, manifestIds),
+								notInArray(datasetSamples.sampleId, referencedSampleIds),
+							)
+						: and(
+								eq(datasetSamples.profileId, profileId),
+								notInArray(datasetSamples.id, manifestIds),
+							);
+			await tx.delete(datasetSamples).where(staleSamplesWhere);
 			if (manifest.samples.length > 0) {
-				await tx.insert(datasetSamples).values(
-					manifest.samples.map((sample) => ({
-						profileId,
-						id: sample.id,
-						title: sample.title ?? "",
-						repositoryPath: sample.repositoryPath,
-						groundTruthArtifacts: sample.groundTruthArtifacts,
-						metadata: sample.metadata ?? {},
-						ordinal: sample.ordinal,
-					})),
-				);
+				await tx
+					.insert(datasetSamples)
+					.values(
+						manifest.samples.map((sample) => ({
+							profileId,
+							id: sample.id,
+							title: sample.title ?? "",
+							repositoryPath: sample.repositoryPath,
+							groundTruthArtifacts: sample.groundTruthArtifacts,
+							metadata: sample.metadata ?? {},
+							ordinal: sample.ordinal,
+						})),
+					)
+					.onConflictDoUpdate({
+						target: [datasetSamples.profileId, datasetSamples.id],
+						set: {
+							title: sql`excluded."title"`,
+							repositoryPath: sql`excluded."repositoryPath"`,
+							groundTruthArtifacts: sql`excluded."groundTruthArtifacts"`,
+							metadata: sql`excluded."metadata"`,
+							ordinal: sql`excluded."ordinal"`,
+							updatedAt: sql`excluded."updatedAt"`,
+						},
+					});
 			}
 			await tx
 				.update(datasetProfiles)
@@ -276,8 +267,8 @@ export const prepareDatasetProfile = async (
 					hostRoot,
 					selectedSampleIds,
 					sourceDigest: null,
-					checkoutImage: checkoutImage.imageTag,
-					checkoutImageDigest: checkoutImage.imageDigest,
+					toolsImageTag: toolsImage.imageTag,
+					toolsImageDigest: toolsImage.imageId,
 					configSnapshot: {
 						source,
 						manifestPath: path.join(hostRoot, manifestRelativePath),
@@ -292,7 +283,7 @@ export const prepareDatasetProfile = async (
 			status: "ready" as const,
 			sampleCount: manifest.samples.length,
 			sourceDigest: null,
-			checkoutImage: checkoutImage.imageTag,
+			toolsImageTag: toolsImage.imageTag,
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -361,7 +352,7 @@ export const startDatasetProfileCheckout = (profileId: string) => {
 				message: "Dataset checkout completed",
 				finishedAt: new Date().toISOString(),
 				sampleCount: result.sampleCount,
-				checkoutImage: result.checkoutImage,
+				toolsImageTag: result.toolsImageTag,
 			});
 		})
 		.catch((error: unknown) => {
@@ -393,11 +384,6 @@ export const pruneDatasetProfile = async (profileId: string) => {
 		.limit(1);
 	if (referenced[0])
 		throw new Error("Dataset profile is referenced by an evaluation");
-	if (profile.profile.checkoutImage) {
-		await execAsync(
-			`docker rmi ${shellQuote(profile.profile.checkoutImage)}`,
-		).catch(() => {});
-	}
 	await db
 		.delete(datasetProfiles)
 		.where(eq(datasetProfiles.profileId, profileId));
@@ -439,7 +425,8 @@ export const resolveDatasetTrialRuntime = async (scanJobId: string) => {
 		...row,
 		sampleHostPath,
 		profileHostRoot: row.profile.hostRoot,
-		checkoutImage: row.profile.checkoutImage ?? null,
+		toolsImageTag: row.profile.toolsImageTag ?? null,
+		toolsImageDigest: row.profile.toolsImageDigest ?? null,
 	};
 };
 

@@ -26,6 +26,7 @@ import {
 	useCollectionQuery,
 } from "@/components/dashboard/ui-system";
 import type { ListQueryStateSetter } from "@/components/dashboard/ui-system/use-collection-query";
+import { CheckoutLogModal } from "@/components/dashboard/scanning/checkout-log-modal";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
@@ -70,9 +71,9 @@ const PROFILE_STATUS_LABEL = (status: string) =>
 
 const CHECKOUT_STAGES = [
 	{ phase: "validating_source", label: "Validate local dataset" },
+	{ phase: "checking_tools", label: "Check shared tools image" },
 	{ phase: "reading_manifest", label: "Read and validate samples" },
-	{ phase: "building_image", label: "Build checkout image" },
-	{ phase: "saving_profile", label: "Save profile and sample index" },
+	{ phase: "saving_profile", label: "Save profile and tools image reference" },
 ] as const;
 
 const ProfileDetailPage = () => {
@@ -118,6 +119,21 @@ const ProfileDetailPage = () => {
 		api.dataset.profiles.updateSelectedSamples.useMutation();
 	const updateHostRoot = api.dataset.profiles.updateHostRoot.useMutation();
 	const checkout = api.dataset.profiles.checkout.useMutation();
+	const rebuildTools = api.scan.rebuildCheckoutTools.useMutation();
+	const [toolsBuildId, setToolsBuildId] = useState<string | null>(null);
+	const [toolsLogOpen, setToolsLogOpen] = useState(false);
+	const { data: toolsStatus, refetch: refetchToolsStatus } =
+		api.scan.checkoutToolsStatus.useQuery(undefined, {
+			refetchInterval: (value) => (value?.state === "building" ? 1800 : false),
+		});
+	const activeToolsBuildId = toolsBuildId || toolsStatus?.activeBuildId || null;
+	const { data: toolsBuildStatus } = api.scan.checkoutToolsBuildStatus.useQuery(
+		{ buildId: activeToolsBuildId || "" },
+		{
+			enabled: Boolean(activeToolsBuildId),
+			refetchInterval: (value) => (value?.status === "running" ? 1500 : false),
+		},
+	);
 	const [checkoutDialogOpen, setCheckoutDialogOpen] = useState(false);
 	const [checkoutId, setCheckoutId] = useState<string | null>(null);
 	const [checkoutFinalized, setCheckoutFinalized] = useState(true);
@@ -143,7 +159,19 @@ const ProfileDetailPage = () => {
 	);
 	const [repetitions, setRepetitions] = useState(1);
 	const [timeBudgetSeconds, setTimeBudgetSeconds] = useState("");
+	const toolsBuildNotifiedRef = useRef<string | null>(null);
 
+	useEffect(() => {
+		if (!toolsBuildStatus || toolsBuildStatus.status === "running") return;
+		if (toolsBuildNotifiedRef.current === toolsBuildStatus.buildId) return;
+		toolsBuildNotifiedRef.current = toolsBuildStatus.buildId;
+		void refetchToolsStatus();
+		if (toolsBuildStatus.status === "completed") {
+			toast.success("Tools image built successfully");
+		} else {
+			toast.error(toolsBuildStatus.errorMessage || "Tools image build failed");
+		}
+	}, [refetchToolsStatus, toolsBuildStatus]);
 	useEffect(() => {
 		if (profile.data?.profileId !== profileId) return;
 		setSelectedSampleIds(profile.data.selectedSampleIds);
@@ -231,6 +259,15 @@ const ProfileDetailPage = () => {
 			setCheckoutFinalized(true);
 			setCheckoutStartError(message);
 			toast.error(message);
+		}
+	};
+	const buildTools = async () => {
+		try {
+			const build = await rebuildTools.mutateAsync();
+			setToolsBuildId(build.buildId);
+			setToolsLogOpen(true);
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "Unable to build tools image");
 		}
 	};
 
@@ -496,32 +533,98 @@ const ProfileDetailPage = () => {
 											type="submit"
 											className="md:col-span-2 md:justify-self-start lg:col-span-3"
 											disabled={
-													!data.canManage ||
-													data.status !== "ready" ||
-													selectedSampleIds.length === 0 ||
-													!pipelineId ||
-													createEvaluation.isLoading
-												}
+												!data.canManage ||
+												data.status !== "ready" ||
+												selectedSampleIds.length === 0 ||
+												!data.toolsImageAvailable ||
+												!pipelineId ||
+														createEvaluation.isLoading
+											}
 											>
 												<Play className="size-4" />
 												Run Evaluation ({selectedSampleIds.length})
 											</Button>
-										</form>
-									</CardContent>
-								</Card>
-								<Card>
-									<CardHeader>
-										<CardTitle>Local Dataset Path</CardTitle>
-										<CardDescription>
-											Set the directory mounted for this Profile. Checkout is
-											separate and runs from the button above.
-										</CardDescription>
-									</CardHeader>
-									<CardContent>
-										<form
-											onSubmit={saveHostRoot}
-											className="flex flex-wrap items-end gap-3"
-										>
+											</form>
+										</CardContent>
+									</Card>
+							<Card>
+								<CardHeader>
+									<CardTitle>Tools Image</CardTitle>
+									<CardDescription>
+										Dataset checkout pins this shared image for every trial and
+										scoring container.
+									</CardDescription>
+								</CardHeader>
+								<CardContent className="space-y-2 text-sm">
+									<div className="flex flex-wrap items-center justify-between gap-3">
+										<span className="text-muted-foreground">
+											Current status: {toolsStatus?.state ?? "loading"}
+										</span>
+										{data.canManage ? (
+											<Button
+												type="button"
+												size="sm"
+												variant="outline"
+												disabled={
+													toolsStatus?.state === "building" ||
+													rebuildTools.isLoading
+												}
+												onClick={buildTools}
+											>
+												{rebuildTools.isLoading || toolsStatus?.state === "building" ? (
+													<Loader2 className="size-4 animate-spin" />
+												) : null}
+													{toolsStatus?.exists
+														? "Rebuild tools image"
+														: "Build tools image"}
+											</Button>
+										) : null}
+									</div>
+									{data.toolsImageTag && data.toolsImageDigest && data.toolsImageAvailable ? (
+										<>
+											<div className="flex flex-wrap items-center gap-2">
+												<code className="break-all rounded bg-muted px-2 py-1 text-xs">
+													{data.toolsImageTag}
+												</code>
+												<CopyValueButton
+													value={data.toolsImageTag}
+													label="Tools image tag"
+													className="size-7"
+												/>
+											</div>
+											<div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+														<span className="break-all font-mono text-xs">
+													{data.toolsImageDigest}
+												</span>
+												<CopyValueButton
+													value={data.toolsImageDigest}
+													label="Tools image digest"
+													className="size-7"
+												/>
+											</div>
+										</>
+									) : (
+										<p className="text-amber-700">
+											{data.toolsImageTag && data.toolsImageDigest
+												? "The pinned tools image is missing. Re-checkout is required before this Profile can run an Evaluation."
+												: "Re-checkout required before this Profile can run an Evaluation."}
+										</p>
+									)}
+								</CardContent>
+							</Card>
+													<Card>
+														<CardHeader>
+															<CardTitle>Local Dataset Path</CardTitle>
+															<CardDescription>
+																Set the directory mounted for this Profile. Checkout is
+																separate and runs from the button above.
+															</CardDescription>
+														</CardHeader>
+														<CardContent>
+															<form
+																onSubmit={saveHostRoot}
+																className="flex flex-wrap items-end gap-3"
+															>
 											<label
 												htmlFor="profile-host-root"
 												className="grid min-w-0 flex-1 gap-2 text-sm font-medium"
@@ -718,9 +821,9 @@ const ProfileDetailPage = () => {
 						</DialogTitle>
 						<DialogDescription>
 							{checkoutIsRunning
-								? "This process validates every sample and builds the checkout image. You can close this dialog after it finishes."
-								: checkoutIsCompleted
-									? `Prepared ${checkoutStatus.sampleCount ?? data.sampleCount} samples and saved the checkout image.`
+							? "This process checks the shared tools image and validates every sample. You can close this dialog after it finishes."
+							: checkoutIsCompleted
+								? `Prepared ${checkoutStatus.sampleCount ?? data.sampleCount} samples and pinned the shared tools image.`
 									: "The profile was not prepared. Review the error and retry checkout."}
 						</DialogDescription>
 					</DialogHeader>
@@ -794,6 +897,18 @@ const ProfileDetailPage = () => {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+			<CheckoutLogModal
+				open={toolsLogOpen}
+				onOpenChange={setToolsLogOpen}
+				title="Tools image build"
+				description={toolsBuildStatus?.imageTag}
+				logs={
+					toolsBuildStatus
+						? [toolsBuildStatus.stdout, toolsBuildStatus.stderr].filter(Boolean).join("\n")
+						: "Waiting for tools image build..."
+				}
+				isLoading={toolsBuildStatus?.status === "running"}
+			/>
 		</>
 	);
 };

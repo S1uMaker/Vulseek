@@ -15,6 +15,7 @@ const stageRoleSchema = z.enum(["scan", "analysis", "verification"]);
 const stageRuntimeConfigSchema = z
 	.object({
 		agentProfile: z.string().min(1).nullable().optional(),
+		goalSession: z.enum(["shared", "per-task"]).optional(),
 		persistent: z.boolean().nullable().optional(),
 		reuseContainer: z.boolean().nullable().optional(),
 		nullableOutput: z.boolean().nullable().optional(),
@@ -120,11 +121,11 @@ const edgeConfigSchema = z.object({
 	foreach: z.string().min(1).optional(),
 	input: z.unknown().optional(),
 	outputSchema: z.record(z.unknown()).optional(),
-	outputSchemaDescription: z.string().optional(),
 	route: z
 		.object({
 			key: z.string().min(1),
 			default: z.boolean().optional(),
+			description: z.string().optional(),
 		})
 		.optional(),
 	artifacts: z
@@ -223,6 +224,7 @@ export type ScanPipelineStageConfig = {
 
 export type ScanStageRuntimeConfig = {
 	agentProfile: string | null;
+	goalSession?: "shared" | "per-task";
 	persistent: boolean | null;
 	reuseContainer: boolean | null;
 	nullableOutput: boolean | null;
@@ -247,11 +249,12 @@ export type ScanPipelineEdgeConfig = {
 	foreach: string | null;
 	input: unknown;
 	outputSchema: Record<string, unknown> | null;
-	outputSchemaDescription: string | null;
+
 	artifacts: Array<{ from: string; to: string; inputField?: string; required: boolean }>;
 	route: {
 		key: string;
 		default?: boolean;
+		description?: string;
 	} | null;
 };
 
@@ -454,7 +457,6 @@ export const normalizePipelineDefinitionSnapshot = (
 					foreach: edge.foreach ?? undefined,
 					input: edge.input ?? undefined,
 					outputSchema: edge.outputSchema ?? undefined,
-					outputSchemaDescription: edge.outputSchemaDescription ?? undefined,
 					route: edge.route ?? undefined,
 					artifacts: edge.artifacts,
 				})),
@@ -616,6 +618,7 @@ const normalizeStageRuntimeConfig = (
 	config: z.infer<typeof stageRuntimeConfigSchema>,
 ): ScanStageRuntimeConfig => ({
 	agentProfile: config.agentProfile ?? null,
+	...(config.goalSession ? { goalSession: config.goalSession } : {}),
 	persistent: config.persistent ?? null,
 	reuseContainer: config.reuseContainer ?? null,
 	nullableOutput: config.nullableOutput ?? null,
@@ -1049,17 +1052,17 @@ export const parseScanPipelineDefinitionsSource = (
 				foreach: edge.foreach ?? null,
 				input: edge.input ?? null,
 				outputSchema: edge.outputSchema ?? null,
-				outputSchemaDescription: edge.outputSchemaDescription ?? null,
 				artifacts: edge.artifacts.map((artifact) => ({
 					from: artifact.from,
 					to: artifact.to,
 					inputField: artifact.inputField,
 					required: artifact.required,
 				})),
-				route: edge.route
+					route: edge.route
 					? {
 							key: edge.route.key,
 							default: edge.route.default,
+							description: edge.route.description,
 						}
 					: null,
 			})),
@@ -1223,6 +1226,8 @@ export const createStageRuntimeConfigWithDeps = (input: {
 		getConcurrency: async () => (await loadStage()).concurrency,
 		getAgentProfile: async () =>
 			(await loadRuntimeConfig())?.agentProfile ?? null,
+		getGoalSession: async () =>
+			(await loadRuntimeConfig())?.goalSession ?? null,
 		getPersistent: async () => (await loadRuntimeConfig())?.persistent ?? null,
 		getReuseContainer: async () =>
 			(await loadRuntimeConfig())?.reuseContainer ?? null,

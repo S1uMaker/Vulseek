@@ -327,6 +327,32 @@ describe("validatePipelineDocumentV3", () => {
 		);
 	});
 
+	it("keeps nested stage and edge schema dependencies reachable", () => {
+		const document: PipelineDocumentV3 = {
+			...structuredClone(minimalDocument),
+			schemas: {
+				"goal-spec": { type: "object" },
+				"goal-craft-output": {
+					type: "object",
+					properties: { goalSpec: { $ref: "#/schemas/goal-spec" } },
+				},
+				"edge-output": {
+					type: "object",
+					properties: { nested: { $pathOf: "#/schemas/goal-spec" } },
+				},
+				orphan: { type: "object" },
+			},
+			stages: {
+				...minimalDocument.stages,
+				start: stage({ outputSchema: { $ref: "#/schemas/goal-craft-output" } }),
+			},
+			edges: [edge({ outputSchema: { $ref: "#/schemas/edge-output" } })],
+		};
+		const diagnostics = collectPipelineDiagnostics(document);
+		expect(diagnostics.some((d) => d.code === "schema.unused" && d.entity?.id === "goal-spec")).toBe(false);
+		expect(diagnostics.some((d) => d.code === "schema.unused" && d.entity?.id === "orphan")).toBe(true);
+	});
+
 	it("rejects unsafe cwd and artifact paths", () => {
 		const document: PipelineDocumentV3 = {
 			...structuredClone(minimalDocument),

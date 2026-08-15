@@ -278,7 +278,10 @@ pipelines:
         mode: map
         outputSchema:
           $ref: "#/schemas/RepositoryProfileOutput"
-        outputSchemaDescription: Sample routed output schema
+        route:
+          key: sample
+          default: true
+          description: Sample routed output schema
     groups:
       - id: full-scan
         name: Full Scan Pipeline
@@ -340,6 +343,7 @@ pipelines:
 	assert.deepEqual(definitions.pipelines.delta.edges[0]?.route, {
 		key: "verification",
 		default: true,
+		description: undefined,
 	});
 	assert.equal(definitions.stageSettings.scanTarget?.disableable, true);
 	assert.equal(definitions.stageSettings.repositoryProfile?.disableable, false);
@@ -372,10 +376,11 @@ pipelines:
 	assert.deepEqual(definitions.pipelines.full.edges[1]?.outputSchema, {
 		$ref: "#/schemas/RepositoryProfileOutput",
 	});
-	assert.equal(
-		definitions.pipelines.full.edges[1]?.outputSchemaDescription,
-		"Sample routed output schema",
-	);
+	assert.deepEqual(definitions.pipelines.full.edges[1]?.route, {
+		key: "sample",
+		default: true,
+		description: "Sample routed output schema",
+	});
 });
 
 test("parseScanPipelineDefinitionsFromYaml rejects invalid topology", () => {

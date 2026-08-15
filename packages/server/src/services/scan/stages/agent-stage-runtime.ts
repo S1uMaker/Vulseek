@@ -10,6 +10,8 @@ import { startContainer } from "../runtime/run-single-turn-agent";
 import type { AgentProfileLike, ScanJob } from "../types";
 import type { StageContext } from "./full-scan-stage.runtime";
 
+const DEFAULT_RUNTIME_SKILLS = ["output-validator"] as const;
+
 export type AgentStageRuntime = {
 	agentProfile: AgentProfileLike | null;
 	taskStageDirPath: string;
@@ -112,5 +114,8 @@ export const resolveStageRuntimePrompt = async (
 		ctx.scanJobId,
 		ctx.stageName,
 	).getSkills();
-	return injectSkillListIntoPrompt(rendered, skills);
+	return injectSkillListIntoPrompt(rendered, [
+		...(skills ?? []),
+		...DEFAULT_RUNTIME_SKILLS,
+	]);
 };

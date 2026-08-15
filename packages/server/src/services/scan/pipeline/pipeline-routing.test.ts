@@ -142,9 +142,12 @@ test("getStageRouteOutputSchemas exposes edge schemas and falls back to stage sc
 				name: "from-to-build",
 				from: fromStage,
 				to: buildStage,
-				route: { key: "build", default: true },
+				route: {
+					key: "build",
+					default: true,
+					description: "Build a fuzzer",
+				},
 				outputSchema: buildSchema,
-				outputSchemaDescription: "Build a fuzzer",
 			}),
 			createPipelineEdge({
 				name: "from-to-critic",
@@ -178,12 +181,12 @@ test("getStageRouteOutputSchemas exposes edge schemas and falls back to stage sc
 			},
 			{
 				routeKey: "critic",
-				description: "Output for route critic to critic",
+				description: undefined,
 				default: undefined,
 			},
 			{
 				routeKey: "verify",
-				description: "Output for route verify to verify",
+				description: undefined,
 				default: undefined,
 			},
 		],

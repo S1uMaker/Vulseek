@@ -1,16 +1,16 @@
 ---
 name: goal-craft
-description: Draft and self-red-team a precise GoalSpec for tob-goal scans.
+description: Draft and self-red-team a precise GoalSpec for ToB Goal scans.
 ---
 
 # Goal Craft
 
-Turn a human threat direction into an outcome-heavy GoalSpec whose `goalPrompt` will be activated as a **Codex native `/goal`** on each hunt.
+Turn the scan job's configured goal into an outcome-heavy GoalSpec. The runtime later combines this artifact with each assigned hunt surface to construct a native `/goal`.
 
 ## Rules
 
-- **Honor `threatDirection` strictly** — focus + attackerModel define the outcome; do not dilute into generic untrusted-input wording.
+- Use the scan job's goal and attacker model; do not introduce a separate threatDirection contract.
 - Spend tokens on success criteria, non-goals, and loophole closure.
 - Do not prescribe a single tool path for later hunt stages.
-- Keep `goalPrompt` self-contained and compact (~1800 chars) so it fits Codex native goal limits after surface context is appended.
+- Optionally provide concise `surfaceGuidance`; do not create a `goalPrompt` field.
 - Write `/task/goal-spec.json` before finishing.

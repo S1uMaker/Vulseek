@@ -1,6 +1,7 @@
 export type CompiledStageRuntimeSnapshot = {
 	concurrency: number;
 	agentProfileId: string | null;
+	goalSession: "shared" | "per-task" | null;
 	persistent: boolean | null;
 	reuseContainer: boolean | null;
 	nullableOutput: boolean | null;
@@ -43,6 +44,10 @@ export const findCompiledStageRuntimeSnapshot = (
 		agentProfileId:
 			typeof runtime.agentProfileId === "string"
 				? runtime.agentProfileId
+				: null,
+		goalSession:
+			runtime.goalSession === "shared" || runtime.goalSession === "per-task"
+				? runtime.goalSession
 				: null,
 		persistent:
 			typeof runtime.persistent === "boolean" ? runtime.persistent : null,

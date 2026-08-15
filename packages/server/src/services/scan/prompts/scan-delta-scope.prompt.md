@@ -16,11 +16,7 @@ Diff range: {{baseCommit}}..{{targetCommit}}.
 Repository state JSON: {{repositoryStatePath}}.
 Read repository state before analysis and work from /workspace/repo at the checked-out target revision.
 Use git diff, rg, sed, tree-sitter, and local code inspection to identify functions that were changed by or are directly impacted by the diff.
-Write the repository object to /task/repository.json.
-Write each affected target object to /task/targets/<target-id>.json.
+Produce the repository and affected target artifacts required by the output schema.
 Every target object must satisfy the target schema. Use moduleId "delta-scope" and moduleName "Delta Scope" unless a more precise existing logical module is obvious from local code context.
-Write one logical Delta Scope module object to /task/module.json and one threat model object to /task/outputs/module-threat-model.json.
-Return a schema-valid path manifest: repository is /task/repository.json, module is /task/module.json, threatModel is /task/outputs/module-threat-model.json, and functions is the list of function JSON file paths.
-If no affected functions exist, still write /task/repository.json and return exactly `{ "repository": "/task/repository.json", "functions": [] }`.
-Before returning, validate the structured JSON against the runtime-provided output.schema.json.
-Set output.json exit to true so Vulseek can discard this Delta Scope lane after end_turn.
+Produce one logical Delta Scope module artifact and one threat model artifact, then return a schema-valid path manifest with the affected function artifacts.
+If no affected functions exist, still produce the required repository artifact and return an empty `functions` list.

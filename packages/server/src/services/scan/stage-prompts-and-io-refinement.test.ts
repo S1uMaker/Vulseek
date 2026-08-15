@@ -20,6 +20,8 @@ import {
 	buildStructuredOutputEnvelopeJsonSchema,
 	buildStructuredOutputPromptSuffix,
 } from "./runtime/structured-output-schema";
+import { loadBuiltinPipelineTemplates } from "./pipeline/document-v3/builtin-pipelines";
+import { parsePipelineDocumentV3 } from "./pipeline/document-v3/pipeline-document-v3-io";
 
 const scanDir = dirname(fileURLToPath(import.meta.url));
 const readStagePromptTemplate = (fileName: string) =>
@@ -242,6 +244,32 @@ test("Stage Graph prompt templates stay concise while delegating detail to skill
 	assert.doesNotMatch(scanTargetSkill, /one assigned vulnerability class/i);
 });
 
+test("built-in V3 prompts leave output protocol generation to runtime", () => {
+	const forbiddenPromptFragments = [
+		/route mapping:/i,
+		/always route back/i,
+		/output\.schema\.json/i,
+		/set (?:the )?(?:route|exit) to/i,
+		/write .*output\.json/i,
+		/selected object type must match the selected route/i,
+	];
+
+	for (const template of loadBuiltinPipelineTemplates()) {
+		const parsed = parsePipelineDocumentV3(template.yaml);
+		assert.ok(parsed.document, `${template.kind} template should parse`);
+		for (const [stageId, stage] of Object.entries(parsed.document.stages)) {
+			const prompt = stage.runtime?.prompt ?? "";
+			for (const fragment of forbiddenPromptFragments) {
+				assert.doesNotMatch(
+					prompt,
+					fragment,
+					`${template.kind}/${stageId} contains generated output protocol text`,
+				);
+			}
+		}
+	}
+});
+
 test("every Stage Graph prompt template renders without unresolved variables", () => {
 	for (const directory of ["prompts", "stages"]) {
 		for (const fileName of readdirSync(join(scanDir, directory)).filter((file) =>
@@ -319,12 +347,12 @@ test("delta scope prompt and schema stay limited to repository and functions", (
 	assert.match(deltaScopePrompt, /delta-scope as your working method/);
 	assert.match(
 		deltaScopePrompt,
-		/\/workspace\/repo\/\.agents\/skills\/delta-scope\/SKILL\.md/,
+		/\$VULSEEK_AGENT_HOME\/skills\/delta-scope\/SKILL\.md/,
 	);
 	assert.match(deltaScopePrompt, /repository/);
 	assert.match(deltaScopePrompt, /functions/);
-	assert.match(deltaScopePrompt, /Do not write or return a module artifact/);
-	assert.match(deltaScopePrompt, /\{ "repository": "\/task\/repository\.json", "functions": \[\] \}/);
+	assert.match(deltaScopePrompt, /Produce one logical Delta Scope module artifact/);
+	assert.match(deltaScopePrompt, /required repository artifact/);
 
 	const deltaScopeSkill = readSkillSource("delta-scope");
 	assert.match(deltaScopeSkill, /impact scoping only/i);
@@ -395,40 +423,29 @@ test("stage boundary manifests use task artifact paths instead of object lists",
 	);
 });
 
-test("structured output prompts include annotated task artifact schemas", () => {
+test("structured output prompts delegate schema details to the validator skill", () => {
 	const suffix = buildStructuredOutputPromptSuffix(
 		repositoryProfileManifestSchema,
 		"/task/output.schema.json",
 		"/task/output.json",
 	);
-	assert.match(suffix, /Task artifact JSON schemas/);
-	assert.match(suffix, /output\.repository points to a JSON file/);
-	assert.match(suffix, /output\.modules\[\] points to JSON files/);
-	assert.match(suffix, /"runtimeDirectories"/);
-	assert.doesNotMatch(suffix, /"runtimeAttackSurfaces"/);
-	assert.doesNotMatch(suffix, /"testGeneratedExclusions"/);
-	assert.doesNotMatch(suffix, /"securityModel"/);
-	assert.doesNotMatch(suffix, /"dangerousSinks"/);
-	assert.doesNotMatch(suffix, /"publicApis"/);
-	assert.doesNotMatch(suffix, /"buildRunHints"/);
-	assert.match(suffix, /"entryPoints"/);
-	assert.match(suffix, /"trustBoundaries"/);
-	assert.match(suffix, /"attackSurfaces"/);
-	assert.match(suffix, /"vulnerabilityThemes"/);
-	assert.match(suffix, /"runtimeComponents"/);
-	assert.match(suffix, /Distribution or runtime component labels/);
-	assert.doesNotMatch(suffix, /"functionName"/);
-	assert.doesNotMatch(suffix, /"sourceToSinkHint"/);
+	assert.match(suffix, /read \/task\/output\.schema\.json/);
+	assert.match(suffix, /output-validator\/validate_output\.py/);
+	assert.match(suffix, /exactly three fields/);
+	assert.match(suffix, /route=null/);
+	assert.doesNotMatch(suffix, /Task artifact JSON schemas/);
+	assert.doesNotMatch(suffix, /```json/);
+	assert.doesNotMatch(suffix, /runtimeDirectories/);
 
 	const persistentSuffix = buildStructuredOutputPromptSuffix(
 		scanTargetManifestSchema,
 		"/task/output.schema.json",
 		"/task/output.json",
 		undefined,
-		{ persistent: true },
+		{ allowAgentExit: false },
 	);
-	assert.match(persistentSuffix, /Set exit to false/);
-	assert.doesNotMatch(persistentSuffix, /Set exit to true/);
+	assert.match(persistentSuffix, /set exit=false/);
+	assert.doesNotMatch(persistentSuffix, /exit=true only/);
 
 	const analysisExitSuffix = buildStructuredOutputPromptSuffix(
 		scanTargetManifestSchema,
@@ -437,43 +454,54 @@ test("structured output prompts include annotated task artifact schemas", () => 
 		undefined,
 		{ allowAgentExit: true },
 	);
-	assert.match(analysisExitSuffix, /stage prompt explicitly instructs/);
+	assert.match(analysisExitSuffix, /exit=true only/);
 });
 
-test("structured output prompts include YAML JSON Schema contract artifact schemas", () => {
+test("structured output schema carries route metadata and artifact schemas", () => {
+	const artifactContract = createJsonSchemaContract({
+		schemas: { Module: { type: "object", properties: { moduleId: { type: "string" } } } },
+		schema: {
+			type: "object",
+			properties: {
+				modules: {
+					type: "array",
+					items: { $pathOf: "#/schemas/Module", description: "Module artifact paths." },
+				},
+			},
+		},
+	});
 	const suffix = buildStructuredOutputPromptSuffix(
-		createJsonSchemaContract({
-			schemas: {
-				Module: {
-					type: "object",
-					required: ["moduleId"],
-					properties: {
-						moduleId: { type: "string" },
-					},
-				},
-			},
-			schema: {
-				type: "object",
-				required: ["modules"],
-				properties: {
-					modules: {
-						type: "array",
-						items: {
-							$pathOf: "#/schemas/Module",
-						},
-					},
-				},
-			},
-		}),
+		artifactContract,
 		"/task/output.schema.json",
 		"/task/output.json",
 	);
 
-	assert.match(suffix, /Task artifact JSON schemas/);
-	assert.match(suffix, /output\.modules\[\] points to JSON files/);
-	assert.match(suffix, /"moduleId"/);
-	assert.match(suffix, /"output":/);
+	assert.match(suffix, /output-validator\/validate_output\.py/);
+	assert.doesNotMatch(suffix, /moduleId/);
 	assert.doesNotMatch(suffix, /"\\$pathOf"/);
+
+	const schema = buildStructuredOutputEnvelopeJsonSchema(
+		artifactContract,
+		[
+			{
+				routeKey: "continue",
+				description: "Continue reviewing the current item.",
+				schema: artifactContract,
+				default: true,
+			},
+		],
+	) as Record<string, unknown>;
+	assert.deepEqual(schema["x-vulseek-routes"], [
+		{ key: "continue", description: "Continue reviewing the current item.", default: true },
+	]);
+	assert.deepEqual(schema["x-vulseek-artifacts"], [
+		{
+			route: "continue",
+			path: "output.modules[]",
+			kind: "path_list",
+			schemaRef: "#/definitions/vulseek_artifact_0",
+		},
+	]);
 });
 
 test("property descriptions survive schema normalization and output envelopes", () => {

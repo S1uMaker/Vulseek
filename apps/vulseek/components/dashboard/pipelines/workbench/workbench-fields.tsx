@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { schemaIdFromPointer } from "@/lib/pipeline-editor/definition-helpers";
 import { cn } from "@/lib/utils";
 import { JsonEditor } from "../json-editor";
 
@@ -27,17 +28,10 @@ import { JsonEditor } from "../json-editor";
 
 export type FieldDiagnostics = Pick<PipelineDiagnostic, "severity" | "message">[];
 
-/** `#/schemas/<id>` → `<id>`; anything else returns null. */
+/** `#/schemas/<id>` → `<id>` from a `$ref` object; anything else returns null. */
 export const schemaIdFromRef = (
 	value: Record<string, unknown> | undefined,
-): string | null => {
-	const ref = value?.["$ref"];
-	if (typeof ref !== "string") return null;
-	const prefix = "#/schemas/";
-	if (!ref.startsWith(prefix)) return null;
-	const id = ref.slice(prefix.length);
-	return id.length > 0 && !id.includes("/") ? id : null;
-};
+): string | null => schemaIdFromPointer(value?.["$ref"]);
 
 /** FieldTemplate: label, description, inline validation, and hint slot. */
 export const FieldTemplate = ({
@@ -420,6 +414,67 @@ export const SchemaReferenceField = ({
 					/>
 				) : null}
 			</div>
+		</FieldTemplate>
+	);
+};
+
+/**
+ * `$pathOf` target picker: select a document schema and jump to it. Used by
+ * schema form properties whose type is `path`.
+ */
+export const PathOfReferenceField = ({
+	label,
+	value,
+	schemaIds,
+	onChange,
+	onNavigateToSchema,
+	description,
+	errors,
+	readOnly,
+}: {
+	label: string;
+	value: string;
+	schemaIds: string[];
+	onChange: (schemaId: string) => void;
+	onNavigateToSchema?: (schemaId: string) => void;
+	description?: string;
+	errors?: FieldDiagnostics;
+	readOnly?: boolean;
+}) => {
+	const options = value && !schemaIds.includes(value) ? [value, ...schemaIds] : schemaIds;
+	const canNavigate = value.length > 0 && Boolean(onNavigateToSchema);
+
+	return (
+		<FieldTemplate
+			label={label}
+			description={description}
+			errors={errors}
+			action={
+				canNavigate ? (
+					<button
+						type="button"
+						onClick={() => onNavigateToSchema?.(value)}
+						className="truncate text-xs text-sky-600 hover:underline"
+					>
+						#/schemas/{value}
+					</button>
+				) : null
+			}
+		>
+			<select
+				value={value}
+				disabled={readOnly}
+				aria-label={label}
+				onChange={(event) => onChange(event.target.value)}
+				className="h-8 w-full rounded-md border bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+			>
+				<option value="">Select schema…</option>
+				{options.map((id) => (
+					<option key={id} value={id}>
+						#/schemas/{id}
+					</option>
+				))}
+			</select>
 		</FieldTemplate>
 	);
 };

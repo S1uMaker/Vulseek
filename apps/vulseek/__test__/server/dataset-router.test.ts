@@ -279,8 +279,8 @@ const profileRow = (overrides: Record<string, unknown> = {}) => ({
 	status: "ready",
 	hostRoot: "/data/vulseek/profiles/profile-1",
 	sourceDigest: null,
-	checkoutImage: null,
-	checkoutImageDigest: null,
+	toolsImageTag: `vulseek-scan-tools-dev:${"a".repeat(16)}`,
+	toolsImageDigest: "sha256:tools-image",
 	errorMessage: null,
 	selectedSampleIds: ["sample-1"],
 	configSnapshot: {},
@@ -733,6 +733,28 @@ describe("dataset.evaluations.create", () => {
 				evaluationInput,
 			),
 		).rejects.toMatchObject({ code: "BAD_REQUEST" });
+	});
+
+	it("rejects ready profiles without a pinned tools image", async () => {
+		seedSelect("datasets", [datasetRow()]);
+		seedSelect(
+			"dataset_profiles",
+			[
+				profileRow({
+					toolsImageTag: null,
+					toolsImageDigest: null,
+				}),
+			],
+		);
+
+		await expect(
+			callerFor({ orgId: "org-1", role: "owner" }).evaluations.create(
+				evaluationInput,
+			),
+		).rejects.toMatchObject({
+			code: "BAD_REQUEST",
+			message: "A checked-out Dataset Profile with a pinned tools image is required",
+		});
 	});
 
 	it("rejects unknown pipelines", async () => {

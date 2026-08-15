@@ -1,5 +1,8 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
+import { execFileAsync } from "../../utils/process/execAsync";
 
 const MAX_BUILD_LOG_CHARS = 400_000;
 
@@ -18,9 +21,140 @@ export type CheckoutToolsDefinition = {
 	imageTag: string;
 };
 
+export type CheckoutToolsAssets = CheckoutToolsDefinition & {
+	dockerfile: string;
+	codexAcpPatchPath: string;
+	acpDriverPath: string;
+	agentEventsPath: string;
+};
+
 export type CheckoutToolsImageMetadata = CheckoutToolsDefinition & {
 	imageId: string;
 	builtAt: string;
+};
+
+const resolveAssetPath = async (fileName: string) => {
+	const candidates = [
+		path.resolve(process.cwd(), "packages/server/src/services/dockerfiles", fileName),
+		path.resolve(process.cwd(), "packages/server/dist/services/dockerfiles", fileName),
+		path.resolve(process.cwd(), "../../packages/server/src/services/dockerfiles", fileName),
+		path.resolve(process.cwd(), "../../packages/server/dist/services/dockerfiles", fileName),
+		path.join("/app/packages/server/src/services/dockerfiles", fileName),
+		path.resolve(process.cwd(), "node_modules/@vulseek/server/src/services/dockerfiles", fileName),
+		path.resolve(process.cwd(), "node_modules/@vulseek/server/dist/services/dockerfiles", fileName),
+		path.join("/app/node_modules/@vulseek/server/src/services/dockerfiles", fileName),
+		path.join("/app/node_modules/@vulseek/server/dist/services/dockerfiles", fileName),
+	];
+	for (const candidate of candidates) {
+		try {
+			if ((await fs.stat(candidate)).isFile()) return candidate;
+		} catch {}
+	}
+	throw new Error(`Unable to locate ${fileName}`);
+};
+
+const resolveAgentEventsPath = async () => {
+	const candidates = [
+		path.resolve(process.cwd(), "vendor/claude-replay/src/agent-events.mjs"),
+		path.resolve(process.cwd(), "../../vendor/claude-replay/src/agent-events.mjs"),
+		path.resolve(process.cwd(), "node_modules/claude-replay/src/agent-events.mjs"),
+		"/app/vendor/claude-replay/src/agent-events.mjs",
+		"/app/node_modules/claude-replay/src/agent-events.mjs",
+	];
+	for (const candidate of candidates) {
+		try {
+			if ((await fs.stat(candidate)).isFile()) return candidate;
+		} catch {}
+	}
+	throw new Error("Unable to locate claude-replay agent-events.mjs");
+};
+
+export const resolveCheckoutToolsDefinition = async (): Promise<CheckoutToolsAssets> => {
+	const [dockerfilePath, codexAcpPatchPath, acpDriverPath, agentEventsPath] =
+		await Promise.all([
+			resolveAssetPath("Dockerfile.scan-tools"),
+			resolveAssetPath("codex-acp-fork-1.1.2.patch"),
+			resolveAssetPath("vulseek-acp-driver.mjs"),
+			resolveAgentEventsPath(),
+		]);
+	const [dockerfile, codexAcpPatch, acpDriver, agentEvents] = await Promise.all([
+		fs.readFile(dockerfilePath, "utf8"),
+		fs.readFile(codexAcpPatchPath, "utf8"),
+		fs.readFile(acpDriverPath, "utf8"),
+		fs.readFile(agentEventsPath, "utf8"),
+	]);
+	const version = computeCheckoutToolsVersion({
+		dockerfile,
+		codexAcpPatch,
+		acpDriver,
+		agentEvents,
+	});
+	const variant = resolveCheckoutToolsImageVariant();
+	return {
+		version,
+		variant,
+		imageTag: buildCheckoutToolsImageTag(version, variant),
+		dockerfile,
+		codexAcpPatchPath,
+		acpDriverPath,
+		agentEventsPath,
+	};
+};
+
+export const inspectCheckoutToolsImage = async (
+	definition: CheckoutToolsDefinition,
+): Promise<CheckoutToolsImageMetadata | null> => {
+	try {
+		const { stdout } = await execFileAsync("docker", [
+			"image",
+			"inspect",
+			definition.imageTag,
+		]);
+		const inspect = JSON.parse(stdout) as Array<{
+			Id?: string;
+			Created?: string;
+			Config?: { Labels?: Record<string, string> | null };
+		}>;
+		const image = inspect[0];
+		const labels = image?.Config?.Labels;
+		if (!image?.Id || !matchesCheckoutToolsImageLabels(definition, labels)) {
+			return null;
+		}
+		return {
+			...definition,
+			imageId: image.Id,
+			builtAt:
+				labels?.["com.fuzzing-peach.vulseek.scan-tools.built-at"] ||
+				image.Created ||
+				"",
+		};
+	} catch {
+		return null;
+	}
+};
+
+export const resolveRequiredToolsImage = async () => {
+	const definition = await resolveCheckoutToolsDefinition();
+	const image = await inspectCheckoutToolsImage(definition);
+	if (!image) {
+		throw new Error(
+			`Required ${definition.variant} scan tools image is unavailable or stale: ${definition.imageTag}`,
+		);
+	}
+	return image;
+};
+
+export const inspectRequiredToolsImageReference = async (input: {
+	imageTag: string;
+	imageId: string;
+}) => {
+	try {
+		const { stdout } = await execFileAsync("docker", ["image", "inspect", input.imageTag]);
+		const image = (JSON.parse(stdout) as Array<{ Id?: string }>)[0];
+		return image?.Id === input.imageId;
+	} catch {
+		return false;
+	}
 };
 
 export type CheckoutToolsBuild = CheckoutToolsDefinition & {

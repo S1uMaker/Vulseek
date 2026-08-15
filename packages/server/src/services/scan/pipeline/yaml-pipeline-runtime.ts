@@ -43,6 +43,7 @@ const reportSchema = z.object({
 
 const runtimeSchema = z.object({
 	agentProfile: z.string().min(1).nullable().optional(),
+	goalSession: z.enum(["shared", "per-task"]).optional(),
 	persistent: z.boolean().nullable().optional(),
 	reuseContainer: z.boolean().nullable().optional(),
 	nullableOutput: z.boolean().nullable().optional(),
@@ -87,11 +88,11 @@ const edgeSchema = z.object({
 	input: z.unknown().optional().default({}),
 	artifacts: z.array(artifactMappingSchema).optional().default([]),
 	outputSchema: z.record(z.unknown()).optional(),
-	outputSchemaDescription: z.string().optional(),
 	route: z
 		.object({
 			key: z.string().min(1),
 			default: z.boolean().optional(),
+			description: z.string().optional(),
 		})
 		.optional(),
 });

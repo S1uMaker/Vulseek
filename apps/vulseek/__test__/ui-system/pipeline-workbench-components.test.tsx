@@ -46,6 +46,20 @@ schemas:
         items:
           type: string
         x-custom: preserve-me
+  module:
+    type: object
+    properties:
+      name:
+        type: string
+  intake:
+    type: object
+    properties:
+      modulePath:
+        $pathOf: "#/schemas/module"
+        description: Module artifact path
+        x-keep: preserve-path
+      note:
+        type: string
 stages:
   discovery:
     name: Discovery
@@ -143,6 +157,8 @@ describe("PipelineWorkbench — three views", () => {
 		const canvas = screen.getByTestId("pipeline-visual-canvas");
 		expect(canvas).toHaveClass("overflow-hidden", "isolate");
 		expect(canvas.parentElement).toHaveClass("overflow-hidden");
+		expect(screen.queryByText("Pipeline schemas")).not.toBeInTheDocument();
+		expect(screen.queryByText("Schemas")).not.toBeInTheDocument();
 	});
 
 	it("navigates from the rail to the entity list and editor", () => {
@@ -199,6 +215,65 @@ describe("PipelineWorkbench — three views", () => {
 		expect(screen.getByTestId("raw-yaml")).not.toHaveTextContent("description: Updated summary");
 		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("x-custom: preserve-me");
 		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("source:");
+	});
+
+	it("shows $pathOf properties as type path and navigates to the referenced schema", () => {
+		render(<Harness initial={initialEditorState(VALID_YAML)} />);
+		fireEvent.click(screen.getByRole("button", { name: /Schemas/ }));
+		fireEvent.click(screen.getByRole("button", { name: /intake/ }));
+
+		const typeSelect = screen.getByLabelText("Type for modulePath") as HTMLSelectElement;
+		expect(typeSelect.value).toBe("path");
+		expect(screen.getByLabelText("Path schema")).toHaveValue("module");
+
+		const modulePathInput = screen.getByDisplayValue("modulePath");
+		const modulePathCard = modulePathInput.parentElement;
+		if (!modulePathCard) throw new Error("modulePath property card was not rendered");
+		const schemaLink = within(modulePathCard).getByRole("button", { name: "#/schemas/module" });
+		expect(schemaLink).toBeInTheDocument();
+		fireEvent.click(schemaLink);
+		expect(screen.getByRole("heading", { name: "module" })).toBeInTheDocument();
+		expect(screen.getByDisplayValue("name")).toBeInTheDocument();
+	});
+
+	it("edits a $pathOf target and does not smash path properties into type string", () => {
+		render(<Harness initial={initialEditorState(VALID_YAML)} />);
+		fireEvent.click(screen.getByRole("button", { name: /Schemas/ }));
+		fireEvent.click(screen.getByRole("button", { name: /intake/ }));
+
+		fireEvent.change(screen.getByLabelText("Path schema"), { target: { value: "finding" } });
+		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("$pathOf");
+		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("#/schemas/finding");
+		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("x-keep: preserve-path");
+		expect(screen.getByLabelText("Type for modulePath")).toHaveValue("path");
+	});
+
+	it("removes $pathOf when the property type changes away from path", () => {
+		render(<Harness initial={initialEditorState(VALID_YAML)} />);
+		fireEvent.click(screen.getByRole("button", { name: /Schemas/ }));
+		fireEvent.click(screen.getByRole("button", { name: /intake/ }));
+
+		fireEvent.change(screen.getByLabelText("Type for modulePath"), {
+			target: { value: "string" },
+		});
+		expect(screen.getByLabelText("Type for modulePath")).toHaveValue("string");
+		expect(screen.queryByLabelText("Path schema")).not.toBeInTheDocument();
+		expect(screen.getByTestId("raw-yaml")).not.toHaveTextContent("$pathOf");
+		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("x-keep: preserve-path");
+	});
+
+	it("sets $pathOf when the property type changes to path", () => {
+		render(<Harness initial={initialEditorState(VALID_YAML)} />);
+		fireEvent.click(screen.getByRole("button", { name: /Schemas/ }));
+		fireEvent.click(screen.getByRole("button", { name: /intake/ }));
+
+		fireEvent.change(screen.getByLabelText("Type for note"), { target: { value: "path" } });
+		const pathSelects = screen.getAllByLabelText("Path schema");
+		expect(pathSelects.length).toBeGreaterThanOrEqual(2);
+		const notePathSelect = pathSelects[pathSelects.length - 1] as HTMLSelectElement;
+		expect(notePathSelect.value).toBe("finding");
+		fireEvent.change(notePathSelect, { target: { value: "module" } });
+		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("#/schemas/module");
 	});
 
 	it("applies typed patches from the Definition editor and reflects them in the document", () => {

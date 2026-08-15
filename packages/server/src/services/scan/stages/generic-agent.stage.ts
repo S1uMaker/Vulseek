@@ -37,7 +37,13 @@ import {
 	resolveStageRuntimePrompt,
 	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
-import { buildGoalPrompt } from "./goal-prompt";
+import {
+	buildGoalPrompt,
+	buildHuntGoalPrompt,
+	buildSurfacePlannerGoalPrompt,
+	buildSurfacePlannerTurnPrompt,
+	isSurfaceGoalReentry,
+} from "./goal-prompt";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
@@ -72,16 +78,24 @@ export const resolveStageReuseContainer = (
 	stageName: string,
 	configured: boolean,
 	goal = false,
+	goalSession?: "shared" | "per-task",
 ) =>
-	isResearchStage(stageName) || goal ? false : configured;
+	goalSession === "shared"
+		? configured
+		: isResearchStage(stageName) || goal
+			? false
+			: configured;
 
 export const resolveStageContainerNameParts = (
 	stageName: string,
 	taskId: string,
 	configured: Array<string | null | undefined> | undefined,
 	goal = false,
+	goalSession?: "shared" | "per-task",
 ) =>
-	isResearchStage(stageName) || goal
+	goalSession === "shared"
+		? configured
+		: isResearchStage(stageName) || goal
 		? [...(configured || []), taskId]
 		: configured;
 
@@ -187,12 +201,14 @@ export function createGenericAgentStageDefinition<
 				stageCtx.stageName,
 				stageCtx.reuseContainer,
 				input.config.goal,
+				input.config.runtime.goalSession,
 			);
 			const containerNameParts = resolveStageContainerNameParts(
 				stageCtx.stageName,
 				stageCtx.taskId,
 				input.config.containerNameParts,
 				input.config.goal,
+				input.config.runtime.goalSession,
 			);
 			const runtime = await launchAgentStageRuntime({
 				ctx: stageCtx,
@@ -247,6 +263,7 @@ export function createGenericAgentStageDefinition<
 				stageCtx.taskId,
 				input.config.containerNameParts,
 				input.config.goal,
+				input.config.runtime.goalSession,
 			);
 			const runtime = await resolveAgentStageRuntime({
 				ctx: stageCtx,
@@ -275,9 +292,59 @@ export function createGenericAgentStageDefinition<
 				promptTemplate,
 				promptValues,
 			);
-			const stagePrompt = input.config.goal
-				? buildGoalPrompt({ prompt: renderedPrompt, input: effectiveStageInput })
-				: renderedPrompt;
+			let stagePrompt = renderedPrompt;
+			if (input.config.goal) {
+				const taskDir = await stageCtx.taskDir();
+				const goalSpecPath =
+					effectiveStageInput &&
+					typeof effectiveStageInput === "object" &&
+					!Array.isArray(effectiveStageInput) &&
+					typeof (effectiveStageInput as Record<string, unknown>).goalSpecPath ===
+						"string"
+						? (effectiveStageInput as Record<string, unknown>).goalSpecPath as string
+						: null;
+				const goalSpec = goalSpecPath
+					? await readTaskJsonArtifact({
+							taskDir,
+							containerPath: goalSpecPath,
+						  }).catch(() => null)
+					: null;
+				if (stageCtx.stageName === "goal-surface") {
+					stagePrompt = isSurfaceGoalReentry(effectiveStageInput)
+						? buildSurfacePlannerTurnPrompt({
+								prompt: renderedPrompt,
+								feedback: (effectiveStageInput as Record<string, unknown>)
+									.feedback,
+						  })
+						: buildSurfacePlannerGoalPrompt({
+								surfaceGuidance:
+									goalSpec &&
+									typeof goalSpec === "object" &&
+									!Array.isArray(goalSpec) &&
+									typeof (goalSpec as Record<string, unknown>).surfaceGuidance ===
+										"string"
+									? ((goalSpec as Record<string, unknown>)
+											.surfaceGuidance as string)
+									: null,
+						  });
+				} else if (stageCtx.stageName === "goal-hunt") {
+					const huntGoal =
+						effectiveStageInput &&
+						typeof effectiveStageInput === "object" &&
+						!Array.isArray(effectiveStageInput)
+							? (effectiveStageInput as Record<string, unknown>).huntGoal
+							: null;
+					stagePrompt = buildHuntGoalPrompt({
+						goalSpec: goalSpec ?? {},
+						huntGoal: huntGoal ?? {},
+					});
+				} else {
+					stagePrompt = buildGoalPrompt({
+						prompt: renderedPrompt,
+						input: effectiveStageInput,
+					});
+				}
+			}
 			const result = await runSingleTurnAgentInContainer({
 				scanJob,
 				agentProfile: runtime.agentProfile,
@@ -294,6 +361,7 @@ export function createGenericAgentStageDefinition<
 					stageCtx.stageName,
 					stageCtx.reuseContainer,
 					input.config.goal,
+					input.config.runtime.goalSession,
 				),
 				groupedPersistent: stageCtx.groupedPersistent,
 				allowAgentExit: input.config.allowAgentExit,

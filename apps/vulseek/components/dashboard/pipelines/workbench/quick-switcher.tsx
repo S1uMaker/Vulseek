@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { PipelineDiagnostic, PipelineDocumentV3 } from "@vulseek/server/services/scan/pipeline/document-v3";
 import type { PipelineEditorAction } from "@/lib/pipeline-editor/pipeline-editor-state";
+import { relatedSchemaIds } from "@/lib/pipeline-editor/definition-helpers";
 import {
 	CommandDialog,
 	CommandEmpty,
@@ -76,7 +77,7 @@ export const QuickSwitcher = ({
 					))}
 				</CommandGroup>
 				<CommandGroup heading="Schemas">
-					{Object.keys(document.schemas).map((id) => (
+					{relatedSchemaIds(document).map((id) => (
 						<CommandItem key={id} value={`schema ${id}`} onSelect={() => jump({ type: "schema", id })}>
 							{id}
 						</CommandItem>

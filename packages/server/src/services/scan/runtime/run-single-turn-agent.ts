@@ -7,7 +7,8 @@ import { execAsync } from "../../../utils/process/execAsync";
 import { getAgentProfileById } from "../../ai";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
-import { resolveDatasetToolsImage, resolveDatasetTrialRuntime } from "../../dataset";
+import { resolveDatasetTrialRuntime } from "../../dataset";
+import { inspectRequiredToolsImageReference } from "../checkout-tools";
 import { findTaskByIdRepo, updateTaskRepo } from "../persistence/task.repo";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { getRuntimeStageSetting } from "../runtime-settings";
@@ -45,6 +46,7 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"tree-sitter",
 	"research-agent",
 	"research-db",
+	"output-validator",
 ] as const;
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
@@ -677,12 +679,21 @@ const resolveScanExecutionContext = async (
 		}
 		const projectName = `dataset-${datasetRuntime.dataset.datasetId}`;
 		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.id}`;
-		const imageTag = await resolveDatasetToolsImage();
-		await execAsync(
-			`docker image inspect ${escapeSingleQuotes(imageTag)}`,
-		).catch(() => {
-			throw new Error(`Dataset scan tools image not found: ${imageTag}`);
-		});
+		const imageTag = datasetRuntime.toolsImageTag;
+		const imageDigest = datasetRuntime.toolsImageDigest;
+		if (!imageTag || !imageDigest) {
+			throw new Error(
+				`Dataset Profile ${datasetRuntime.profile.profileId} requires re-checkout to pin a scan tools image`,
+			);
+		}
+		if (
+			!(await inspectRequiredToolsImageReference({
+				imageTag,
+				imageId: imageDigest,
+			}))
+		) {
+			throw new Error(`Dataset scan tools image is missing or changed: ${imageTag}`);
+		}
 		const repositoryProfileAgentProfileId =
 			getRuntimeStageSetting(
 				scanJob.scanRuntimeSettings,
@@ -1613,7 +1624,10 @@ export const runSingleTurnAgentInContainer = async (
 		const jsonSchema = buildStructuredOutputEnvelopeJsonSchema(
 			input.outputSchema || input.routeOutputSchemas![0]!.schema,
 			input.routeOutputSchemas,
-			{ nullableOutput: input.nullableOutput },
+			{
+				nullableOutput: input.nullableOutput,
+				allowAgentExit: input.allowAgentExit,
+			},
 		);
 		const serializedJsonSchema = `${JSON.stringify(jsonSchema, null, 2)}\n`;
 		await fs.mkdir(taskStageDirPath, { recursive: true });
@@ -1670,15 +1684,7 @@ export const runSingleTurnAgentInContainer = async (
 	const resolvedPromptFinal = promptAdditions.length
 		? `${resolvedPrompt.trimEnd()}\n\n${promptAdditions.join("\n\n")}`
 		: resolvedPrompt;
-	// Codex native `/goal` (via codex-acp) treats the first text block after the
-	// marker as the objective. Only skip the standard suffix when the stage has
-	// explicitly embedded its own complete output contract; generic goal stages
-	// still receive the regular schema instructions.
-	const isNativeCodexGoalPrompt =
-		/^\s*\/goal\b/i.test(resolvedPromptFinal) &&
-		/Structured JSON output requirement/i.test(resolvedPromptFinal);
 	const promptWithOutputSchema =
-		!isNativeCodexGoalPrompt &&
 		(input.outputSchema || input.routeOutputSchemas?.length)
 			? `${resolvedPromptFinal.trimEnd()}\n${buildStructuredOutputPromptSuffix(
 					input.outputSchema || input.routeOutputSchemas![0]!.schema,
@@ -1686,8 +1692,6 @@ export const runSingleTurnAgentInContainer = async (
 					structuredOutputResultAgentPathInContainer,
 					input.routeOutputSchemas,
 					{
-						persistent: input.persistent,
-						groupedPersistent: input.groupedPersistent,
 						allowAgentExit: input.allowAgentExit,
 						nullableOutput: input.nullableOutput,
 					},

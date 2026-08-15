@@ -21,9 +21,8 @@ Read repository_json_path, module_json_path, threat_model_json_path, and target_
 Analyze this target for all concrete, security-relevant vulnerability candidates supported by the supplied repository, module, threat-model, and target context. Do not limit the analysis to a single vulnerability class, and do not claim final exploitability.
 The target may be a route, middleware, resolver, controller action, job handler, security config, template render point, parser, data-access boundary, or native function.
 Look for source -> missing/weak check -> sink paths across applicable vulnerability classes. Set each candidate.vulnerabilityType to the concrete class supported by its evidence.
-Write each candidate object to /task/candidates/<candidate-id>.json.
+Produce one candidate artifact for each supported candidate.
 Set candidate.targetId to target_id and candidate.targetKind to target_kind.
 Keep candidate.functionId null unless a legacy consumer requires the target id there.
 Return a schema-valid path manifest with a `candidates` array containing the candidate JSON file paths.
 Always return an object, even when there are no candidates; use `{ "candidates": [] }`.
-Before returning, validate the structured JSON against the runtime-provided output.schema.json.

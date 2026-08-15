@@ -56,6 +56,7 @@ import {
 	resolveStagePositions,
 	type TransientPipelineLayout,
 } from "@/lib/pipeline-editor/pipeline-layout";
+import { StageCreateDialog } from "@/components/dashboard/pipelines/stage-create-dialog";
 import { cn } from "@/lib/utils";
 
 /**
@@ -118,17 +119,20 @@ type StageNodeData = {
 	stage: PipelineStageV3;
 	isRoot: boolean;
 	readOnly: boolean;
+	isConnecting: boolean;
 };
 
 const PipelineStageNode = ({
 	data,
 	selected,
 }: NodeProps<FlowNode<StageNodeData>>) => {
-	const { stage, isRoot, readOnly } = data;
+	const { stage, isRoot, readOnly, isConnecting } = data;
 	const handleColor = ROLE_HANDLE_COLORS[stage.role];
 	// Contextual handles: hidden at rest, solid role-colored on hover or
 	// selection, ~18px transparent hit target, no white center. Read-only
-	// and published views render none. Hover is driven by the card's plain
+	// and published views keep invisible handles in the DOM so React Flow can
+	// resolve edge endpoints, but disable their interaction. Hover is driven by
+	// the card's plain
 	// `group` class (Tailwind-verifiable), while the handle keeps its own
 	// named `group/handle` so the inner dot can react to React Flow's
 	// connectingfrom/connectingto wrapper classes.
@@ -142,12 +146,20 @@ const PipelineStageNode = ({
 		position: Position,
 		type: "source" | "target",
 	) => {
-		if (readOnly) return null;
+		const interactionClass =
+			type === "source"
+				? isConnecting
+					? "!pointer-events-none !opacity-0"
+					: cn("!pointer-events-auto", handleClass)
+				: isConnecting
+					? "!pointer-events-auto !opacity-100"
+					: "!pointer-events-none !opacity-0";
 		return (
 			<Handle
 				id={id}
 				type={type}
 				position={position}
+				aria-hidden={readOnly}
 				className={cn(
 					// Transparent 18px hit target: the wrapper itself must not paint
 					// (React Flow's default handle background would turn the whole
@@ -156,7 +168,7 @@ const PipelineStageNode = ({
 					// the wrapper's connection classes.
 					"group/handle !size-[18px] !min-w-[18px] !min-h-[18px] !w-[18px] !h-[18px] !rounded-full !border-0 !bg-transparent",
 					"!flex !items-center !justify-center",
-					handleClass,
+					readOnly ? "!pointer-events-none !opacity-0" : interactionClass,
 				)}
 			>
 				<span
@@ -286,15 +298,22 @@ const GroupedPipelineEdge = ({
 
 	return (
 		<>
-			<BaseEdge
-				id={id}
-				path={path}
-				markerEnd={markerEnd}
-				className={cn(
-					"transition-[stroke,stroke-width]",
-					selected ? "stroke-foreground stroke-[2.5]" : "stroke-[1.8]",
-				)}
-			/>
+			<g
+				onClick={(event) => {
+					event.stopPropagation();
+					onSelectLabel?.(displayEdge?.memberEdgeIds[0] ?? id);
+				}}
+			>
+				<BaseEdge
+					id={id}
+					path={path}
+					markerEnd={markerEnd}
+					className={cn(
+						"transition-[stroke,stroke-width]",
+						selected ? "stroke-foreground stroke-[2.5]" : "stroke-[1.8]",
+					)}
+				/>
+			</g>
 			{labels.length > 0 ? (
 				<EdgeLabelRenderer>
 					<div
@@ -326,6 +345,22 @@ const GroupedPipelineEdge = ({
 							))}
 						</div>
 					</div>
+				</EdgeLabelRenderer>
+			) : onSelectLabel ? (
+				<EdgeLabelRenderer>
+					<button
+						type="button"
+						onClick={(event) => {
+							event.stopPropagation();
+							onSelectLabel(displayEdge?.memberEdgeIds[0] ?? id);
+						}}
+						title={`Select edge ${displayEdge?.memberEdgeIds[0] ?? id}`}
+						aria-label={`Select edge ${displayEdge?.memberEdgeIds[0] ?? id}`}
+						className="nodrag nopan pointer-events-auto absolute z-10 size-5 rounded-full opacity-0 outline-none hover:bg-primary/10 hover:opacity-100 focus-visible:bg-primary/10 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring"
+						style={{
+							transform: `translate(-50%, -50%) translate(${labelPosition.x}px, ${labelPosition.y}px)`,
+						}}
+					/>
 				</EdgeLabelRenderer>
 			) : null}
 		</>
@@ -450,6 +485,7 @@ const CanvasEditorInner = ({
 }: CanvasEditorProps) => {
 	const { fitView, setCenter, getViewport, setViewport } = useReactFlow();
 	const [interactionLock, setInteractionLock] = React.useState(false);
+	const [isConnecting, setIsConnecting] = React.useState(false);
 	const [minimapExpanded, setMinimapExpanded] = React.useState(false);
 
 	// True once React Flow has measured every node, so fitView sees real
@@ -531,17 +567,30 @@ const CanvasEditorInner = ({
 				id,
 				type: "pipelineStage",
 				position: positions[id] ?? { x: 0, y: 0 },
+				// MiniMap renders before the custom node's CSS dimensions have
+				// necessarily been measured. Seed the same dimensions used by the
+				// node card so the first minimap pass cannot drop every node.
+				initialWidth: NODE_WIDTH,
+				initialHeight: NODE_HEIGHT,
 				selected: id === selectedStageId,
 				data: {
 					stage,
 					isRoot: id === document.root,
 					readOnly,
+					isConnecting,
 				},
 			});
 		}
 		return result;
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [document, readOnly, positions, displayGraph, selectedStageId]);
+	}, [
+		document,
+		readOnly,
+		isConnecting,
+		positions,
+		displayGraph,
+		selectedStageId,
+	]);
 
 	const edges: EditorFlowEdge[] = React.useMemo(() => {
 		// Stable persisted geometry wins only when the complete layout is
@@ -565,10 +614,10 @@ const CanvasEditorInner = ({
 				id: displayEdge.id,
 				source: displayEdge.from,
 				target: displayEdge.to,
-				// Published/read-only nodes intentionally do not render Handles.
-				// Omitting these fields makes React Flow use the node bounds instead
-				// of trying to resolve a handle that cannot exist in the DOM.
-				...(readOnly ? {} : { sourceHandle, targetHandle }),
+				// Read-only nodes still render invisible Handles. Keep the explicit
+				// ids so React Flow can resolve the exact persisted port geometry.
+				sourceHandle,
+				targetHandle,
 				type: "pipelineEdge",
 				selected:
 					selectedEdgeId !== null &&
@@ -770,35 +819,16 @@ const CanvasEditorInner = ({
 		[],
 	);
 
-	const handleSelectionChange = React.useCallback(
-		({
-			nodes: selectedNodes,
-			edges: selectedEdges,
-		}: {
-			nodes: EditorFlowNode[];
-			edges: EditorFlowEdge[];
-		}) => {
-			const stageNode = selectedNodes[0];
-			const edge = selectedEdges[0];
-			const nextSelection = stageNode
-				? { type: "stage" as const, id: stageNode.id }
-				: edge
-					? {
-							type: "edge" as const,
-							id:
-								(edge.data as GroupedEdgeData | undefined)?.displayEdge
-									?.memberEdgeIds[0] ?? edge.id,
-						}
-					: null;
-			if (
-				selection?.type === nextSelection?.type &&
-				selection?.id === nextSelection?.id
-			) {
-				return;
-			}
-			onSelect?.(nextSelection);
+	const selectEdge = React.useCallback(
+		(edge: EditorFlowEdge) => {
+			onSelect?.({
+				type: "edge",
+				id:
+					(edge.data as GroupedEdgeData | undefined)?.displayEdge
+						?.memberEdgeIds[0] ?? edge.id,
+			});
 		},
-		[onSelect, selection],
+		[onSelect],
 	);
 
 	// Dragging supplies preferred positions to ELK's interactive layered mode.
@@ -853,6 +883,18 @@ const CanvasEditorInner = ({
 			});
 		},
 		[document, readOnly, onChange],
+	);
+
+	const createStage = React.useCallback(
+		(id: string, stage: PipelineStageV3) => {
+			if (readOnly || !onChange) return;
+			onChange({
+				...document,
+				stages: { ...document.stages, [id]: stage },
+			});
+			onSelect?.({ type: "stage", id });
+		},
+		[document, onChange, onSelect, readOnly],
 	);
 
 	const onNodesDelete = React.useCallback(
@@ -999,7 +1041,18 @@ const CanvasEditorInner = ({
 						<ToolbarButton label="Add stage" onClick={onAddStage}>
 							<Plus className="size-4" />
 						</ToolbarButton>
-					) : null}
+					) : (
+						<StageCreateDialog
+							existingIds={Object.keys(document.stages)}
+							defaultGroup={document.groups[0]?.id}
+							onCreate={createStage}
+							trigger={
+								<ToolbarButton label="Add stage" onClick={() => undefined}>
+									<Plus className="size-4" />
+								</ToolbarButton>
+							}
+						/>
+					)}
 					<ToolbarButton
 						label="Apply ELK layout"
 						onClick={() => void applyLayout()}
@@ -1071,14 +1124,24 @@ const CanvasEditorInner = ({
 				onNodesDelete={onNodesDelete}
 				onEdgesDelete={onEdgesDelete}
 				onConnect={onConnect}
+				onConnectStart={() => setIsConnecting(true)}
+				onConnectEnd={() => setIsConnecting(false)}
 				onNodeDragStop={onNodeDragStop}
+				onNodeClick={(_event, node) =>
+					onSelect?.({ type: "stage", id: node.id })
+				}
+				onEdgeClick={(_event, edge) => selectEdge(edge)}
+				onPaneClick={(event) => {
+					if ((event.target as Element).classList.contains("react-flow__pane")) {
+						onSelect?.(null);
+					}
+				}}
 				nodesDraggable={!readOnly && !interactionLock}
 				nodesConnectable={!readOnly && !interactionLock}
 				elementsSelectable={!interactionLock}
 				nodesFocusable={false}
 				autoPanOnNodeFocus={false}
 				preventScrolling
-				onSelectionChange={handleSelectionChange}
 				minZoom={0.1}
 				proOptions={{ hideAttribution: true }}
 			>
@@ -1112,18 +1175,17 @@ export const CanvasEditor = (props: CanvasEditorProps) => (
 	</CanvasErrorBoundary>
 );
 
-const ToolbarButton = ({
-	label,
-	onClick,
-	active = false,
-	children,
-}: {
-	label: string;
-	onClick: () => void;
-	active?: boolean;
-	children: React.ReactNode;
-}) => (
+const ToolbarButton = React.forwardRef<
+	HTMLButtonElement,
+	{
+		label: string;
+		onClick: () => void;
+		active?: boolean;
+		children: React.ReactNode;
+	}
+>(({ label, onClick, active = false, children }, ref) => (
 	<button
+		ref={ref}
 		type="button"
 		title={label}
 		aria-label={label}
@@ -1135,4 +1197,6 @@ const ToolbarButton = ({
 	>
 		{children}
 	</button>
-);
+));
+
+ToolbarButton.displayName = "ToolbarButton";

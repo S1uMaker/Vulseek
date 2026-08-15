@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { getAgentProfileById } from "./ai";
-import { resolveDatasetToolsImage, resolveDatasetTrialRuntime } from "./dataset";
+import { resolveDatasetTrialRuntime } from "./dataset";
 import {
 	buildDatasetTrialScoringPrompt,
 	type DatasetTrialScoringInputOutput,
@@ -10,6 +10,7 @@ import {
 	validateDatasetTrialScoringAgentOutput,
 } from "./dataset-evaluation-scoring-contract";
 import { taskArtifactHostPath } from "./scan/artifacts/task-artifact-paths";
+import { inspectRequiredToolsImageReference } from "./scan/checkout-tools";
 import { findScanJobByIdRepo } from "./scan/persistence/scan-job.repo";
 import {
 	findTaskByIdRepo,
@@ -327,6 +328,21 @@ export const scoreDatasetEvaluationTrial = async (input: {
 	const groundTruthArtifacts = [
 		...new Set(runtime.sample.groundTruthArtifacts),
 	].sort();
+	if (!runtime.toolsImageTag || !runtime.toolsImageDigest) {
+		throw new Error(
+			`Dataset Profile ${runtime.profile.profileId} requires re-checkout to pin a scan tools image`,
+		);
+	}
+	if (
+		!(await inspectRequiredToolsImageReference({
+			imageTag: runtime.toolsImageTag,
+			imageId: runtime.toolsImageDigest,
+		}))
+	) {
+		throw new Error(
+			`Dataset scoring tools image is missing or changed: ${runtime.toolsImageTag}`,
+		);
+	}
 	if (groundTruthArtifacts.length === 0) {
 		throw new Error("Dataset sample has no ground-truth artifacts to score");
 	}
@@ -374,7 +390,7 @@ export const scoreDatasetEvaluationTrial = async (input: {
 		sourceRoot: runtime.profileHostRoot,
 		scoringDir,
 		scoringHostDir,
-		imageTag: await resolveDatasetToolsImage(),
+		imageTag: runtime.toolsImageTag,
 		artifacts: groundTruthArtifacts,
 	});
 	const { prepared: preparedOutputs, outputTasks } =

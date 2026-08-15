@@ -1936,7 +1936,7 @@ schemas:
       - attackerModel
   goal-spec:
     type: object
-    description: Durable hunt objective after Craft self-red-team. Defines the outcome, not the method. Hunt later activates goalPrompt as Codex /goal. Every required field must be filled; empty strings are invalid.
+    description: Durable hunt contract after Craft self-red-team. Defines the outcome, not the method. Hunt and Surface read this file; it is not a shared /goal string. Every required field must be filled; empty strings are invalid.
     additionalProperties: false
     properties:
       goalId:
@@ -1973,10 +1973,9 @@ schemas:
         type: array
         items:
           type: string
-      goalPrompt:
-        description: Self-contained native-goal text later sent as Codex /goal for each Hunt. Outcome-heavy and path-light. Do not mandate a single tool. Keep under about 1800 characters. Must stand alone without the rest of this object.
+      surfaceGuidance:
+        description: Optional planner notes for Surface (what a high-value surface looks like, suggested partition axes). Not a Hunt /goal and not a second success criterion.
         type: string
-        minLength: 1
     required:
       - goalId
       - title
@@ -1986,22 +1985,25 @@ schemas:
       - stopCondition
       - persistenceLanguage
       - redTeamClosedLoopholes
-      - goalPrompt
+  goal-craft-input:
+    type: object
+    description: Craft stage input. Only the scan-job snapshot. No threatDirection.
+    additionalProperties: false
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+    required:
+      - scanJob
   goal-craft-output:
     type: object
-    description: Craft stage output. Write the full GoalSpec JSON to the path in goalSpecPath and also return the same object in goalSpec.
+    description: Craft stage output. Write the GoalSpec JSON artifact and return only its path.
     additionalProperties: false
     properties:
       goalSpecPath:
-        description: Container path of the written GoalSpec JSON file. Use /task/goal-spec.json unless a later stage requires another path.
-        type: string
-        minLength: 1
-      goalSpec:
-        description: The complete GoalSpec object, identical to the file at goalSpecPath. Must validate against the goal-spec schema.
-        $ref: "#/schemas/goal-spec"
+        description: Container path of the written GoalSpec JSON artifact. Default /task/goal-spec.json.
+        $pathOf: "#/schemas/goal-spec"
     required:
       - goalSpecPath
-      - goalSpec
   hunt-goal:
     type: object
     description: One dispatchable hunt surface under the GoalSpec lens. Surface emits these; Hunt receives exactly one. Do not put a vulnerability finding here.
@@ -2015,12 +2017,12 @@ schemas:
         description: Short name of the surface (module, flow, or boundary). Not a vulnerability title.
         type: string
         minLength: 1
-      objective:
-        description: What Hunt must try to prove or exhaust on this surface, in GoalSpec terms. One outcome, no tool list.
+      scopeStatement:
+        description: One-sentence lockbox for this surface. Hunt must stay inside it. Not a second successCriteria; GoalSpec remains the outcome.
         type: string
         minLength: 1
       focusPaths:
-        description: Repo-relative files or directories Hunt should stay inside. Omit or leave empty only when the surface is not path-shaped.
+        description: Repo-relative files or directories Hunt should stay inside. Empty array is allowed when the surface is not path-shaped.
         type: array
         items:
           type: string
@@ -2032,13 +2034,11 @@ schemas:
       rationale:
         description: Why this surface is high-value for the GoalSpec versus alternatives. Used by later Surface rounds to avoid repeating dead zones.
         type: string
-      partitionDimension:
-        description: How this surface was sliced (module, data-flow, external-interface, privilege-boundary, and so on). Keep consistent within one Surface round.
-        type: string
     required:
       - huntGoalId
       - title
-      - objective
+      - scopeStatement
+      - focusPaths
   surface-dispatch:
     type: object
     description: Surface planner output. First entry emits 2-8 diverse huntGoals. Later entries emit new huntGoals or declare global exhaustion. Surface does not hunt.
@@ -2048,7 +2048,7 @@ schemas:
         description: True only when no useful unexplored GoalSpec-relevant surface remains. Then huntGoals must be []. False whenever this output dispatches one or more huntGoals.
         type: boolean
       exhaustionReason:
-        description: Required in practice when globalExhausted is true. Summarize covered partitions, dead zones, and why another slice would not help.
+        description: Required when globalExhausted is true. Summarize covered partitions, dead zones, and why another slice would not help.
         type: string
       partitionDimension:
         description: Slice axis used for the huntGoals in this dispatch (module, data-flow, interface, ...). Helps later rounds pick a different axis.
@@ -2061,6 +2061,15 @@ schemas:
     required:
       - globalExhausted
       - huntGoals
+    if:
+      properties:
+        globalExhausted:
+          const: true
+      required:
+        - globalExhausted
+    then:
+      required:
+        - exhaustionReason
   goal-candidate-finding:
     type: object
     description: Exactly one vulnerability candidate from Hunt. Must meet GoalSpec.successCriteria. Not a theoretical note. Evidence must support claim. Never emit more than one per Hunt task.
@@ -2115,10 +2124,10 @@ schemas:
         type: string
         minLength: 1
       evidence:
-        description: Supporting observations (code facts, traces, commands). Each item should help prove or bound the claim. Empty only if the schema still validates and the claim is fully located in location plus description.
+        description: Supporting observations. Each item is one fact (code, trace, or command result) that proves or bounds the claim.
         type: array
         items:
-          type: object
+          type: string
       attackerControl:
         description: What the attacker actually controls to trigger the bug, consistent with GoalSpec.attackerModel.
         type: string
@@ -2130,9 +2139,6 @@ schemas:
       quickDisproofAttempt:
         description: How Hunt tried to kill the finding (wrong sink, sanitizer, auth gate). If disproof succeeded, do not emit this candidate.
         type: string
-      confidence:
-        description: Hunt's confidence in the claim from 0 to 1. Not a CVSS score.
-        type: number
     required:
       - candidateId
       - huntGoalId
@@ -2150,10 +2156,6 @@ schemas:
         description: The assigned huntGoalId being declared exhausted. Must match Hunt input.
         type: string
         minLength: 1
-      exhausted:
-        description: Must be true. This object is only valid as an exhaustion declaration.
-        type: boolean
-        const: true
       methodsTried:
         description: Distinct methods actually used (manual tracing, CodeQL query X, Semgrep rule Y, ...). Name what was run, not "various tools".
         type: array
@@ -2170,33 +2172,62 @@ schemas:
         minLength: 1
     required:
       - huntGoalId
-      - exhausted
       - methodsTried
       - coveredPaths
       - reason
   goal-hunt-output:
     type: object
-    description: Hunt envelope payload. Choose exactly one outcome. candidate path fills candidate and sets exhaustion to null. exhausted path fills exhaustion and sets candidate to null. Never both, never neither.
+    description: Hunt envelope payload. Fill exactly one of candidate or exhaustion; the unused field must be null. Envelope route is candidate or exhausted.
     additionalProperties: false
     properties:
-      outcome:
-        description: "candidate if this Hunt emits exactly one GoalSpec-satisfying finding. exhausted if the assigned surface is done with no such finding. Must match output.json route."
-        type: string
-        enum:
-          - candidate
-          - exhausted
       candidate:
-        description: The single finding when outcome is candidate. Must be null when outcome is exhausted.
+        description: The single finding when this Hunt succeeds. Must be null when the surface is exhausted.
         anyOf:
           - $ref: "#/schemas/goal-candidate-finding"
           - type: "null"
       exhaustion:
-        description: Exhaustion record when outcome is exhausted. Must be null when outcome is candidate.
+        description: Exhaustion record when the assigned surface is done with no qualifying finding. Must be null when emitting a candidate.
         anyOf:
           - $ref: "#/schemas/goal-exhaustion-declaration"
           - type: "null"
     required:
-      - outcome
+      - candidate
+      - exhaustion
+  goal-surface-input:
+    type: object
+    description: Surface planner input. First entry has feedback null. Re-entry carries a mapped downstream event. GoalSpec is a file path, not an inline object.
+    additionalProperties: false
+    properties:
+      goalSpecPath:
+        description: Path of the GoalSpec JSON artifact written by Craft.
+        $pathOf: "#/schemas/goal-spec"
+      repositoryPath:
+        description: Path of the repository domain-object artifact when one exists. Optional until a producer writes it.
+        $pathOf: "#/schemas/repository"
+      feedback:
+        description: Null on first entry. Required on re-entry.
+        anyOf:
+          - $ref: "#/schemas/surface-feedback"
+          - type: "null"
+    required:
+      - goalSpecPath
+      - feedback
+  goal-hunt-input:
+    type: object
+    description: Hunt stage input for one assigned surface. GoalSpec is a file path, not an inline object.
+    additionalProperties: false
+    properties:
+      goalSpecPath:
+        description: Path of the same GoalSpec JSON artifact Surface used.
+        $pathOf: "#/schemas/goal-spec"
+      huntGoal:
+        $ref: "#/schemas/hunt-goal"
+      repositoryPath:
+        description: Path of the repository domain-object artifact when one exists. Optional until a producer writes it.
+        $pathOf: "#/schemas/repository"
+    required:
+      - goalSpecPath
+      - huntGoal
   goal-judge-verdict:
     type: object
     description: Independent Judge decision on one candidate. Checks attack-path validity under GoalSpec.attackerModel and PoC feasibility as a clear contour. Do not invent fixes. Do not re-hunt.
@@ -2262,7 +2293,7 @@ schemas:
         items:
           type: string
       judgePath:
-        description: When novelty is novel, write the unchanged input.judge object to /task/outputs/judge.json and set this to that path. For every other novelty value, do not write the file and set this to null.
+        description: When novelty is novel, preserve the unchanged input.judge object as a JSON artifact and set this to its path. For every other novelty value, do not write the file and set this to null.
         type:
           - string
           - "null"
@@ -2278,10 +2309,9 @@ schemas:
     additionalProperties: false
     properties:
       kind:
-        description: "Which event this is. hunt-candidate a Hunt finding. hunt-exhausted a surface declared done. judge-reject Judge did not confirm. dedup-reject not novel. dedup-novel confirmed and novel."
+        description: "Which event this is. hunt-exhausted a surface declared done. judge-reject Judge did not confirm. dedup-reject not novel. dedup-novel confirmed and novel."
         type: string
         enum:
-          - hunt-candidate
           - hunt-exhausted
           - judge-reject
           - dedup-reject
@@ -2298,8 +2328,20 @@ schemas:
         description: Short fact Surface should remember (why rejected, what was covered, which rootCauseKey is now novel).
         type: string
       payload:
-        description: Extra structured context (exhaustion fields, judge reasons, rootCauseKey). Do not invent a competing schema; pass through useful fields from the upstream output.
+        description: Structured facts for the planner. Only these keys are allowed.
         type: object
+        additionalProperties: false
+        properties:
+          rootCauseKey:
+            type: string
+          coveredPaths:
+            type: array
+            items:
+              type: string
+          methodsTried:
+            type: array
+            items:
+              type: string
     required:
       - kind
       - summary
@@ -2378,17 +2420,16 @@ stages:
         4. Includes stopCondition for a single hunt task (one candidate or justified exhaustion).
         5. Injects persistence language: "no bugs found is intermediate, not success; change method before giving up."
         6. Self-red-teams the goal: list loopholes where a lazy agent could satisfy the letter without real work, then close them in successCriteria / nonGoals.
-        7. Writes the full native-goal objective text into goalPrompt (outcome-heavy, path-light — do not mandate a single tool or method). This string is activated later as Codex `/goal` for each hunt, so keep it self-contained and under ~1800 characters.
+        7. Optionally add concise surfaceGuidance for the Surface planner (what a high-value surface looks like). Do not write a Hunt /goal string.
 
-        Write the GoalSpec JSON to /task/goal-spec.json and return goalSpecPath plus the goalSpec object.
+        Write the GoalSpec JSON to /task/goal-spec.json. Return only goalSpecPath.
 
-        Write `/task/output.json` as:
-        `{"route":null,"exit":false,"output":{"goalSpecPath":"/task/goal-spec.json","goalSpec":{...}}}`.
+        Return the structured result required by the stage schema.
       prepareRepository: target
       includePolicy: true
       plugins: []
     inputSchema:
-      type: object
+      $ref: "#/schemas/goal-craft-input"
     outputSchema:
       $ref: "#/schemas/goal-craft-output"
     inputArtifacts: []
@@ -2406,8 +2447,10 @@ stages:
     concurrency: 1
     maxConcurrency: 1
     disableable: false
+    goal: true
     runtime:
       kind: agent
+      goalSession: shared
       persistent: true
       reuseContainer: true
       cwd: /workspace/repo
@@ -2416,9 +2459,9 @@ stages:
       prompt: |
         You are the Goal Surface stage for a tob-goal security scan. You are the continuous dispatcher.
 
-        Read the GoalSpec and any feedback payload (hunt-candidate, hunt-exhausted, judge-reject, dedup-reject, dedup-novel). Use the goal as a lens over the codebase.
+        Read /task/inputs/goal-spec.json and any feedback payload (hunt-exhausted, judge-reject, dedup-reject, dedup-novel). Use the GoalSpec as a lens over the codebase. Do not hunt.
 
-        On first entry: emit 2–8 diverse huntGoals (modules, data flows, or boundaries ranked by relevance to the GoalSpec). Each huntGoal needs huntGoalId, title, objective, optional focusPaths / riskPathways / partitionDimension.
+        On first entry: emit 2–8 diverse huntGoals (modules, data flows, or boundaries ranked by relevance to the GoalSpec). Each huntGoal needs huntGoalId, title, scopeStatement, and focusPaths (empty array allowed when the surface is not path-shaped). Do not emit objective.
 
         On feedback re-entry:
         - Do not repeat dead zones or already-novel root causes when avoidable.
@@ -2428,14 +2471,12 @@ stages:
         You do not perform deep vulnerability hunting yourself. You only plan and dispatch hunt goals.
         Return SurfaceDispatch JSON.
 
-        Write `/task/output.json` as:
-        `{"route":null,"exit":false,"output":{...SurfaceDispatch...}}`
-        This stage has a single outbound edge — set `route` to null (do not invent a route key). When globalExhausted=true, set huntGoals to [].
+        Return the structured SurfaceDispatch result required by the stage schema. When globalExhausted=true, set huntGoals to [].
       prepareRepository: none
       includePolicy: true
       plugins: []
     inputSchema:
-      type: object
+      $ref: "#/schemas/goal-surface-input"
     outputSchema:
       $ref: "#/schemas/surface-dispatch"
     inputArtifacts: []
@@ -2473,25 +2514,14 @@ stages:
 
         Stop when you have either:
         - exactly one candidate that meets the GoalSpec success criteria, or
-        - a justified exhaustion with `output.exhaustion` fields (`huntGoalId`, `exhausted: true`, `methodsTried`, `coveredPaths`, `reason`).
+        - a justified exhaustion with `output.exhaustion` fields (`huntGoalId`, `methodsTried`, `coveredPaths`, `reason`). Stay inside the assigned scopeStatement and focusPaths.
 
         Never emit more than one candidate. Never claim success without evidence. "No bugs found" is not success unless you have exhausted reasonable methods for this goal.
 
-        ## Structured JSON output requirement (mandatory)
-
-        - Write the final result only to `/task/output.json` as a pure JSON object (no markdown fences, comments, or prose).
-        - Top-level envelope must be exactly `{route, exit, output}`. Set `exit` to false.
-        - `route` must be `"candidate"` or `"exhausted"` and must match the chosen path.
-        - `output` must match GoalHuntOutput:
-          - candidate path: `outcome: "candidate"`, populate `output.candidate` (required fields), set `output.exhaustion` to `null`
-          - exhausted path: `outcome: "exhausted"`, populate `output.exhaustion` with `{huntGoalId, exhausted: true, methodsTried: string[], coveredPaths: string[], reason}`, set `output.candidate` to `null`
-        - `/task/output.schema.json` is the source of truth for the complete envelope. Do not invent alternate field names. Do not add extra fields outside the schema. Use `null` for nullable fields instead of omitting them unless the schema allows omission.
-        - Before ending the turn, validate with Python and the `jsonschema` package: load `/task/output.json` and `/task/output.schema.json`, validate, print only a short success/failure line. If validation fails, fix and re-validate until it passes.
-        - FINAL CHECK: (1) write the complete envelope to `/task/output.json`; (2) re-open and validate against `/task/output.schema.json`; (3) only then end the turn.
       prepareRepository: none
       includePolicy: false
     inputSchema:
-      type: object
+      $ref: "#/schemas/goal-hunt-input"
     outputSchema:
       $ref: "#/schemas/goal-hunt-output"
     inputArtifacts: []
@@ -2529,9 +2559,7 @@ stages:
 
         Return GoalJudgeVerdict JSON.
 
-        Write `/task/output.json` as:
-        `{"route":"confirmed"|"rejected","exit":false,"output":{...GoalJudgeVerdict...}}`
-        Use `confirmed` only for decision=confirmed; otherwise use `rejected` (including needs-more-evidence for v1).
+        Return the structured GoalJudgeVerdict required by the stage schema. Use `confirmed` only for decision=confirmed; otherwise use `rejected`.
       prepareRepository: none
       includePolicy: true
     inputSchema:
@@ -2570,18 +2598,13 @@ stages:
 
         Do not re-judge whether the issue is a vulnerability. Only novelty.
 
-        The input contains the complete Goal Judge result at `input.judge`. When the candidate is novel, preserve that judge result as a JSON artifact:
-
-        1. Write the `input.judge` object without changing its fields to `/task/outputs/judge.json`.
-        2. Set `judgePath` to `/task/outputs/judge.json` in the returned result.
+        The input contains the complete Goal Judge result at `input.judge`. When the candidate is novel, preserve that judge result without changing its fields as a JSON artifact and set `judgePath` to that artifact's path.
 
         When the candidate is not novel, do not create the artifact and set `judgePath` to `null`.
 
         Return GoalDedupResult JSON with references when applicable.
 
-        Write `/task/output.json` as:
-        `{"route":"novel"|"reject","exit":false,"output":{...GoalDedupResult...}}`
-        Use `novel` only for novelty=novel; otherwise `reject`.
+        Return the structured GoalDedupResult required by the stage schema. Use `novel` only for novelty=novel; otherwise use `reject`.
       prepareRepository: none
       includePolicy: false
     inputSchema:
@@ -2607,7 +2630,7 @@ edges:
     mode: map
     input:
       goalSpecPath: $output.goalSpecPath
-      goalSpec: $output.goalSpec
+      feedback: null
     artifacts:
       - from: $output.goalSpecPath
         to: inputs/goal-spec.json
@@ -2622,7 +2645,7 @@ edges:
     foreach: $.huntGoals[*]
     input:
       goalSpecPath: $input.goalSpecPath
-      goalSpec: $input.goalSpec
+      repositoryPath: $input.repositoryPath
       huntGoal: $item
     artifacts:
       - from: $input.goalSpecPath
@@ -2637,7 +2660,6 @@ edges:
     mode: map
     input:
       goalSpecPath: $input.goalSpecPath
-      goalSpec: $input.goalSpec
       huntGoal: $input.huntGoal
       candidate: $output.candidate
     artifacts:
@@ -2648,28 +2670,7 @@ edges:
     route:
       key: candidate
       default: true
-  - id: goal-hunt-candidate-to-goal-surface
-    name: goal-hunt-candidate-to-goal-surface
-    from: goal-hunt
-    to: goal-surface
-    fork: false
-    mode: map
-    input:
-      goalSpecPath: $input.goalSpecPath
-      goalSpec: $input.goalSpec
-      feedback:
-        kind: hunt-candidate
-        huntGoalId: $input.huntGoal.huntGoalId
-        candidateId: $output.candidate.candidateId
-        summary: $output.candidate.title
-        payload: $output.candidate
-    artifacts:
-      - from: $input.goalSpecPath
-        to: inputs/goal-spec.json
-        inputField: goalSpecPath
-        required: true
-    route:
-      key: candidate
+      description: Emit exactly one candidate satisfying the GoalSpec.
   - id: goal-hunt-exhausted-to-goal-surface
     name: goal-hunt-exhausted-to-goal-surface
     from: goal-hunt
@@ -2678,13 +2679,15 @@ edges:
     mode: map
     input:
       goalSpecPath: $input.goalSpecPath
-      goalSpec: $input.goalSpec
+      repositoryPath: $input.repositoryPath
       feedback:
         kind: hunt-exhausted
         huntGoalId: $input.huntGoal.huntGoalId
         candidateId: null
         summary: $output.exhaustion.reason
-        payload: $output.exhaustion
+        payload:
+          coveredPaths: $output.exhaustion.coveredPaths
+          methodsTried: $output.exhaustion.methodsTried
     artifacts:
       - from: $input.goalSpecPath
         to: inputs/goal-spec.json
@@ -2692,6 +2695,7 @@ edges:
         required: true
     route:
       key: exhausted
+      description: Exhaust the assigned surface without a qualifying candidate.
   - id: goal-judge-to-goal-dedup
     name: goal-judge-to-goal-dedup
     from: goal-judge
@@ -2700,7 +2704,6 @@ edges:
     mode: map
     input:
       goalSpecPath: $input.goalSpecPath
-      goalSpec: $input.goalSpec
       huntGoal: $input.huntGoal
       candidate: $input.candidate
       judge: $output
@@ -2711,6 +2714,7 @@ edges:
         required: true
     route:
       key: confirmed
+      description: Send the candidate to deduplication after confirming it.
   - id: goal-judge-reject-to-goal-surface
     name: goal-judge-reject-to-goal-surface
     from: goal-judge
@@ -2719,13 +2723,14 @@ edges:
     mode: map
     input:
       goalSpecPath: $input.goalSpecPath
-      goalSpec: $input.goalSpec
+      repositoryPath: $input.repositoryPath
       feedback:
         kind: judge-reject
         huntGoalId: $input.huntGoal.huntGoalId
         candidateId: $input.candidate.candidateId
         summary: $output.summary
-        payload: $output
+        payload:
+          rootCauseKey: $input.candidate.rootCauseKey
     artifacts:
       - from: $input.goalSpecPath
         to: inputs/goal-spec.json
@@ -2734,6 +2739,7 @@ edges:
     route:
       key: rejected
       default: true
+      description: Return to the surface when the candidate is not confirmed.
   - id: goal-dedup-novel-to-goal-surface
     name: goal-dedup-novel-to-goal-surface
     from: goal-dedup
@@ -2742,13 +2748,14 @@ edges:
     mode: map
     input:
       goalSpecPath: $input.goalSpecPath
-      goalSpec: $input.goalSpec
+      repositoryPath: $input.repositoryPath
       feedback:
         kind: dedup-novel
         huntGoalId: $input.huntGoal.huntGoalId
         candidateId: $input.candidate.candidateId
         summary: $output.summary
-        payload: $output
+        payload:
+          rootCauseKey: $input.candidate.rootCauseKey
     artifacts:
       - from: $input.goalSpecPath
         to: inputs/goal-spec.json
@@ -2756,6 +2763,7 @@ edges:
         required: true
     route:
       key: novel
+      description: Retain the candidate as novel and continue the goal search.
   - id: goal-dedup-reject-to-goal-surface
     name: goal-dedup-reject-to-goal-surface
     from: goal-dedup
@@ -2764,13 +2772,14 @@ edges:
     mode: map
     input:
       goalSpecPath: $input.goalSpecPath
-      goalSpec: $input.goalSpec
+      repositoryPath: $input.repositoryPath
       feedback:
         kind: dedup-reject
         huntGoalId: $input.huntGoal.huntGoalId
         candidateId: $input.candidate.candidateId
         summary: $output.summary
-        payload: $output
+        payload:
+          rootCauseKey: $input.candidate.rootCauseKey
     artifacts:
       - from: $input.goalSpecPath
         to: inputs/goal-spec.json
@@ -2779,4 +2788,5 @@ edges:
     route:
       key: reject
       default: true
+      description: Discard the duplicate candidate and continue the goal search.
 groups: []

@@ -38,7 +38,6 @@ Assess CVSS, exploitability, common trigger conditions, and whether this is secu
 For EPSS, prefer an official CVE/EPSS mapping when the candidate clearly maps to a CVE. If no CVE maps, provide a heuristic 30-day probability estimate and set epssSource to describe that fallback.
 Write a concise markdown triage report to write_triage_report_to, including the selected disqualifier and disqualifierReason when present.
 Write every task artifact only under task_dir.
-Before returning, validate the structured JSON against the runtime-provided output.schema.json.
 Set id to {{taskId}}.
 Set reportPath to {{reportPath}}.
 Set runtimeSeconds to null if unknown.

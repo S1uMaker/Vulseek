@@ -13,9 +13,7 @@ module_json_path: {{moduleJsonPath}}
 Read repository_json_path and module_json_path before analysis.
 Model the module's real attack surface across web, service, worker, CLI, parser, configuration, and native-code contexts.
 Do not assume the project is C/C++ unless the repository and module artifacts show that.
-Write the module threat model object to /task/outputs/module-threat-model.json.
-Return a schema-valid path manifest: repository is repository_json_path, module is module_json_path, and threatModel is /task/outputs/module-threat-model.json.
+Produce the module threat model artifact required by the output schema.
+Return the schema-defined path manifest for the repository, module, and threat model artifacts.
 Populate entrypoints, trustBoundaries, attackerInputs, sinkClasses, likelyVulnerabilityClasses, securityAssumptions, assumptions, limitations, and summary with source-backed facts.
 For likelyVulnerabilityClasses, emit concrete, separable class labels that can each drive an independent identify-target fanOut (for example "SQL injection", "authorization bypass"). Avoid empty arrays, duplicates, and oversized catch-all labels.
-Before returning, validate the structured JSON against the runtime-provided output.schema.json.
-Set output.json exit to true so Vulseek can discard this Attack Surface Model lane after end_turn.

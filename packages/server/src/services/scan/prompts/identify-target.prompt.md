@@ -19,9 +19,6 @@ Prefer externally reachable or security-boundary targets over enumerating every 
 Do not identify targets for other vulnerability classes in this task.
 For every target, set likelyVulnerabilityTypes to exactly [vulnerability_class_focus].
 Do not cap targets arbitrarily, but do exclude tests, fixtures, generated code, docs, vendored code, and low-value boilerplate unless it is a real runtime/security configuration surface.
-Write the canonical module object to /task/module.json.
-Write each target object to /task/targets/<target-id>.json.
+Produce the canonical module and target artifacts required by the output schema.
 Use the target schema exactly. Do not use functionId/functionName fields in target artifacts.
-Return a schema-valid path manifest: repository, module, threatModel, and targets.
-Before returning, validate the structured JSON against the runtime-provided output.schema.json.
-Set output.json exit to true so Vulseek can discard this Identify Target lane after end_turn.
+Return the schema-defined path manifest for the repository, module, threat model, and target artifacts.

@@ -6,8 +6,5 @@ Independently verify:
 
 Decide confirmed, rejected, or needs-more-evidence. Reject theoretical paths that require disallowed preconditions. Do not invent fixes. Do not communicate with other judges.
 
-Return GoalJudgeVerdict JSON.
-
-Write `/task/output.json` as:
-`{"route":"confirmed"|"rejected","exit":false,"output":{...GoalJudgeVerdict...}}`
-Use `confirmed` only for decision=confirmed; otherwise use `rejected` (including needs-more-evidence for v1).
+Return the structured GoalJudgeVerdict required by the stage schema. Use the
+`confirmed` route only for decision=confirmed; otherwise use `rejected`.

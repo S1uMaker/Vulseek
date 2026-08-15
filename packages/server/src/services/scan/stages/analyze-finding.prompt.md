@@ -22,18 +22,13 @@ Follow the coordinator workflow and evidence rules defined in the skill.
 Read the JSON files referenced above before analysis. If feedback_json_path is not "none", read that JSON file too. If analysis_report_template_path is not "none", read that file and format the markdown report to match it.
 Write every task artifact only under task_dir.
 Decide whether this turn should submit a draft analysis to critic or finalize a critic-approved analysis.
-The selected object type must match the selected route key.
+The finalized analysis is the input to the later verification stage.
 Do not request fuzzer construction in this pipeline version. If dynamic evidence would materially change confidence, record it in blockers or missingEvidenceRequest instead.
-Before returning, validate the structured JSON against the runtime-provided output.schema.json.
 Use {{taskId}} as the id when the selected schema has an id field.
 Set reportPath to {{reportPath}} when returning an analysis result.
 When analysis_report_template_path is not "none", follow that file as the required markdown report template.
 Set runtimeSeconds to null if unknown.
 Set status to completed when the run succeeds.
-Route mapping:
-- analysisSchema draft for critic -> critic, when evidence is organized enough for adversarial review
-- finalAnalysisSchema after matching critic convinced response -> verification and set output.json exit to true
-Do not route verification unless the latest critic response is convinced for the same analysis fingerprint.
 Compute score as a 0-10 estimated severity score. Consider CVSS-style dimensions and real-world impact breadth, including whether the vulnerable path appears in common usage scenarios.
 
 Recommended result enum values:

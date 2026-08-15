@@ -98,7 +98,8 @@ const runtimeSchema = z
 	.object({
 		kind: z.literal("agent").default("agent"),
 	agentProfileId: z.string().min(1).nullable().optional(),
-	persistent: z.boolean().optional(),
+		goalSession: z.enum(["shared", "per-task"]).optional(),
+		persistent: z.boolean().optional(),
 	reuseContainer: z.boolean().optional(),
 	nullableOutput: z.boolean().optional(),
 	cwd: z.string().min(1).optional(),
@@ -153,11 +154,11 @@ const edgeSchema = z.object({
 	input: z.unknown().optional(),
 	artifacts: z.array(artifactMappingSchema).optional().default([]),
 	outputSchema: jsonSchemaSchema.optional(),
-	outputSchemaDescription: z.string().optional(),
 	route: z
 		.object({
 			key: z.string().min(1),
 			default: z.boolean().optional(),
+			description: z.string().optional(),
 		})
 		.optional(),
 }).strict();

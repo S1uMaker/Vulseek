@@ -60,6 +60,43 @@ resolve_pipeline_definitions_host_path() {
     (cd "$configured_path" && pwd -P)
 }
 
+rewrite_proxy_host() {
+    local proxy_value="$1"
+    if [ -z "$proxy_value" ]; then
+        echo ""
+        return 0
+    fi
+    # Build containers use Docker's default bridge gateway to reach host proxies.
+    echo "$proxy_value" | sed -E 's#^(([a-zA-Z][a-zA-Z0-9+.-]*://)?([^/@]+@)?)([^/:?#]+)(:[0-9]+)?(.*)$#\1172.17.0.1\5\6#'
+}
+
+resolve_container_environment() {
+    if [ -n "${VULSEEK_CONTAINER_ENV:-}" ]; then
+        printf '%s' "$VULSEEK_CONTAINER_ENV"
+        return 0
+    fi
+
+    local result=""
+    local key value rewritten lower_key
+    for key in HTTP_PROXY HTTPS_PROXY ALL_PROXY; do
+        value="${!key:-}"
+        if [ -z "$value" ]; then
+            lower_key="${key,,}"
+            value="${!lower_key:-}"
+        fi
+        rewritten="$(rewrite_proxy_host "$value")"
+        if [ -n "$rewritten" ]; then
+            result+="${key}=${rewritten}\n${key,,}=${rewritten}\n"
+        fi
+    done
+
+    value="${NO_PROXY:-${no_proxy:-}}"
+    if [ -n "$value" ]; then
+        result+="NO_PROXY=${value}\nno_proxy=${value}\n"
+    fi
+    printf '%b' "$result"
+}
+
 service_exists() {
     docker service inspect "$1" >/dev/null 2>&1
 }
@@ -266,16 +303,6 @@ build_image() {
     echo -e "${YELLOW}🔨 构建开发镜像: $IMAGE_NAME${NC}"
     cd "$SCRIPT_DIR"
 
-    rewrite_proxy_host() {
-        local proxy_value="$1"
-        if [ -z "$proxy_value" ]; then
-            echo ""
-            return 0
-        fi
-        # Rewrite proxy host to Docker bridge gateway and keep the original port.
-        echo "$proxy_value" | sed -E 's#^(([a-zA-Z][a-zA-Z0-9+.-]*://)?([^/@]+@)?)([^/:?#]+)(:[0-9]+)?(.*)$#\1172.17.0.1\5\6#'
-    }
-
     local build_http_proxy="${http_proxy:-${HTTP_PROXY:-}}"
     local build_https_proxy="${https_proxy:-${HTTPS_PROXY:-}}"
     local build_all_proxy="${all_proxy:-${ALL_PROXY:-}}"
@@ -380,6 +407,7 @@ start_vulseek() {
     
     # 读取环境文件并构建 --env 参数
     local env_args=""
+    local has_container_environment=0
     while IFS= read -r line; do
         # 跳过注释和空行
         if [[ ! $line =~ ^[[:space:]]*# ]] && [[ -n $line ]]; then
@@ -387,9 +415,22 @@ start_vulseek() {
             line=$(echo "$line" | sed 's/#.*$//' | xargs)
             if [[ -n $line ]]; then
                 env_args="$env_args --env $line"
+                if [[ "$line" == VULSEEK_CONTAINER_ENV=* ]]; then
+                    has_container_environment=1
+                fi
             fi
         fi
     done < "$env_file_path"
+
+    if [ "$has_container_environment" -eq 0 ]; then
+        local container_environment
+        container_environment="$(resolve_container_environment)"
+        if [ -n "$container_environment" ]; then
+            # The service command is assembled with eval; %q preserves the
+            # multiline dotenv value without printing proxy credentials.
+            env_args="$env_args --env $(printf '%q' "VULSEEK_CONTAINER_ENV=$container_environment")"
+        fi
+    fi
     
     echo -e "${GREEN}✅ 已加载环境变量${NC}"
     

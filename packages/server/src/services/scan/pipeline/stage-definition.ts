@@ -27,6 +27,7 @@ export type StageRunResult =
 export type StageRuntimeConfigGetters = {
 	getConcurrency: () => Promise<number>;
 	getAgentProfile: () => Promise<string | null>;
+	getGoalSession: () => Promise<"shared" | "per-task" | null>;
 	getPersistent: () => Promise<boolean | null>;
 	getReuseContainer: () => Promise<boolean | null>;
 	getNullableOutput: () => Promise<boolean | null>;
@@ -83,6 +84,7 @@ export type StageDefinition<
 	nullableOutput?: boolean;
 	jobOutput?: boolean;
 	goal?: boolean;
+	goalSession?: "shared" | "per-task";
 	allowAgentExit?: boolean;
 	outputSchema?: StructuredOutputSchemaSource;
 	runtimeConfig?: StageRuntimeConfigGetters;

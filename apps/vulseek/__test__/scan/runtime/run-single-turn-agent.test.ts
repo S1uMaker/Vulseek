@@ -19,22 +19,14 @@ describe("buildStructuredOutputPromptSuffix", () => {
 			"/task/output.json",
 		);
 
-		expect(suffix).toMatch(
-			/Write the final structured result to \/task\/output\.json/,
-		);
-		expect(suffix).toMatch(
-			/JSON Schema for the complete output\.json envelope is written to \/task\/output\.schema\.json/,
-		);
-		expect(suffix).toMatch(
-			/Load \/task\/output\.json, load \/task\/output\.schema\.json/,
-		);
-		expect(suffix).toMatch(
-			/This stage has no dynamic route; set output\.json route to null/,
-		);
+		expect(suffix).toMatch(/read \/task\/output\.schema\.json/);
+		expect(suffix).toMatch(/output-validator\/validate_output\.py/);
+		expect(suffix).toMatch(/Write the final result only to \/task\/output\.json/);
+		expect(suffix).toMatch(/no dynamic route; set route=null/);
 		expect(suffix).not.toMatch(/\/scan-context\//);
 		expect(suffix).not.toMatch(/\/workspace\/repo/);
 		expect(suffix).toMatch(
-			/FINAL CHECK BEFORE ENDING THIS TURN:[\s\S]*Only then end the turn\./,
+			/If validation fails, fix the files[\s\S]*End the turn only after it succeeds\./,
 		);
 	});
 
@@ -58,10 +50,8 @@ describe("buildStructuredOutputPromptSuffix", () => {
 			],
 		);
 
-		expect(suffix).toMatch(
-			/Write the final structured result to \/task\/output\.json/,
-		);
-		expect(suffix).toMatch(/Dynamic route requirement:/);
+		expect(suffix).toMatch(/Write the final result only to \/task\/output\.json/);
+		expect(suffix).toMatch(/Choose exactly one route key below/);
 		expect(suffix).toMatch(/- build \(default\): Build a fuzzer/);
 		expect(suffix).toMatch(/- critic: Criticize analysis/);
 		expect(suffix).not.toMatch(/\/scan-context\//);

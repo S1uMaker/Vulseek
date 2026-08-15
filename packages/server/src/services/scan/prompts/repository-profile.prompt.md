@@ -16,15 +16,12 @@ Use the repository-profile skill for module selection principles and output expe
 Do not pull external CVE, PR, issue, registry, GitHub, or web intelligence in this stage.
 Use shell inspection commands such as git ls-tree, find, rg, sed, and awk. Inspect enough repository structure and source content to justify module boundaries.
 Apply the repository-profile skill's runtime/security surface splitting rules before writing module artifacts.
-Write the repository object to /task/repository.json.
-Write each selected security module object to a separate /task/modules/<module-id>.json file.
+Produce the repository and selected security module artifacts required by the output schema.
 Each module JSON file must use the repository-stage module schema exactly. Use name for the display name; do not use title as a substitute.
-Return a schema-valid path manifest: repository is /task/repository.json, and modules is the list of module JSON file paths.
+Return the schema-defined path manifest for the repository and module artifacts.
 Do not include targets or candidates in module files; target identification belongs to Identify Target.
 Include repository-stage module boundary signals required by the schema: entryPoints, trustBoundaries, attackSurfaces, vulnerabilityThemes, and runtimeComponents.
 Do not include module-level details in repository.json.
 Choose the number of modules from the repository's actual scale, complexity, and security surface. Produce at least 4 modules. Large repositories may produce more than 20 modules when needed to preserve distinct runtime roles, trust boundaries, privilege levels, language/runtime integration points, framework boundaries, or security responsibilities.
 Do not merge unrelated security surfaces just to keep the module count small.
 Do not invent a complete architecture model.
-Before returning, validate the structured JSON against the runtime-provided output.schema.json.
-Set output.json exit to true so Vulseek can discard this Scan Repository lane after end_turn.

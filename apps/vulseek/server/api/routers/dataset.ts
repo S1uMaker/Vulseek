@@ -33,6 +33,7 @@ import {
 	scanPipelineVersions,
 } from "@vulseek/server/db/schema";
 import { resolveCompiledDefinition } from "@vulseek/server/services/scan/api/pipeline-runs";
+import { inspectRequiredToolsImageReference } from "@vulseek/server/services/scan/checkout-tools";
 import {
 	and,
 	asc,
@@ -86,8 +87,8 @@ const profileSummary = (
 	profileKey: profile.profileKey,
 	status: profile.status,
 	sourceDigest: profile.sourceDigest,
-	checkoutImage: profile.checkoutImage,
-	checkoutImageDigest: profile.checkoutImageDigest,
+	toolsImageTag: profile.toolsImageTag,
+	toolsImageDigest: profile.toolsImageDigest,
 	errorMessage: profile.errorMessage,
 	createdAt: profile.createdAt,
 	updatedAt: profile.updatedAt,
@@ -359,11 +360,18 @@ export const datasetRouter = createTRPCRouter({
 					.from(datasetSamples)
 					.where(eq(datasetSamples.profileId, input.profileId))
 					.then((rows) => Number(rows[0]?.count ?? 0));
+				const toolsImageAvailable =
+					Boolean(row.profile.toolsImageTag && row.profile.toolsImageDigest) &&
+					(await inspectRequiredToolsImageReference({
+						imageTag: row.profile.toolsImageTag || "",
+						imageId: row.profile.toolsImageDigest || "",
+					}));
 				return {
 					...profileSummary(row.profile, sampleCount),
 					hostRoot: row.profile.hostRoot,
 					datasetName: row.dataset.name,
 					selectedSampleIds: row.profile.selectedSampleIds,
+					toolsImageAvailable,
 					canManage: isDatasetManager(ctx.user.role),
 				};
 			}),
@@ -410,9 +418,6 @@ export const datasetRouter = createTRPCRouter({
 						message: "Dataset profile not found",
 					});
 				await db.transaction(async (tx) => {
-					await tx
-						.delete(datasetSamples)
-						.where(eq(datasetSamples.profileId, input.profileId));
 					await tx
 						.update(datasetProfiles)
 						.set({
@@ -897,10 +902,15 @@ export const datasetRouter = createTRPCRouter({
 					)
 					.limit(1)
 					.then((rows) => rows[0]);
-				if (profile?.status !== "ready")
+				if (
+					profile?.status !== "ready" ||
+					!profile.toolsImageTag ||
+					!profile.toolsImageDigest
+				)
 					throw new TRPCError({
 						code: "BAD_REQUEST",
-						message: "A ready Dataset Profile is required",
+						message:
+							"A checked-out Dataset Profile with a pinned tools image is required",
 					});
 				const samples = await db
 					.select()
