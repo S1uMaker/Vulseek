@@ -31,6 +31,8 @@ import { api } from "@/utils/api";
  * default never changes.
  */
 
+const NONE_PROFILE = "__none__";
+
 export type RunPipelineDialogProps = {
 	target:
 		| { type: "application"; applicationId: string }
@@ -50,9 +52,14 @@ export const RunPipelineDialog = ({
 	const [open, setOpen] = React.useState(false);
 	const [pipelineId, setPipelineId] = React.useState<string>("");
 	const [versionId, setVersionId] = React.useState<string>("");
+	const [profileId, setProfileId] = React.useState<string>(NONE_PROFILE);
 	const [targetRef, setTargetRef] = React.useState("");
 	const [targetTag, setTargetTag] = React.useState("");
 	const versions = api.pipeline.listVersions.useQuery(
+		{ pipelineId: pipelineId || "__none__" },
+		{ enabled: Boolean(pipelineId) },
+	);
+	const profiles = api.pipeline.profilesList.useQuery(
 		{ pipelineId: pipelineId || "__none__" },
 		{ enabled: Boolean(pipelineId) },
 	);
@@ -75,6 +82,16 @@ export const RunPipelineDialog = ({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open, options.data]);
 
+	React.useEffect(() => {
+		if (!profiles.data) return;
+		if (
+			profileId !== NONE_PROFILE &&
+			!profiles.data.some((item) => item.pipelineProfileId === profileId)
+		) {
+			setProfileId(NONE_PROFILE);
+		}
+	}, [profileId, profiles.data]);
+
 	const selectedVersion = versions.data?.find(
 		(v) => v.pipelineVersionId === versionId,
 	);
@@ -87,6 +104,8 @@ export const RunPipelineDialog = ({
 				target,
 				pipelineId,
 				pipelineVersionId: versionId || undefined,
+				pipelineProfileId:
+					profileId === NONE_PROFILE ? undefined : profileId,
 				repository: {
 					targetRef: targetRef || undefined,
 					targetTag: targetTag || undefined,
@@ -111,8 +130,8 @@ export const RunPipelineDialog = ({
 				<DialogHeader>
 					<DialogTitle>Run pipeline</DialogTitle>
 					<DialogDescription>
-						Runs a published pipeline version against this target. The profile
-						default stays unchanged.
+						Runs a published pipeline version against this target. Choosing a
+						runtime profile applies its stage settings to this scan only.
 					</DialogDescription>
 				</DialogHeader>
 
@@ -124,6 +143,7 @@ export const RunPipelineDialog = ({
 							const current = options.data?.find((o) => o.pipelineId === value)
 								?.currentVersionId;
 							setVersionId(current ?? "");
+							setProfileId(NONE_PROFILE);
 						}}>
 							<SelectTrigger className="h-9">
 								<SelectValue placeholder="Choose a pipeline…" />
@@ -136,6 +156,39 @@ export const RunPipelineDialog = ({
 								))}
 							</SelectContent>
 						</Select>
+					</div>
+
+					<div className="space-y-1">
+						<Label>Profile</Label>
+						<Select
+							value={profileId}
+							onValueChange={setProfileId}
+							disabled={!pipelineId}
+						>
+							<SelectTrigger className="h-9">
+								<SelectValue placeholder="Pipeline defaults" />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value={NONE_PROFILE}>
+									Pipeline defaults
+								</SelectItem>
+								{profiles.data?.map((profile) => (
+									<SelectItem
+										key={profile.pipelineProfileId}
+										value={profile.pipelineProfileId}
+									>
+										{profile.name}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+						<p className="text-xs text-muted-foreground">
+							{profiles.isLoading
+								? "Loading profiles…"
+								: profiles.data?.length
+									? "Applies this profile's model, concurrency, and stage switches to the run."
+									: "No profiles for this pipeline. The run uses YAML defaults."}
+						</p>
 					</div>
 
 					<div className="space-y-1">

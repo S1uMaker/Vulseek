@@ -51,6 +51,7 @@ const RUNTIME_CUSTOM_SKILLS = [
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const TASK_ALIAS_ROOT_IN_CONTAINER = "/task";
+const LANE_ALIAS_ROOT_IN_CONTAINER = "/lane";
 const STRUCTURED_OUTPUT_SCHEMA_FILE_NAME = "output.schema.json";
 const STRUCTURED_OUTPUT_RESULT_FILE_NAME = "output.json";
 const CLAUDE_HOME_IN_CONTAINER = "/root/.claude";
@@ -508,6 +509,22 @@ const execDockerRunWithRetry = async (input: {
 
 const resolveConfiguredScanContextHostPath = () =>
 	process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim() || "";
+
+/** Docker -v left-hand side must be a host path, not the in-app /scan-context mount. */
+export const remapScanContextAppPathToHost = (
+	appOrHostPath: string,
+	hostRoot = resolveConfiguredScanContextHostPath(),
+) => {
+	const posixPath = appOrHostPath.split(path.sep).join("/");
+	const prefix = CONTAINER_SCAN_CONTEXT_ROOT;
+	if (
+		hostRoot &&
+		(posixPath === prefix || posixPath.startsWith(`${prefix}/`))
+	) {
+		return path.join(hostRoot, posixPath.slice(prefix.length));
+	}
+	return appOrHostPath;
+};
 
 const resolveProjectProfileHostPath = async (input: {
 	projectName: string;
@@ -1077,6 +1094,7 @@ export type StageContainerInput = {
 	stageDirPath: string;
 	stageRootInContainer: string;
 	taskRealRootInContainer?: string;
+	laneHostPath?: string;
 	persistent?: boolean;
 	reuseContainer?: boolean;
 	nullableOutput?: boolean;
@@ -1097,6 +1115,12 @@ export type StageContainerInput = {
 	 * false (stage YAML runtimeConfig.includePolicy).
 	 */
 	includePolicy?: boolean;
+	/**
+	 * When true, still write policy/schema files but do not append their
+	 * instructions to the prompt. Unused by goal stages; they now receive
+	 * policy, injection, and the structured-output suffix like other stages.
+	 */
+	omitPromptAdditions?: boolean;
 };
 
 export type RunSingleTurnAgentInput = StageContainerInput & {
@@ -1114,6 +1138,12 @@ export type RunSingleTurnAgentInput = StageContainerInput & {
 	sessionMode?: "new" | "fork";
 	parentSessionId?: string | null;
 	parentTaskId?: string | null;
+	goal?: boolean;
+	goalPreserving?: boolean;
+	followUpPrompt?: string | null;
+	initialGoalPrompt?: string | null;
+	stageName?: string;
+	laneIndex?: number | null;
 };
 
 export type RunSingleTurnAgentResult = {
@@ -1248,6 +1278,19 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 	};
 };
 
+const containerHasMountDestination = async (
+	containerName: string,
+	destination: string,
+) => {
+	const { stdout } = await execAsync(
+		`docker inspect -f '{{range .Mounts}}{{println .Destination}}{{end}}' ${containerName}`,
+	).catch(() => ({ stdout: "" }));
+	return stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.includes(destination);
+};
+
 export const startContainer = async (input: StageContainerInput) => {
 	const runtime = await resolveStageContainerRuntime(input);
 	const logPath = runtime.containerBootstrapPath;
@@ -1258,15 +1301,40 @@ export const startContainer = async (input: StageContainerInput) => {
 			Boolean(input.persistent),
 		)} stage_dir=${JSON.stringify(input.stageDirPath)} stage_root=${JSON.stringify(
 			input.stageRootInContainer,
-		)}`,
+		)} lane_host=${JSON.stringify(input.laneHostPath || "")}`,
 	);
 
+	const laneHostPath = input.laneHostPath
+		? remapScanContextAppPathToHost(input.laneHostPath)
+		: "";
+	if (laneHostPath) {
+		await fs.mkdir(laneHostPath, { recursive: true });
+	}
+	const laneMountArg = laneHostPath
+		? `-v '${escapeSingleQuotes(laneHostPath)}':${LANE_ALIAS_ROOT_IN_CONTAINER}`
+		: "";
+
 	if ((input.reuseContainer ?? true) || input.persistent) {
-		const running = await execAsync(
+		let running = await execAsync(
 			`docker inspect -f '{{.State.Running}}' ${input.containerName}`,
 		)
 			.then(({ stdout }) => stdout.trim() === "true")
 			.catch(() => false);
+		if (running && laneHostPath) {
+			const hasLaneMount = await containerHasMountDestination(
+				input.containerName,
+				LANE_ALIAS_ROOT_IN_CONTAINER,
+			);
+			if (!hasLaneMount) {
+				await withHostBootstrapLog(
+					logPath,
+					"recreate_container_missing_lane_mount",
+					"",
+					() => execAsync(`docker rm -f ${input.containerName}`).catch(() => {}),
+				);
+				running = false;
+			}
+		}
 		if (running) {
 			await withHostBootstrapLog(logPath, "container_reuse", "", () =>
 				execAsync(
@@ -1318,7 +1386,7 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				taskId: input.taskId,
 				logPath,
-				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.datasetSampleMountArg} ${runtime.containerEnvArgs} --entrypoint bash ${runtime.imageTag} -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
+				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${laneMountArg} ${runtime.datasetSampleMountArg} ${runtime.containerEnvArgs} --entrypoint bash ${runtime.imageTag} -lc "mkdir -p '${input.stageRootInContainer}' '${LANE_ALIAS_ROOT_IN_CONTAINER}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
 			}),
 	);
 
@@ -1350,34 +1418,49 @@ export const removeContainer = async (containerName: string) => {
 	await execAsync(`docker rm -f ${containerName}`).catch(() => {});
 };
 
-const updateTaskAliasSymlinkInContainer = async (input: {
+const updateContainerRootAlias = async (input: {
 	containerName: string;
-	taskRootInContainer: string;
+	aliasRoot: string;
+	targetRoot: string;
+	logName: string;
 	logPath?: string | null;
 }) => {
 	const script = [
 		"set -euo pipefail",
-		`task_root='${escapeSingleQuotes(input.taskRootInContainer)}'`,
-		`alias_root='${TASK_ALIAS_ROOT_IN_CONTAINER}'`,
-		'mkdir -p "$task_root"',
+		`target_root='${escapeSingleQuotes(input.targetRoot)}'`,
+		`alias_root='${escapeSingleQuotes(input.aliasRoot)}'`,
+		'mkdir -p "$target_root"',
 		'if [ -L "$alias_root" ]; then',
 		'  rm "$alias_root"',
 		'elif [ -e "$alias_root" ]; then',
 		'  echo "$alias_root exists but is not a symlink" >&2',
 		"  exit 1",
 		"fi",
-		'ln -s "$task_root" "$alias_root"',
+		'ln -s "$target_root" "$alias_root"',
 	].join("\n");
 	await withHostBootstrapLog(
 		input.logPath,
-		"task_alias_symlink",
-		`target=${JSON.stringify(input.taskRootInContainer)}`,
+		input.logName,
+		`target=${JSON.stringify(input.targetRoot)}`,
 		() =>
 			execAsync(
 				`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
 			),
 	);
 };
+
+const updateTaskAliasSymlinkInContainer = async (input: {
+	containerName: string;
+	taskRootInContainer: string;
+	logPath?: string | null;
+}) =>
+	await updateContainerRootAlias({
+		containerName: input.containerName,
+		aliasRoot: TASK_ALIAS_ROOT_IN_CONTAINER,
+		targetRoot: input.taskRootInContainer,
+		logName: "task_alias_symlink",
+		logPath: input.logPath,
+	});
 
 const DRAIN_PREVIOUS_DRIVER_TIMEOUT_MS = 60_000;
 const ACP_DRIVER_FILE_NAME = "/opt/vulseek-acp/vulseek-acp-driver.mjs";
@@ -1677,26 +1760,33 @@ export const runSingleTurnAgentInContainer = async (
 					scanJobId: input.scanJob.scanJobId,
 				})
 			: null;
-	const promptAdditions = [
-		securityPolicyArtifact?.instruction,
-		injectionPromptText || null,
-	].filter(Boolean);
-	const resolvedPromptFinal = promptAdditions.length
-		? `${resolvedPrompt.trimEnd()}\n\n${promptAdditions.join("\n\n")}`
-		: resolvedPrompt;
-	const promptWithOutputSchema =
-		(input.outputSchema || input.routeOutputSchemas?.length)
-			? `${resolvedPromptFinal.trimEnd()}\n${buildStructuredOutputPromptSuffix(
-					input.outputSchema || input.routeOutputSchemas![0]!.schema,
-					structuredOutputSchemaAgentPathInContainer,
-					structuredOutputResultAgentPathInContainer,
-					input.routeOutputSchemas,
-					{
-						allowAgentExit: input.allowAgentExit,
-						nullableOutput: input.nullableOutput,
-					},
-				)}`
-			: resolvedPromptFinal;
+	const omitPromptAdditions = Boolean(input.omitPromptAdditions);
+	const promptAdditions = omitPromptAdditions
+		? []
+		: [securityPolicyArtifact?.instruction, injectionPromptText || null].filter(
+				Boolean,
+			);
+	const outputProtocolPrompt = omitPromptAdditions
+		? ""
+		: [
+				...promptAdditions,
+				input.outputSchema || input.routeOutputSchemas?.length
+					? buildStructuredOutputPromptSuffix(
+							input.outputSchema || input.routeOutputSchemas![0]!.schema,
+							structuredOutputSchemaAgentPathInContainer,
+							structuredOutputResultAgentPathInContainer,
+							input.routeOutputSchemas,
+							{
+								allowAgentExit: input.allowAgentExit,
+								nullableOutput: input.nullableOutput,
+							},
+						)
+					: "",
+			]
+				.filter(Boolean)
+				.join("\n");
+	const resolvedPromptFinal = resolvedPrompt;
+	const promptWithOutputSchema = resolvedPromptFinal;
 	const runtimeFileNames = AGENT_RUNTIME_FILE_NAMES;
 	const taskStderrPath = path.join(taskStageDirPath, runtimeFileNames.stdout);
 	await initializeAgentRuntimeFiles(taskStageDirPath);
@@ -1808,6 +1898,9 @@ export const runSingleTurnAgentInContainer = async (
 			input.agentProfile?.provider === "claude_code" ? "claude" : "codex",
 		cwd: input.cwd,
 		prompt: promptWithOutputSchema,
+		followUpPrompt: input.followUpPrompt || null,
+		outputProtocolPrompt: outputProtocolPrompt || null,
+		initialGoalPrompt: input.initialGoalPrompt || null,
 		threadId: existingTaskThreadId || input.laneThreadId || null,
 		adapterEnv,
 		taskStageRootInContainer,
@@ -1817,6 +1910,8 @@ export const runSingleTurnAgentInContainer = async (
 			structuredOutputSchemaAgentPathInContainer,
 		structuredOutputGracePeriodMs: 2_000,
 		structuredOutputRecoveryAttempts: 1,
+		goalEnabled: Boolean(input.goal),
+		goalPreserving: Boolean(input.goal && input.goalPreserving && input.persistent),
 		nullableOutput: Boolean(input.nullableOutput),
 		allowAgentExit: Boolean(input.allowAgentExit),
 		model: input.agentProfile?.model || null,

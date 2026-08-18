@@ -14,7 +14,17 @@ export type NormalizedAgentEvent =
 				is_error: boolean;
 			};
 	  }
-	| { kind: "usage"; used: number; size?: number };
+	| { kind: "usage"; used: number; size?: number }
+	| {
+			kind: "goal";
+			goal: {
+				objective: string;
+				status: string;
+				controlMethod: "_session/goal";
+				[key: string]: unknown;
+			} | null;
+	  }
+	| { kind: "turn"; status: "completed" };
 
 export type AgentSessionNotification = {
 	sessionId?: string;

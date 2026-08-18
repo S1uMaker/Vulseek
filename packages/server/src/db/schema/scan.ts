@@ -431,6 +431,7 @@ export const scanStageLaneRuntimes = pgTable(
 		containerName: text("containerName"),
 		threadId: text("threadId"),
 		driverPid: integer("driverPid"),
+		initialGoalPrompt: text("initialGoalPrompt"),
 		activeTaskId: text("activeTaskId").references(() => tasks.taskId, {
 			onDelete: "set null",
 		}),

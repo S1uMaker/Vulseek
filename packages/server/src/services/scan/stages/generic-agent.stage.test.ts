@@ -6,7 +6,7 @@ import {
 } from "./generic-agent.stage";
 
 test("shared goal sessions reuse the configured container and omit task suffixes", () => {
-	assert.equal(resolveStageReuseContainer("goal-surface", true, true, "shared"), true);
+	assert.equal(resolveStageReuseContainer("goal-surface", false, true, "shared"), true);
 	assert.deepEqual(
 		resolveStageContainerNameParts("goal-surface", "task-1", ["lane"], true, "shared"),
 		["lane"],

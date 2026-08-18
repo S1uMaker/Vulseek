@@ -226,7 +226,10 @@ const StageInspector = ({
 				<ToggleField
 					label="Persistent container"
 					checked={stage.runtime.persistent ?? true}
-					onChange={(checked) => updateRuntime({ persistent: checked })}
+					onChange={(checked) => {
+						updateRuntime({ persistent: checked });
+						if (!checked) update({ goalPreserving: false });
+					}}
 				/>
 				<ToggleField
 					label="Reuse container"
@@ -374,6 +377,14 @@ const StageInspector = ({
 					label="Goal prompt"
 					checked={stage.goal ?? false}
 					onChange={(checked) => update({ goal: checked })}
+				/>
+				<ToggleField
+					label="Goal preserving"
+					checked={stage.goalPreserving ?? false}
+					onChange={(checked) => {
+						if (stage.runtime.persistent !== true) return;
+						update({ goalPreserving: checked });
+					}}
 				/>
 				<ToggleField
 					label="Allow agent exit"

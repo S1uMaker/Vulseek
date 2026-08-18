@@ -239,7 +239,14 @@ export const StageEditor = ({
 							checked={stage.runtime.persistent ?? false}
 							readOnly={readOnly}
 							onChange={(persistent) =>
-								patchRuntime({ ...stage.runtime, persistent }, `stage:${stageId}:persistent`)
+								patch(
+									{
+										...stage,
+										runtime: { ...stage.runtime, persistent },
+										...(!persistent ? { goalPreserving: false } : {}),
+									},
+									`stage:${stageId}:persistent`,
+								)
 							}
 						/>
 						<ToggleField
@@ -272,6 +279,18 @@ export const StageEditor = ({
 							checked={stage.goal ?? false}
 							readOnly={readOnly}
 							onChange={(goal) => patch({ ...stage, goal }, `stage:${stageId}:goal`)}
+						/>
+						<ToggleField
+							label="Goal preserving"
+							description="Only valid on persistent stages. Driver records the first goal and re-issues it with the next prompt after ACP reports the previous goal complete."
+							checked={stage.goalPreserving ?? false}
+							readOnly={readOnly || stage.runtime.persistent !== true}
+							onChange={(goalPreserving) =>
+								patch(
+									{ ...stage, goalPreserving },
+									`stage:${stageId}:goalPreserving`,
+								)
+							}
 						/>
 						<ToggleField
 							label="Allow agent exit"

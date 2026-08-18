@@ -1632,6 +1632,13 @@
       "when": 1786598400000,
       "tag": "0232_dataset_profile_tools_image",
       "breakpoints": true
+    },
+    {
+      "idx": 233,
+      "version": "7",
+      "when": 1786896000000,
+      "tag": "0233_lane_initial_goal_prompt",
+      "breakpoints": true
     }
   ]
 }

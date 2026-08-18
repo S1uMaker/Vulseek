@@ -20,8 +20,11 @@ const readSnapshot = async (filePath: string) => {
 	const protocol = await driverStdoutTailReader.read(filePath);
 	return {
 		activity: protocol.latestActivity,
+		activityRevision: protocol.activityRevision,
+		activityEvents: protocol.activityEvents,
 		signature: JSON.stringify({
 			activity: protocol.latestActivity,
+			activityRevision: protocol.activityRevision,
 			usage: protocol.latestUsage,
 			task: protocol.latestTask,
 			log: protocol.latestLog,
@@ -75,6 +78,7 @@ export default async function handler(
 	});
 	res.flushHeaders?.();
 	const revisions = new Map<string, string>();
+	const activityRevisions = new Map<string, number>();
 	const activeTaskIds = new Set<string>();
 	let closed = false;
 	const cleanup = () => {
@@ -90,6 +94,8 @@ export default async function handler(
 						taskId: runtime.taskId,
 						metadata: metadataFor(runtime),
 						activity: snapshot?.activity || idleAgentActivity,
+						activityRevision: snapshot?.activityRevision || 0,
+						activityEvents: snapshot?.activityEvents || [],
 						revision: snapshot?.signature || "",
 					};
 				},
@@ -98,12 +104,32 @@ export default async function handler(
 	const publish = async (initial = false) => {
 		const tasks = await loadTasks();
 		const currentIds = new Set(tasks.map((task) => task.taskId));
-		if (initial) sendEvent(res, "snapshot", { tasks });
+		if (initial) {
+			sendEvent(res, "snapshot", {
+				tasks: tasks.map(({ activityRevision, activityEvents, ...task }) => task),
+			});
+		}
 		for (const task of tasks) {
 			if (!initial && revisions.get(task.taskId) !== task.revision) {
-				sendEvent(res, "activity", task);
+				const previousActivityRevision =
+					task.activityRevision < (activityRevisions.get(task.taskId) || 0)
+						? 0
+						: activityRevisions.get(task.taskId) || 0;
+				const nextActivities = task.activityEvents.filter(
+					(event) => event.revision > previousActivityRevision,
+				);
+				if (nextActivities.length) {
+					for (const next of nextActivities) {
+						const { activityRevision, activityEvents, ...payload } = task;
+						sendEvent(res, "activity", { ...payload, activity: next.activity });
+					}
+				} else {
+					const { activityRevision, activityEvents, ...payload } = task;
+					sendEvent(res, "activity", payload);
+				}
 			}
 			revisions.set(task.taskId, task.revision);
+			activityRevisions.set(task.taskId, task.activityRevision);
 			activeTaskIds.add(task.taskId);
 		}
 		for (const taskId of activeTaskIds) {
@@ -111,6 +137,7 @@ export default async function handler(
 				sendEvent(res, "done", { taskId });
 				activeTaskIds.delete(taskId);
 				revisions.delete(taskId);
+				activityRevisions.delete(taskId);
 			}
 		}
 		const status = await findScanJobStatusById(scanJobId);

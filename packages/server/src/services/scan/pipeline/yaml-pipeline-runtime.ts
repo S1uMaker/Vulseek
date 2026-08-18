@@ -63,6 +63,7 @@ const stageSchema = z.object({
 	maxConcurrency: z.number().int().min(1).optional(),
 	disableable: z.boolean().optional().default(true),
 	goal: z.boolean().optional().default(false),
+	goalPreserving: z.boolean().optional().default(false),
 	description: z.string().optional(),
 	runtime: runtimeSchema,
 	inputSchema: z.record(z.unknown()).optional(),

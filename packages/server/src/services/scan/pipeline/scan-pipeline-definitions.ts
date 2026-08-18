@@ -40,6 +40,7 @@ const stageConfigSchema = z.object({
 	maxConcurrency: z.number().int().min(1).optional(),
 	disableable: z.boolean().default(true),
 	goal: z.boolean().default(false),
+	goalPreserving: z.boolean().default(false),
 	description: z.string().optional(),
 	inputSchema: z.record(z.unknown()).optional(),
 	outputSchema: z.record(z.unknown()).optional(),
@@ -182,6 +183,7 @@ export type ScanPipelineStageConfig = {
 	maxConcurrency: number | null;
 	disableable: boolean;
 	goal: boolean;
+	goalPreserving?: boolean;
 	description: string | null;
 	inputSchema: Record<string, unknown> | null;
 	outputSchema: Record<string, unknown> | null;
@@ -341,6 +343,7 @@ export const normalizePipelineDefinitionSnapshot = (
 		outputArtifacts: stage.outputArtifacts ?? [],
 		jobOutput: stage.jobOutput ?? false,
 		goal: stage.goal ?? false,
+		goalPreserving: stage.goalPreserving ?? false,
 		effects: stage.effects ?? [],
 		report: stage.report ?? null,
 		promptValues: stage.promptValues ?? {},
@@ -435,6 +438,7 @@ export const normalizePipelineDefinitionSnapshot = (
 				outputArtifacts: stage.outputArtifacts,
 				jobOutput: stage.jobOutput,
 				goal: stage.goal,
+				goalPreserving: stage.goalPreserving,
 				effects: stage.effects,
 				report: stage.report ?? undefined,
 				taskName: stage.taskName ?? undefined,
@@ -1026,6 +1030,7 @@ export const parseScanPipelineDefinitionsSource = (
 				outputArtifacts: stage.outputArtifacts,
 				jobOutput: stage.jobOutput,
 				goal: stage.goal,
+				goalPreserving: stage.goalPreserving,
 				effects: stage.effects,
 				report: stage.report ?? null,
 				taskName: stage.taskName ?? null,

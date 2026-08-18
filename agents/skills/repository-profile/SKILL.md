@@ -29,15 +29,13 @@ Expected inputs include:
 
 ## Outputs
 
-Write the artifacts required by the stage prompt:
+Write these artifacts:
 
-- repository artifact
-- module artifacts
-- output manifest
+- `/task/repository.json` — repository-level fields only; no module details
+- one module JSON file per module — required schema fields exactly; use `name`, not `title`
+- `/task/output.json` — path manifest only (`repository` and `modules` are artifact paths, not objects)
 
 Use the injected schemas as the source of truth.
-
-The output manifest must contain artifact paths only, not embedded artifact objects.
 
 ## Workflow
 

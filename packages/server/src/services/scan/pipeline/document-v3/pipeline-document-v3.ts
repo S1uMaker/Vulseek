@@ -124,6 +124,8 @@ const stageSchema = z.object({
 	maxConcurrency: z.number().int().min(1).optional(),
 	disableable: z.boolean().optional().default(true),
 	goal: z.boolean().optional(),
+	/** Only valid when runtime.persistent is true. */
+	goalPreserving: z.boolean().optional(),
 	runtime: runtimeSchema,
 	inputSchema: jsonSchemaSchema.optional(),
 	outputSchema: jsonSchemaSchema.optional(),

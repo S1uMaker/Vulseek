@@ -378,6 +378,30 @@ describe("validatePipelineDocumentV3", () => {
 		).toBe(true);
 	});
 
+	it("rejects goalPreserving on a non-persistent stage", () => {
+		const document: PipelineDocumentV3 = {
+			...structuredClone(minimalDocument),
+			stages: {
+				...minimalDocument.stages,
+				start: stage({
+					goalPreserving: true,
+					runtime: {
+						kind: "agent",
+						prompt: "p",
+						prepareRepository: "none",
+						includePolicy: false,
+						plugins: [],
+						persistent: false,
+					},
+				}),
+			},
+		};
+		const diagnostics = collectPipelineDiagnostics(document);
+		expect(
+			diagnostics.some((d) => d.code === "stage.goal_preserving_requires_persistent"),
+		).toBe(true);
+	});
+
 	it("rejects research plugins without a research-registry effect", () => {
 		const document: PipelineDocumentV3 = {
 			...structuredClone(minimalDocument),

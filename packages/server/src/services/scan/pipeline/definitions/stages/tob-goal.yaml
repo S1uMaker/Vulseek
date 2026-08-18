@@ -31,6 +31,7 @@ goal-surface:
   maxConcurrency: 1
   disableable: false
   goal: true
+  goalPreserving: true
   description: Goal-as-lens attack-surface planning and continuous hunt-goal dispatch.
   runtimeConfig:
     goalSession: shared
@@ -39,6 +40,7 @@ goal-surface:
     cwd: /workspace/repo
     skills: [goal-surface]
     promptFile: goal-surface.prompt.md
+    prepareRepository: true
     includePolicy: true
   inputSchema:
     $ref: "#/schemas/GoalSurfaceInput"
@@ -55,13 +57,17 @@ goal-hunt:
   maxConcurrency: 8
   disableable: false
   goal: true
-  description: One hunt goal, one candidate or exhaustion declaration.
+  description: One hunt goal, exactly one candidate. Hunt does not declare exhaustion.
   runtimeConfig:
-    persistent: true
+    goalSession: per-task
+    persistent: false
     reuseContainer: true
     cwd: /workspace/repo
     skills: [goal-hunt, codeql, semgrep, tree-sitter]
     promptFile: goal-hunt.prompt.md
+    prepareRepository: true
+  promptValues:
+    goalPrompt: "$input.goalPrompt"
   inputSchema:
     $ref: "#/schemas/GoalHuntInput"
   outputSchema:

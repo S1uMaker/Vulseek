@@ -138,4 +138,9 @@ describe("running task table layout", () => {
 			"relative inline-flex h-2 w-2 rounded-full bg-emerald-500",
 		);
 	});
+
+	it("opens the session transcript dialog wider than the default dialog", () => {
+		const source = readComponent("live-task-activity.tsx");
+		expect(source).toContain('DialogContent className="sm:max-w-7xl"');
+	});
 });

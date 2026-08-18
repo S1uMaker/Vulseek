@@ -25,6 +25,10 @@ describe("driver stdout protocol", () => {
 		);
 
 		expect(parsed.latestActivity).toEqual({ kind: "tool" });
+		expect(parsed.activityRevision).toBe(1);
+		expect(parsed.activityEvents).toEqual([
+			{ revision: 1, activity: { kind: "tool" } },
+		]);
 		expect(parsed.latestUsage).toEqual({ inputTokens: 10, outputTokens: 4 });
 		expect(parsed.latestTask).toMatchObject({
 			type: "task_done",
@@ -32,6 +36,32 @@ describe("driver stdout protocol", () => {
 			status: "completed",
 		});
 		expect(parsed.exitCode).toBe(0);
+	});
+
+	it("keeps goal and following activities in the same ordered activity stream", () => {
+		const parsed = parseDriverStdout(
+			[
+				JSON.stringify({
+					type: "activity",
+					activity: {
+						kind: "goal",
+						label: "Goal active",
+						goal: { objective: "Audit", status: "active" },
+					},
+				}),
+				JSON.stringify({ type: "activity", activity: { kind: "reasoning" } }),
+			].join("\n"),
+		);
+
+		expect(parsed.activityRevision).toBe(2);
+		expect(parsed.activityEvents.map((event) => event.activity)).toEqual([
+			{
+				kind: "goal",
+				label: "Goal active",
+				goal: { objective: "Audit", status: "active" },
+			},
+			{ kind: "reasoning" },
+		]);
 	});
 
 	it("ignores malformed and unknown lines while preserving valid events", () => {

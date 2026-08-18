@@ -90,6 +90,24 @@ test("tob-goal YAML drops inline GoalSpec and hunt-candidate re-entry", () => {
 		(craftOutput.properties as Record<string, unknown>).goalSpec,
 		undefined,
 	);
+	assert.equal(
+		(craftOutput.properties as Record<string, unknown>).goalPrompt,
+		undefined,
+	);
+	assert.ok(huntRequired.includes("goalPrompt"));
+	assert.ok(
+		String(
+			(huntGoal.properties as { goalPrompt?: { description?: string } })
+				.goalPrompt?.description ?? "",
+		).includes("Generate the goal prompt"),
+	);
+
+	const judgeVerdict = document.schemas["goal-judge-verdict"] as {
+		required?: string[];
+		properties?: Record<string, unknown>;
+	};
+	assert.ok(!judgeVerdict.required?.includes("nextDirection"));
+	assert.equal(judgeVerdict.properties?.nextDirection, undefined);
 
 	const feedback = document.schemas["surface-feedback"] as {
 		properties: { kind: { enum: string[] } };
@@ -100,11 +118,45 @@ test("tob-goal YAML drops inline GoalSpec and hunt-candidate re-entry", () => {
 		required: string[];
 		properties: Record<string, unknown>;
 	};
-	assert.deepEqual(huntOutput.required, ["candidate", "exhaustion"]);
+	assert.deepEqual(huntOutput.required, ["candidate"]);
+	assert.equal(huntOutput.properties.exhaustion, undefined);
 	assert.equal(huntOutput.properties.outcome, undefined);
+	assert.equal(document.schemas["goal-exhaustion-declaration"], undefined);
 
 	assert.equal(document.stages["goal-surface"]?.goal, true);
+	assert.equal(document.stages["goal-surface"]?.goalPreserving, true);
 	assert.equal(document.stages["goal-surface"]?.runtime.goalSession, "shared");
+	assert.equal(document.stages["goal-hunt"]?.runtime.goalSession, "per-task");
+	assert.equal(document.stages["goal-hunt"]?.runtime.persistent, false);
+	assert.match(
+		document.stages["goal-surface"]?.runtime.prompt ?? "",
+		/mark the thread goal complete/,
+	);
+	assert.match(
+		document.stages["goal-surface"]?.runtime.prompt ?? "",
+		/decide the next direction yourself/,
+	);
+	assert.match(
+		document.stages["goal-judge"]?.runtime.prompt ?? "",
+		/Do not propose the next hunt surface/,
+	);
+	assert.doesNotMatch(
+		document.stages["goal-surface"]?.runtime.prompt ?? "",
+		/\{\{goalPrompt\}\}/,
+	);
+	assert.match(document.stages["goal-hunt"]?.runtime.prompt ?? "", /\{\{goalPrompt\}\}/);
+	assert.match(
+		document.stages["goal-hunt"]?.runtime.prompt ?? "",
+		/Do not write \/task\/output\.json or mark the thread goal complete/,
+	);
+	assert.doesNotMatch(
+		document.stages["goal-hunt"]?.runtime.prompt ?? "",
+		/runtime activates|Structured JSON output requirement/i,
+	);
+	assert.doesNotMatch(
+		document.stages["goal-surface"]?.runtime.prompt ?? "",
+		/this stage is launched as/i,
+	);
 	assert.deepEqual(document.stages["goal-craft"]?.inputSchema, {
 		$ref: "#/schemas/goal-craft-input",
 	});
@@ -126,6 +178,32 @@ test("tob-goal YAML drops inline GoalSpec and hunt-candidate re-entry", () => {
 		(craftToSurface.input as Record<string, unknown>).goalSpec,
 		undefined,
 	);
+	assert.equal(
+		(craftToSurface.input as Record<string, unknown>).goalPrompt,
+		undefined,
+	);
+	const judgeToSurface = document.edges.find(
+		(edge) => edge.name === "goal-judge-reject-to-goal-surface",
+	);
+	const judgeFeedback = judgeToSurface?.input as {
+		feedback?: { payload?: Record<string, unknown> };
+	};
+	assert.equal(judgeFeedback?.feedback?.payload?.nextDirection, undefined);
+	assert.equal(
+		judgeFeedback?.feedback?.payload?.judgeReasons,
+		"$output.reasons",
+	);
+	const surfaceToHunt = document.edges.find(
+		(edge) => edge.name === "goal-surface-to-goal-hunt",
+	);
+	assert.equal(
+		(surfaceToHunt?.input as Record<string, unknown>).goalPrompt,
+		"$item.goalPrompt",
+	);
+	assert.equal(
+		(surfaceToHunt?.input as Record<string, unknown>).plannerGoalPrompt,
+		undefined,
+	);
 
 	const candidateEdges = document.edges.filter(
 		(edge) => edge.from === "goal-hunt" && edge.route?.key === "candidate",
@@ -137,10 +215,9 @@ test("tob-goal YAML drops inline GoalSpec and hunt-candidate re-entry", () => {
 	const exhaustedEdges = document.edges.filter(
 		(edge) => edge.from === "goal-hunt" && edge.route?.key === "exhausted",
 	);
-	assert.deepEqual(
-		exhaustedEdges.map((edge) => edge.to),
-		["goal-surface"],
-	);
+	assert.deepEqual(exhaustedEdges, []);
+	assert.ok(!edgeNames.includes("goal-hunt-exhausted-to-goal-surface"));
+	assert.ok(!feedback.properties.kind.enum.includes("hunt-exhausted"));
 });
 
 test("V2 tob-goal hunt-goal schema uses scopeStatement instead of objective", () => {
@@ -155,6 +232,23 @@ test("V2 tob-goal hunt-goal schema uses scopeStatement instead of objective", ()
 	assert.equal(
 		(definitions.schemas.GoalCraftOutput as { required?: string[] }).required?.includes(
 			"goalSpec",
+		),
+		false,
+	);
+	assert.equal(
+		(definitions.schemas.GoalCraftOutput as { required?: string[] }).required?.includes(
+			"goalPrompt",
+		),
+		false,
+	);
+	assert.ok(
+		(definitions.schemas.HuntGoal as { required?: string[] }).required?.includes(
+			"goalPrompt",
+		),
+	);
+	assert.equal(
+		(definitions.schemas.GoalJudgeVerdict as { required?: string[] }).required?.includes(
+			"nextDirection",
 		),
 		false,
 	);

@@ -1154,7 +1154,9 @@ export default function Page({
 				</SidebarFooter>
 				<SidebarRail />
 			</Sidebar>
-			<SidebarInset className={fullHeight ? "overflow-hidden" : undefined}>
+			<SidebarInset
+				className={cn("min-w-0", fullHeight && "overflow-hidden")}
+			>
 				{!hideBreadcrumb &&
 					!includesProjects &&
 					!includesDatasets &&
@@ -1185,7 +1187,7 @@ export default function Page({
 
 				<div
 					className={cn(
-						"flex flex-col w-full p-4 pt-0",
+						"flex min-w-0 w-full flex-col p-4 pt-0",
 						fullHeight && "min-h-0 flex-1 overflow-hidden",
 					)}
 				>

@@ -73,7 +73,7 @@ export const resolveCheckoutToolsDefinition = async (): Promise<CheckoutToolsAss
 	const [dockerfilePath, codexAcpPatchPath, acpDriverPath, agentEventsPath] =
 		await Promise.all([
 			resolveAssetPath("Dockerfile.scan-tools"),
-			resolveAssetPath("codex-acp-fork-1.1.2.patch"),
+			resolveAssetPath("codex-acp-fork-1.3.0.patch"),
 			resolveAssetPath("vulseek-acp-driver.mjs"),
 			resolveAgentEventsPath(),
 		]);

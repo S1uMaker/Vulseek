@@ -47,6 +47,13 @@ export const ComposeActions = ({ composeId }: Props) => {
 	return (
 		<>
 			<div className="flex flex-row gap-4 w-full flex-wrap ">
+				<CheckoutImageAction
+					target={{ composeId }}
+					onCheckoutComplete={async () => {
+						await refetch();
+						await refetchScanJobs();
+					}}
+				/>
 				<RunPipelineDialog
 					target={{ type: "compose", composeId }}
 				/>

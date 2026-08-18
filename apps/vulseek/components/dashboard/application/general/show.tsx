@@ -57,6 +57,13 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 					</CardTitle>
 				</CardHeader>
 				<CardContent className="flex flex-row gap-4 flex-wrap">
+					<CheckoutImageAction
+						target={{ applicationId }}
+						onCheckoutComplete={async () => {
+							await refetch();
+							await refetchScanJobs();
+						}}
+					/>
 					<RunPipelineDialog
 						target={{ type: "application", applicationId }}
 						defaultPipelineId={data?.defaultPipelineId ?? null}

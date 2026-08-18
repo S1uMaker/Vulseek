@@ -1,6 +1,7 @@
 export type AgentActivityKind =
 	| "waiting"
 	| "prompt"
+	| "goal"
 	| "reasoning"
 	| "writing"
 	| "planning"
@@ -16,7 +17,28 @@ export type AgentActivity = {
 	label: string;
 	detail?: string;
 	toolCallId?: string;
+	goal?: AgentGoalSnapshot | null;
 	timestamp?: string;
+};
+
+export type AgentGoalStatus =
+	| "active"
+	| "paused"
+	| "blocked"
+	| "limited"
+	| "complete";
+
+export type AgentGoalSnapshot = {
+	objective: string;
+	status: AgentGoalStatus;
+	controlMethod: "_session/goal";
+	iterations?: number;
+	lastReason?: string | null;
+	createdAt?: number;
+	updatedAt?: number;
+	tokenBudget?: number | null;
+	tokensUsed?: number;
+	timeUsedSeconds?: number;
 };
 
 export type AgentActivitySnapshot = {

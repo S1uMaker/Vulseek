@@ -1,10 +1,12 @@
 ---
 name: goal-hunt
-description: Pursue one hunt surface to a single candidate or exhaustion for ToB Goal scans.
+description: Pursue one hunt surface to a single candidate for ToB Goal scans.
 ---
 
 # Goal Hunt
 
-The runtime constructs one **Codex native `/goal`** from the durable GoalSpec and the assigned surface. One hunt, one outcome. Choose methods freely and prefer evidence over speculation.
+Follow the per-surface `goalPrompt` from Surface (the task prompt). One hunt, one outcome. Choose methods freely and prefer evidence over speculation.
 
-When done, return exactly one candidate or one exhaustion declaration. The runtime owns the envelope route; **validate `/task/output.json` against `/task/output.schema.json` with Python `jsonschema` before ending the turn**. Do not invent alternate field names.
+Keep the thread goal active through a real investigation. A first-pass grep or a single suspicious sink is not done. Change method at least once (manual source-to-sink plus Semgrep/CodeQL, or a second subsystem) before writing output. Do not emit a speculative candidate just to finish the turn. Do not declare exhaustion.
+
+When the candidate is actually evidenced, write it to `/task/output.json`, validate with Python `jsonschema` against `/task/output.schema.json`, then mark the goal complete. The runtime owns the envelope route. Do not invent alternate field names.

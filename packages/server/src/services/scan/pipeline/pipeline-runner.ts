@@ -109,6 +109,7 @@ import {
 } from "./runtime-loop-snapshot";
 import { loadScanPipelineDefinitions } from "./scan-pipeline-definitions";
 import { validateStructuredOutputSchemaSource } from "./scan-pipeline-schema-contracts";
+import { ensureSurfaceCoverageFile } from "./tob-goal-coverage";
 import type {
 	StageDefinition,
 	StageExecution,
@@ -299,7 +300,10 @@ const ensureTaskRuntimeDirectory = async (ctx: StageContext) => {
 	const taskDirPath = await ctx.taskDir();
 	await fs.mkdir(taskDirPath, { recursive: true });
 	if (ctx.laneIndex !== null) {
-		await ctx.laneDir();
+		const laneDir = await ctx.laneDir();
+		if (ctx.stageName === "goal-surface") {
+			await ensureSurfaceCoverageFile(laneDir);
+		}
 	}
 	return {
 		taskDir: taskDirPath,

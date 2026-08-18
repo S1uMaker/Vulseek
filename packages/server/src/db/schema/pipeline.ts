@@ -77,6 +77,7 @@ export const apiCreatePipelineRun = z.object({
 	]),
 	pipelineId: z.string().min(1),
 	pipelineVersionId: z.string().min(1).optional(),
+	pipelineProfileId: z.string().min(1).optional(),
 	repository: z
 		.object({
 			targetRef: z.string().optional(),

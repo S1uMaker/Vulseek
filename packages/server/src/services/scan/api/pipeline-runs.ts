@@ -12,6 +12,7 @@ import {
 	type PipelineDocumentV3,
 } from "../pipeline/document-v3";
 import { createScanJobRepo } from "../persistence/scan-job.repo";
+import { findPipelineProfileForOrganization } from "../../pipeline-profiles";
 
 /**
  * V3 run creation. Resolves the exact published version (explicit id or the
@@ -43,6 +44,7 @@ export type CreatePipelineRunInput = {
 	};
 	title?: string;
 	description?: string;
+	pipelineProfileId?: string;
 	scanRuntimeSettings?: ScanRuntimeSettings;
 	stageOverrides?: Record<
 		string,
@@ -52,6 +54,28 @@ export type CreatePipelineRunInput = {
 			agentProfileId?: string | null;
 		}
 	>;
+};
+
+const runtimeSettingsToStageOverrides = (
+	settings: ScanRuntimeSettings,
+): NonNullable<CreatePipelineRunInput["stageOverrides"]> => {
+	const stages = settings.stages ?? {};
+	return Object.fromEntries(
+		Object.entries(stages).map(([stageId, setting]) => [
+			stageId,
+			{
+				...(setting.disabled === undefined
+					? {}
+					: { enabled: setting.disabled !== true }),
+				...(setting.concurrency == null
+					? {}
+					: { concurrency: setting.concurrency }),
+				...(setting.agentProfileId === undefined
+					? {}
+					: { agentProfileId: setting.agentProfileId }),
+			},
+		]),
+	);
 };
 
 const isCompiledDefinition = (value: unknown): value is CompiledPipelineDefinition =>
@@ -209,6 +233,23 @@ export const createPipelineRun = async (
 		now.getTime() + compiled.limits.maxDurationSeconds * 1000,
 	).toISOString();
 
+	let scanRuntimeSettings = input.scanRuntimeSettings ?? {};
+	let stageOverrides = input.stageOverrides;
+	if (input.pipelineProfileId) {
+		const profile = await findPipelineProfileForOrganization(
+			input.organizationId,
+			input.pipelineProfileId,
+		);
+		if (profile.pipelineId !== pipeline.pipelineId) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "Pipeline profile does not belong to this pipeline",
+			});
+		}
+		scanRuntimeSettings = profile.settings ?? {};
+		stageOverrides = runtimeSettingsToStageOverrides(scanRuntimeSettings);
+	}
+
 	const scanJob = await createScanJobRepo({
 		applicationId: input.target.type === "application" ? input.target.applicationId : null,
 		composeId: input.target.type === "compose" ? input.target.composeId : null,
@@ -224,13 +265,13 @@ export const createPipelineRun = async (
 		targetRef: input.repository?.targetRef ?? null,
 		targetTag: input.repository?.targetTag ?? null,
 		commitWindow: input.repository?.commitWindow ?? 3,
-		scanRuntimeSettings: input.scanRuntimeSettings ?? {},
+		scanRuntimeSettings,
 		pipelineId: pipeline.pipelineId,
 		pipelineVersionId: version.pipelineVersionId,
 		pipelineYamlSnapshot: version.yaml,
 		pipelineCompiledSnapshot: {
 			...compiled,
-			stageOverrides: input.stageOverrides,
+			stageOverrides,
 		} as unknown as Record<string, unknown>,
 		maxTasks: compiled.limits.maxTasks,
 		deadlineAt,

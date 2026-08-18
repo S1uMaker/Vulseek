@@ -99,6 +99,12 @@ import type {
 } from "./scan/pipeline/pipeline-definition";
 import { createPipelineDefinition } from "./scan/pipeline/pipeline-definition";
 import {
+	collectDispatchedHuntGoalIds,
+	filterNewHuntInputs,
+	huntGoalDispatchKey,
+	readHuntGoalId,
+} from "./scan/pipeline/tob-goal-coverage";
+import {
 	finalizeScanJob,
 	runPipeline,
 	startPipelineRuntime,
@@ -1450,7 +1456,7 @@ const executeCheckoutToolsBuild = async (input: {
 			fs.writeFile(dockerfilePath, assets.dockerfile, "utf8"),
 			fs.copyFile(
 				assets.codexAcpPatchPath,
-				path.join(tempDir, "codex-acp-fork-1.1.2.patch"),
+				path.join(tempDir, "codex-acp-fork-1.3.0.patch"),
 			),
 			fs.copyFile(
 				assets.acpDriverPath,
@@ -4199,6 +4205,7 @@ const toGenericStageConfig = (stage: ScanPipelineStageConfig) =>
 		concurrency: stage.concurrency,
 		maxConcurrency: stage.maxConcurrency ?? undefined,
 		goal: stage.goal,
+		goalPreserving: stage.goalPreserving,
 		runtime: stage.runtimeConfig || {},
 		inputArtifacts: stage.inputArtifacts,
 		outputArtifacts: stage.outputArtifacts,
@@ -4321,7 +4328,7 @@ const buildPipelineFromStageConfigs = (input: {
 					context,
 					fromTask,
 				);
-				return (await transformPipelineEdgeInput(
+				const mapped = (await transformPipelineEdgeInput(
 					{
 						mode: edgeConfig.mode,
 						foreach: edgeConfig.foreach,
@@ -4339,6 +4346,16 @@ const buildPipelineFromStageConfigs = (input: {
 						allowedRoots: [fromTaskDir],
 					},
 				)) as unknown[];
+				if (edgeConfig.to !== "goal-hunt") {
+					return mapped;
+				}
+				const dispatchedHuntGoalIds = collectDispatchedHuntGoalIds(
+					await listTasksByScanJobAndStageRepo({
+						scanJobId: context.scanJob.scanJobId,
+						stageName: "goal-hunt",
+					}),
+				);
+				return filterNewHuntInputs(mapped, dispatchedHuntGoalIds);
 			},
 			createTasks: async (taskInput: {
 				ctx: FullScanPipelineContext;
@@ -4402,7 +4419,12 @@ const buildPipelineFromStageConfigs = (input: {
 							: input.useTaskNameResolvers
 								? resolveStageTaskName(edgeConfig.to, taskNameInput)
 								: `${targetConfig.name} ${index + 1}`;
-					const taskId = createTaskIdForDispatchKey(dispatchKeyForItem(index));
+					const huntGoalId = readHuntGoalId(input);
+					const dispatchKey =
+						edgeConfig.to === "goal-hunt" && huntGoalId
+							? huntGoalDispatchKey(context.scanJob.scanJobId, huntGoalId)
+							: dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
 						stageName: edgeConfig.to,
@@ -4456,7 +4478,7 @@ const buildPipelineFromStageConfigs = (input: {
 					}
 					const task = await createTaskRepo({
 						taskId,
-						dispatchKey: dispatchKeyForItem(index),
+						dispatchKey,
 						scanJobId: context.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: taskName,
@@ -4469,6 +4491,13 @@ const buildPipelineFromStageConfigs = (input: {
 								: null,
 						input,
 					});
+					if (
+						edgeConfig.to === "goal-hunt" &&
+						task.parentTaskId &&
+						task.parentTaskId !== fromTaskId
+					) {
+						continue;
+					}
 					taskIds.push(task.taskId);
 				}
 				return taskIds;
@@ -4535,6 +4564,7 @@ const toStageConfigFromCompiled = (
 	maxConcurrency: stage.maxConcurrency ?? null,
 	disableable: stage.disableable,
 	goal: stage.goal ?? false,
+	goalPreserving: stage.goalPreserving ?? false,
 	description: stage.description ?? null,
 	inputSchema: stage.inputSchema ?? null,
 	outputSchema: stage.outputSchema ?? null,

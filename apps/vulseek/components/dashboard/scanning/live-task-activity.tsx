@@ -180,7 +180,7 @@ export const LiveTaskActivityButton = ({
 				{iconOnly ? null : scanT(t, "scan.activity.view", "View")}
 			</Button>
 			<Dialog open={isOpen} onOpenChange={setIsOpen}>
-				<DialogContent className="max-w-5xl">
+				<DialogContent className="sm:max-w-7xl">
 					<DialogHeader>
 						<DialogTitle>{title}</DialogTitle>
 						<DialogDescription>

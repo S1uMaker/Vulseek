@@ -187,6 +187,7 @@ export const bindStageLaneRuntimeRepo = async (input: {
 	containerName?: string | null;
 	threadId?: string | null;
 	driverPid?: number | null;
+	initialGoalPrompt?: string | null;
 }) =>
 	await db
 		.update(scanStageLaneRuntimes)
@@ -196,6 +197,9 @@ export const bindStageLaneRuntimeRepo = async (input: {
 				: {}),
 			...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
 			...(input.driverPid !== undefined ? { driverPid: input.driverPid } : {}),
+			...(input.initialGoalPrompt !== undefined
+				? { initialGoalPrompt: input.initialGoalPrompt }
+				: {}),
 			updatedAt: new Date().toISOString(),
 		})
 		.where(

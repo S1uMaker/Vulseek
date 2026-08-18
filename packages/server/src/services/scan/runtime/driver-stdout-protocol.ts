@@ -13,6 +13,8 @@ export type DriverTaskEvent = DriverStdoutEvent & {
 export type ParsedDriverStdout = {
 	events: DriverStdoutEvent[];
 	latestActivity: unknown | null;
+	activityRevision: number;
+	activityEvents: Array<{ revision: number; activity: unknown }>;
 	latestUsage: unknown | null;
 	latestTask: DriverTaskEvent | null;
 	latestLog: DriverStdoutEvent | null;
@@ -44,6 +46,8 @@ export const parseDriverStdout = (content: string): ParsedDriverStdout => {
 	const parsed: ParsedDriverStdout = {
 		events: [],
 		latestActivity: null,
+		activityRevision: 0,
+		activityEvents: [],
 		latestUsage: null,
 		latestTask: null,
 		latestLog: null,
@@ -66,6 +70,12 @@ export const parseDriverStdout = (content: string): ParsedDriverStdout => {
 		switch (value.type) {
 			case "activity":
 				parsed.latestActivity = value.activity ?? null;
+				parsed.activityRevision += 1;
+				parsed.activityEvents.push({
+					revision: parsed.activityRevision,
+					activity: value.activity ?? null,
+				});
+				if (parsed.activityEvents.length > 256) parsed.activityEvents.shift();
 				break;
 			case "usage":
 				parsed.latestUsage = value.usage ?? null;

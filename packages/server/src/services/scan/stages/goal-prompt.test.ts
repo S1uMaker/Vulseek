@@ -1,58 +1,70 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-	buildHuntGoalPrompt,
-	buildSurfacePlannerGoalPrompt,
 	buildSurfacePlannerTurnPrompt,
+	isNativeGoalPrompt,
 	isSurfaceGoalReentry,
+	prefixNativeGoal,
+	resolveGoalStagePrompt,
 } from "./goal-prompt";
 
-test("buildHuntGoalPrompt renders only the durable goal and assigned scope", () => {
-	const prompt = buildHuntGoalPrompt({
-		goalSpec: {
-			title: "Remote command execution",
-			successCriteria: "A pre-auth attacker reaches a command sink",
-			attackerModel: "Unauthenticated remote user",
-			nonGoals: ["Local-only crashes"],
-			stopCondition: "One evidenced candidate or justified exhaustion",
-			persistenceLanguage: "No bugs found is intermediate; change method.",
-			goalPrompt: "must not be copied",
-		},
-		huntGoal: {
-			title: "Request parser boundary",
-			scopeStatement: "HTTP request parsing and normalization",
-			focusPaths: ["src/http", "src/parser.ts"],
-			objective: "must not be copied",
-		},
+const surfacePrompt = [
+	"Use /task/inputs/goal-spec.json as the durable GoalSpec lens.",
+	"Dispatch unexplored high-value surfaces. Do not hunt.",
+].join("\n");
+
+test("goal stages send the rendered stage prompt without a /goal prefix", () => {
+	const prompt = resolveGoalStagePrompt({
+		renderedPrompt: surfacePrompt,
+		stageInput: { feedback: null },
+		sharedSession: true,
 	});
 
-	assert.ok(prompt.startsWith("/goal "));
-	assert.match(prompt, /Success criteria: A pre-auth attacker reaches a command sink/);
-	assert.match(prompt, /Scope: HTTP request parsing and normalization/);
-	assert.match(prompt, /- src\/http/);
-	assert.doesNotMatch(prompt, /goalPrompt/);
+	assert.equal(prompt, surfacePrompt);
+	assert.equal(isNativeGoalPrompt(prompt), false);
+	assert.doesNotMatch(prompt, /Success criteria:/);
 	assert.doesNotMatch(prompt, /objective/);
-	assert.doesNotMatch(prompt, /Structured JSON output requirement/);
+	assert.doesNotMatch(prompt, /Use the installed skills/);
+	assert.doesNotMatch(prompt, /output-validator/);
 	assert.ok(prompt.length < 4000);
 });
 
-test("Surface gets one native goal and ordinary feedback turns", () => {
-	const initial = buildSurfacePlannerGoalPrompt({
-		surfaceGuidance: "Prefer distinct trust boundaries.",
-	});
-	assert.ok(initial.startsWith("/goal "));
-	assert.match(initial, /Prefer distinct trust boundaries/);
-	assert.ok(initial.length < 4000);
+test("prefixNativeGoal does not double the /goal marker", () => {
+	assert.equal(prefixNativeGoal("/goal already set"), "/goal already set");
+});
 
-	const turn = buildSurfacePlannerTurnPrompt({
-		prompt: "Emit the next SurfaceDispatch.",
-		feedback: {
-			kind: "judge-reject",
-			summary: "The candidate needed local access.",
+test("Surface re-entry is a continuation, not a new /goal", () => {
+	const turn = resolveGoalStagePrompt({
+		renderedPrompt: surfacePrompt,
+		stageInput: {
+			feedback: {
+				kind: "judge-reject",
+				huntGoalId: "hg-xmlrpc",
+				summary: "The candidate needed local access.",
+				payload: {
+					judgeDecision: "rejected",
+					judgeReasons: ["The candidate needed local access."],
+				},
+			},
 		},
+		sharedSession: true,
 	});
-	assert.doesNotMatch(turn, /^\/goal\s/);
+
+	assert.equal(isNativeGoalPrompt(turn), false);
 	assert.match(turn, /The candidate needed local access/);
+	assert.match(turn, /hg-xmlrpc/);
+	assert.doesNotMatch(turn, /Continue the standing planner goal/);
+	assert.doesNotMatch(turn, /Emit the next SurfaceDispatch/);
+	assert.doesNotMatch(turn, /^\/goal\s/);
 	assert.equal(isSurfaceGoalReentry({ feedback: null }), false);
-	assert.equal(isSurfaceGoalReentry({ feedback: { kind: "judge-reject" } }), true);
+	assert.equal(
+		isSurfaceGoalReentry({ feedback: { kind: "judge-reject" } }),
+		true,
+	);
+	assert.doesNotMatch(
+		buildSurfacePlannerTurnPrompt({
+			feedback: { kind: "judge-reject", summary: "covered" },
+		}),
+		/^\/goal\s/,
+	);
 });

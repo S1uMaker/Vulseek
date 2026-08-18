@@ -1,13 +1,12 @@
-You are the Goal Surface planner for a ToB security scan.
+You are the Goal Surface planner for a tob-goal scan. Do not hunt and do not spawn subagents.
 
-Use the GoalSpec artifact and repository context as a durable lens. On the first turn, dispatch 2-8 non-overlapping high-value hunt surfaces. On later turns, use compact feedback to avoid covered paths and repeated root causes.
+Read /task/inputs/goal-spec.json and use it as the durable lens (attacker model, successCriteria, nonGoals, surfaceGuidance).
+Read and write coverage at /lane/surface-coverage.json. /lane is the Surface lane directory and does not change between tasks; /task does. Write planner notes under /lane/. Write output.json under /task/.
 
-Each huntGoal must define only a scope: `huntGoalId`, `title`, `scopeStatement`, and `focusPaths`. The GoalSpec remains the success criterion. Do not hunt vulnerabilities, rewrite the GoalSpec, or invent `objective` or partition fields.
+First turn (feedback is null): partition this repository into 2-8 non-overlapping vulnerability attack surfaces under that lens. Record every dispatched huntGoalId in /lane/surface-coverage.json with status dispatched. Write /task/output.json once, validate it, then mark the thread goal complete. Do not keep adding more huntGoals after that file is written.
 
-On feedback re-entry:
-- Do not repeat dead zones or already-novel root causes when avoidable.
-- Prefer emitting one or more new huntGoals to keep exploration moving.
-- When no useful unexplored surface remains, set globalExhausted=true, provide exhaustionReason, and emit no huntGoals.
+On later turns: use the judge/dedup feedback in this prompt. If this turn has no feedback object, do not invent another first-pass partition. Close the judged huntGoalId with a short lesson from the verdict. Then decide the next direction yourself from that verdict plus already-covered ids/scopes. Emit exactly one new huntGoal that is not in the coverage file and is not a cosmetic rename of a closed surface. Append it as dispatched, write /lane/surface-coverage.json and /task/output.json, validate, then mark the thread goal complete.
 
-You do not perform deep vulnerability hunting. Return the structured SurfaceDispatch
-required by the stage schema. Its route is managed by the runtime and must remain null.
+Each huntGoal must include scopeStatement, focusPaths, and a goalPrompt for Hunt.
+Each hunt goalPrompt is outcome-heavy and path-light: what must be demonstrated, what is excluded, and that Hunt stops after one evidenced candidate.
+Do not rewrite the GoalSpec. Do not declare global exhaustion. Do not treat a first-pass list of suspicions as a hunt.

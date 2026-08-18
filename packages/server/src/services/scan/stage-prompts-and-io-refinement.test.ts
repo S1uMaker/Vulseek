@@ -198,11 +198,11 @@ test("Stage Graph prompt templates stay concise while delegating detail to skill
 		},
 	);
 	assert.match(repositoryPrompt, /repository-profile skill/);
-	assert.match(repositoryPrompt, /entryPoints, trustBoundaries, attackSurfaces, vulnerabilityThemes, and runtimeComponents/);
+	assert.match(repositoryPrompt, /\/task\/output\.json/);
 	assert.match(repositoryPrompt, /Produce at least 4 modules/);
-	assert.match(repositoryPrompt, /Large repositories may produce more than 20 modules/);
 	assert.doesNotMatch(repositoryPrompt, /attackerControlledInputs/);
 	assert.doesNotMatch(repositoryPrompt, /dangerousSinks/);
+	assert.doesNotMatch(repositoryPrompt, /Use shell inspection commands/);
 
 	const repositorySkill = readSkillSource("repository-profile");
 	assert.match(repositorySkill, /downstream generic vulnerability mining/i);
@@ -250,7 +250,8 @@ test("built-in V3 prompts leave output protocol generation to runtime", () => {
 		/always route back/i,
 		/output\.schema\.json/i,
 		/set (?:the )?(?:route|exit) to/i,
-		/write .*output\.json/i,
+		/Runtime output protocol/i,
+		/do not rely on the chat response/i,
 		/selected object type must match the selected route/i,
 	];
 

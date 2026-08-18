@@ -132,7 +132,7 @@ describe("checkout tools definition", () => {
 		expect(toolsDockerfile).not.toContain("AS repository-source");
 		expect(toolsDockerfile).not.toContain("codex-acp-builder");
 		expect(toolsDockerfile).not.toContain("sandbox-agent");
-		expect(toolsDockerfile).toContain("@agentclientprotocol/sdk@1.2.1");
+		expect(toolsDockerfile).toContain("@agentclientprotocol/sdk@1.3.0");
 		expect(checkoutDockerfile).toContain("ARG VULSEEK_TOOLS_IMAGE");
 		expect(checkoutDockerfile).not.toContain("# syntax=docker/dockerfile:1");
 		expect(checkoutDockerfile).toContain(

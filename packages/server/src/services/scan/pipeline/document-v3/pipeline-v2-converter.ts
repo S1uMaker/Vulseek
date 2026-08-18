@@ -146,6 +146,7 @@ const convertStage = (
 				: {}),
 			disableable: stage.disableable,
 			goal: stage.goal,
+			...(stage.goalPreserving ? { goalPreserving: true } : {}),
 				runtime: {
 					kind: "agent",
 					...(runtimeConfig?.agentProfile

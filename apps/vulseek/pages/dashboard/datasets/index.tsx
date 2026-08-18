@@ -84,8 +84,7 @@ const DatasetsPage = () => {
 								description={dataset.description || "No description"}
 								icon={<Database />}
 								footer={
-									<div className="flex w-full items-center justify-between gap-4 text-xs text-muted-foreground">
-										<span>{dataset.sampleCount} samples</span>
+									<div className="flex w-full items-center justify-end text-xs text-muted-foreground">
 										<span className="text-foreground/80">
 											{dataset.evaluationCount}{" "}
 											{dataset.evaluationCount === 1

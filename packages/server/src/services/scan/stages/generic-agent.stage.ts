@@ -1,5 +1,9 @@
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
+	bindStageLaneRuntimeRepo,
+	findStageLaneRuntimeByActiveTaskIdRepo,
+} from "../persistence/stage-lane-runtime.repo";
+import {
 	syncVulnerabilityCandidatesFromProducerTask,
 	type CandidateSyncTransaction,
 } from "../persistence/candidate.repo";
@@ -10,6 +14,7 @@ import {
 } from "../pipeline/stage-definition";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { renderPipelineTemplate } from "../pipeline/scan-pipeline-edge-transform";
+import { surfaceCoverageContainerPath } from "../pipeline/tob-goal-coverage";
 import type { YamlPipelineStage } from "../pipeline/yaml-pipeline-runtime";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
@@ -38,11 +43,8 @@ import {
 	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
 import {
-	buildGoalPrompt,
-	buildHuntGoalPrompt,
-	buildSurfacePlannerGoalPrompt,
-	buildSurfacePlannerTurnPrompt,
 	isSurfaceGoalReentry,
+	resolveGoalStagePrompt,
 } from "./goal-prompt";
 import {
 	type PipelineContext,
@@ -81,7 +83,7 @@ export const resolveStageReuseContainer = (
 	goalSession?: "shared" | "per-task",
 ) =>
 	goalSession === "shared"
-		? configured
+		? true
 		: isResearchStage(stageName) || goal
 			? false
 			: configured;
@@ -131,11 +133,14 @@ const resolvePromptValues = async (
 ) => {
 	const taskDir = await ctx.taskDir();
 	const taskDirContainer = await ctx.taskDirContainer();
+	const laneDirContainer =
+		ctx.laneIndex !== null ? await ctx.laneDirContainer() : "";
 	const agentProfile = await ctx.agentProfile();
 	const templateContext = {
 		...ctx,
 		taskDir: taskDirContainer,
 		taskDirHost: taskDir,
+		laneDir: laneDirContainer,
 	};
 	const rendered = await renderPipelineTemplate(
 		{
@@ -143,6 +148,10 @@ const resolvePromptValues = async (
 			taskName: ctx.taskName,
 			taskDir: taskDirContainer,
 			taskDirHost: taskDir,
+			laneDir: laneDirContainer,
+			laneCoveragePath: laneDirContainer
+				? surfaceCoverageContainerPath(laneDirContainer)
+				: "",
 			scanJobId: ctx.scanJobId,
 			taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
 			thinkingInstruction: agentProfile?.thinkingLevelEnabled
@@ -291,59 +300,41 @@ export function createGenericAgentStageDefinition<
 				stageCtx,
 				promptTemplate,
 				promptValues,
+				{ injectSkills: !input.config.goal },
 			);
-			let stagePrompt = renderedPrompt;
-			if (input.config.goal) {
-				const taskDir = await stageCtx.taskDir();
-				const goalSpecPath =
-					effectiveStageInput &&
-					typeof effectiveStageInput === "object" &&
-					!Array.isArray(effectiveStageInput) &&
-					typeof (effectiveStageInput as Record<string, unknown>).goalSpecPath ===
-						"string"
-						? (effectiveStageInput as Record<string, unknown>).goalSpecPath as string
-						: null;
-				const goalSpec = goalSpecPath
-					? await readTaskJsonArtifact({
-							taskDir,
-							containerPath: goalSpecPath,
-						  }).catch(() => null)
-					: null;
-				if (stageCtx.stageName === "goal-surface") {
-					stagePrompt = isSurfaceGoalReentry(effectiveStageInput)
-						? buildSurfacePlannerTurnPrompt({
-								prompt: renderedPrompt,
-								feedback: (effectiveStageInput as Record<string, unknown>)
-									.feedback,
-						  })
-						: buildSurfacePlannerGoalPrompt({
-								surfaceGuidance:
-									goalSpec &&
-									typeof goalSpec === "object" &&
-									!Array.isArray(goalSpec) &&
-									typeof (goalSpec as Record<string, unknown>).surfaceGuidance ===
-										"string"
-									? ((goalSpec as Record<string, unknown>)
-											.surfaceGuidance as string)
-									: null,
-						  });
-				} else if (stageCtx.stageName === "goal-hunt") {
-					const huntGoal =
-						effectiveStageInput &&
-						typeof effectiveStageInput === "object" &&
-						!Array.isArray(effectiveStageInput)
-							? (effectiveStageInput as Record<string, unknown>).huntGoal
-							: null;
-					stagePrompt = buildHuntGoalPrompt({
-						goalSpec: goalSpec ?? {},
-						huntGoal: huntGoal ?? {},
-					});
-				} else {
-					stagePrompt = buildGoalPrompt({
-						prompt: renderedPrompt,
-						input: effectiveStageInput,
-					});
-				}
+			const sharedSession = input.config.runtime.goalSession === "shared";
+			const reentry = Boolean(
+				input.config.goal &&
+					sharedSession &&
+					isSurfaceGoalReentry(effectiveStageInput),
+			);
+			const stagePrompt = input.config.goal
+				? resolveGoalStagePrompt({
+						renderedPrompt,
+						stageInput: effectiveStageInput,
+						sharedSession,
+					})
+				: renderedPrompt;
+			const followUpPrompt = reentry ? stagePrompt : null;
+			const standingPrompt = reentry ? "" : stagePrompt;
+			const lane = await findStageLaneRuntimeByActiveTaskIdRepo(
+				stageCtx.taskId,
+			).catch(() => null);
+			let initialGoalPrompt = lane?.initialGoalPrompt ?? null;
+			if (
+				input.config.goal &&
+				input.config.goalPreserving &&
+				standingPrompt &&
+				!initialGoalPrompt &&
+				lane
+			) {
+				await bindStageLaneRuntimeRepo({
+					scanJobId: stageCtx.scanJobId,
+					stageName: stageCtx.stageName,
+					laneIndex: lane.laneIndex,
+					initialGoalPrompt: standingPrompt,
+				});
+				initialGoalPrompt = standingPrompt;
 			}
 			const result = await runSingleTurnAgentInContainer({
 				scanJob,
@@ -366,13 +357,19 @@ export function createGenericAgentStageDefinition<
 				groupedPersistent: stageCtx.groupedPersistent,
 				allowAgentExit: input.config.allowAgentExit,
 				includePolicy: Boolean(input.config.runtime?.includePolicy),
+				goalPreserving: Boolean(input.config.goalPreserving),
+				followUpPrompt,
+				initialGoalPrompt,
+				stageName: stageCtx.stageName,
+				laneIndex: stageCtx.laneIndex,
 				laneThreadId: stageCtx.laneThreadId,
 				laneDriverPid: stageCtx.laneDriverPid,
 				cwd: await resolveStageRuntimeCwd(stageCtx),
 				sessionMode: stageCtx.sessionMode,
 				parentSessionId: stageCtx.parentSessionId,
 				parentTaskId: stageCtx.parentTaskId,
-				prompt: stagePrompt,
+				goal: Boolean(input.config.goal),
+				prompt: standingPrompt,
 				outputSchema: input.outputSchema,
 				routeOutputSchemas: stageCtx.routeOutputSchemas,
 				onThreadId: async (threadId) => {

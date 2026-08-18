@@ -726,20 +726,23 @@ const ProfileDetailPage = () => {
 											</div>
 										) : samples.data?.items.length ? (
 											<>
-												<div className="min-h-0 flex-1 overflow-y-auto pr-2">
-													<RowList>
-														{samples.data.items.map((sample) => (
-															<RowListItem
+													<div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-2">
+														<RowList className="w-full max-w-full">
+															{samples.data.items.map((sample) => (
+																<RowListItem
 																asChild
 																key={sample.sampleId}
 																className={[
-																	"cursor-pointer flex-row items-start justify-start gap-3 hover:bg-muted/30 sm:items-center",
+																		"max-w-full cursor-pointer flex-row items-start justify-start gap-3 overflow-hidden hover:bg-muted/30 sm:items-center",
 																	selectedSampleIds.includes(sample.id)
 																		? "border-primary bg-primary/5"
 																		: "",
 																].join(" ")}
 															>
-																<label htmlFor={`sample-${sample.sampleId}`}>
+																		<label
+																			htmlFor={`sample-${sample.sampleId}`}
+																			className="flex min-w-0 max-w-full flex-1 items-start gap-3 overflow-hidden sm:items-center"
+																		>
 																	<Checkbox
 																		id={`sample-${sample.sampleId}`}
 																		checked={selectedSampleIds.includes(
@@ -751,11 +754,11 @@ const ProfileDetailPage = () => {
 																		aria-label={`Select sample ${sample.id}`}
 																		className="mt-0.5 shrink-0 sm:mt-0"
 																	/>
-																	<span className="grid min-w-0 flex-1 gap-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] sm:items-center sm:gap-4">
-																		<span className="break-words font-medium">
+																			<span className="grid min-w-0 max-w-full flex-1 gap-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] sm:items-center sm:gap-4">
+																			<span className="min-w-0 break-words font-medium">
 																			{sample.title || sample.id}
 																		</span>
-																		<span className="break-all font-mono text-xs text-muted-foreground sm:text-right">
+																			<span className="min-w-0 break-all font-mono text-xs text-muted-foreground sm:text-right">
 																			{sample.id} · {sample.repositoryPath}
 																		</span>
 																	</span>

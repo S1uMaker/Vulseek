@@ -88,6 +88,7 @@ const CONTAINER_WORK_DIRS = [
 	"/workspace/repo",
 	"/scan-context",
 	"/task",
+	"/lane",
 ];
 
 /** Paths inside the sandbox must stay within allowed work dirs (no `..`). */
@@ -356,6 +357,18 @@ export const validatePipelineDocumentV3 = (
 					path: ["stages", stageId, "runtime", "cwd"],
 					entity: { type: "stage", id: stageId },
 				}),
+			);
+		}
+		if (stage.goalPreserving && stage.runtime.persistent !== true) {
+			diagnostics.push(
+				error(
+					"stage.goal_preserving_requires_persistent",
+					`stage "${stageId}" sets goalPreserving but is not persistent`,
+					{
+						path: ["stages", stageId, "goalPreserving"],
+						entity: { type: "stage", id: stageId },
+					},
+				),
 			);
 		}
 		for (const artifact of [

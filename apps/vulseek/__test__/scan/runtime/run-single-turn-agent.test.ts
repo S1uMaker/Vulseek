@@ -4,11 +4,33 @@ import {
 	buildCodexConfigToml,
 	buildResearchContainerEnvPairs,
 	buildStructuredOutputPromptSuffix,
+	remapScanContextAppPathToHost,
 	requireResearchDatabaseContext,
 } from "../../../../../packages/server/src/services/scan/runtime/run-single-turn-agent";
 
 const schema = z.object({
 	value: z.string(),
+});
+
+describe("remapScanContextAppPathToHost", () => {
+	test("rewrites the in-app scan-context path for docker -v", () => {
+		expect(
+			remapScanContextAppPathToHost(
+				"/scan-context/projects/wordpress/profiles/GPT-5.x/jobs/job-1/scanning/full_scan/stages/goal-surface/lanes/lane-0",
+				"/data/exp/vulseek-data-dev",
+			),
+		).toBe(
+			"/data/exp/vulseek-data-dev/projects/wordpress/profiles/GPT-5.x/jobs/job-1/scanning/full_scan/stages/goal-surface/lanes/lane-0",
+		);
+		expect(
+			remapScanContextAppPathToHost(
+				"/data/exp/vulseek-data-dev/projects/wordpress/profiles/GPT-5.x/jobs/job-1/scanning/full_scan/stages/goal-surface/lanes/lane-0",
+				"/data/exp/vulseek-data-dev",
+			),
+		).toBe(
+			"/data/exp/vulseek-data-dev/projects/wordpress/profiles/GPT-5.x/jobs/job-1/scanning/full_scan/stages/goal-surface/lanes/lane-0",
+		);
+	});
 });
 
 describe("buildStructuredOutputPromptSuffix", () => {

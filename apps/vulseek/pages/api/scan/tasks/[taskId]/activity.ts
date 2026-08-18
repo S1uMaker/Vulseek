@@ -26,8 +26,11 @@ const readSnapshot = async (filePath: string) => {
 	const protocol = await driverStdoutTailReader.read(filePath);
 	return {
 		activity: protocol.latestActivity as AgentActivity | null,
+		activityRevision: protocol.activityRevision,
+		activityEvents: protocol.activityEvents,
 		signature: JSON.stringify({
 			activity: protocol.latestActivity,
+			activityRevision: protocol.activityRevision,
 			usage: protocol.latestUsage,
 			task: protocol.latestTask,
 			log: protocol.latestLog,
@@ -93,6 +96,7 @@ export default async function handler(
 
 	let closed = false;
 	let revision: string | null = null;
+	let activityRevision = 0;
 	const cleanup = () => {
 		closed = true;
 		clearInterval(heartbeat);
@@ -109,8 +113,23 @@ export default async function handler(
 		const activity: AgentActivity = snapshot?.activity || idleAgentActivity;
 		if (initial) {
 			sendEvent(res, "snapshot", { metadata: metadataFor(latest), activity });
+			activityRevision = snapshot?.activityRevision || 0;
 		} else if (snapshot && snapshot.signature !== revision) {
-			sendEvent(res, "activity", { metadata: metadataFor(latest), activity });
+			if (snapshot.activityRevision < activityRevision) activityRevision = 0;
+			const nextActivities = snapshot.activityEvents.filter(
+				(event) => event.revision > activityRevision,
+			);
+			if (nextActivities.length) {
+				for (const next of nextActivities) {
+					sendEvent(res, "activity", {
+						metadata: metadataFor(latest),
+						activity: next.activity,
+					});
+				}
+				activityRevision = snapshot.activityRevision;
+			} else {
+				sendEvent(res, "activity", { metadata: metadataFor(latest), activity });
+			}
 		}
 		if (snapshot) revision = snapshot.signature;
 		if (!ACTIVE_STATUSES.has(latest.status)) {

@@ -6,7 +6,7 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-export const VULSEEK_ACP_DRIVER_VERSION = "2026-07-15-sdk-1";
+export const VULSEEK_ACP_DRIVER_VERSION = "2026-08-16-goal-turn-1";
 const PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
 const SNAPSHOT_DEBOUNCE_MS = 150;
 const TERMINAL_TOOL_STATUSES = new Set([
@@ -71,6 +71,15 @@ const activityForEvent = (event) => {
 		return { kind: "reasoning", label: "Thinking" };
 	if (event.kind === "plan") return { kind: "planning", label: "Planning" };
 	if (event.kind === "text") return { kind: "writing", label: "Writing" };
+	if (event.kind === "goal") {
+		if (!event.goal) return { kind: "goal", label: "Goal cleared", goal: null };
+		return {
+			kind: "goal",
+			label: `Goal ${event.goal.status}`,
+			detail: event.goal.objective,
+			goal: event.goal,
+		};
+	}
 	if (event.kind !== "tool") return null;
 	const tool = event.tool_call;
 	const names = {
@@ -277,6 +286,135 @@ const assertCapability = (capabilities, name) => {
 		throw new Error(`ACP adapter does not support session/${name}`);
 };
 
+const hasGoalCapability = (initialized) => {
+	const goal = asRecord(initialized?._meta).goal;
+	return (
+		goal?.version === 1 &&
+		goal?.controlMethod === "_session/goal" &&
+		Array.isArray(goal.actions)
+	);
+};
+
+const isNativeGoalPrompt = (prompt) => /^\s*\/goal(?:\s|$)/i.test(prompt);
+
+const stripGoalPrefix = (prompt) =>
+	prompt.replace(/^\s*\/goal(?:\s+|$)/i, "").trim();
+
+const prefixNativeGoal = (prompt) => {
+	const trimmed = String(prompt ?? "").trim();
+	if (!trimmed) return trimmed;
+	return isNativeGoalPrompt(trimmed) ? trimmed : `/goal ${trimmed}`;
+};
+
+const createDeadline = (timeoutMs) => {
+	const deadline = Date.now() + Math.max(0, timeoutMs);
+	return () => Math.max(1, deadline - Date.now());
+};
+
+const hasValidOutputEnvelopeSync = (filePath) => {
+	if (!filePath) return false;
+	try {
+		return hasStructuredOutputEnvelope(
+			JSON.parse(fsSync.readFileSync(filePath, "utf-8")),
+		);
+	} catch {
+		return false;
+	}
+};
+
+const createGoalTurnSettlement = (hasOutputEnvelope) => {
+	let seenComplete = false;
+	let settled = false;
+	let resolveFn = () => {};
+	const promise = new Promise((resolve) => {
+		resolveFn = resolve;
+	});
+	const trySettle = () => {
+		if (settled) return;
+		if (!seenComplete && !hasOutputEnvelope?.()) return;
+		settled = true;
+		resolveFn();
+	};
+	return {
+		promise,
+		onGoalStatus(status) {
+			if (status === "complete") {
+				seenComplete = true;
+				return;
+			}
+			if (
+				status === "active" ||
+				status === "paused" ||
+				status === "blocked" ||
+				status === "limited"
+			) {
+				seenComplete = false;
+			}
+		},
+		onTurnCompleted() {
+			trySettle();
+		},
+	};
+};
+
+const textPart = (text) => {
+	const trimmed = String(text ?? "").trim();
+	return trimmed ? { type: "text", text: trimmed } : null;
+};
+
+const resolveGoalPromptParts = ({
+	prompt,
+	followUpPrompt,
+	outputProtocolPrompt,
+	goalEnabled,
+	goalPreserving,
+	goalSetThisSession,
+	preservedGoalPrompt,
+	initialGoalPrompt,
+	lastGoalStatus,
+}) => {
+	const raw = String(prompt ?? "").trim();
+	const protocol = String(outputProtocolPrompt ?? "").trim();
+	const saved = String(preservedGoalPrompt || initialGoalPrompt || "").trim();
+	const explicitFollowUp = String(followUpPrompt ?? "").trim();
+	const followUp =
+		explicitFollowUp ||
+		(saved && raw && stripGoalPrefix(raw) !== saved ? raw : "");
+	const push = (parts, text) => {
+		const part = textPart(text);
+		if (part) parts.push(part);
+	};
+
+	if (!goalEnabled) {
+		const parts = [];
+		push(parts, raw);
+		push(parts, followUp);
+		push(parts, protocol);
+		return { parts, recordFirst: false, resetStatus: false, recordedInitial: null };
+	}
+
+	const needSetGoal =
+		!goalSetThisSession ||
+		(Boolean(goalPreserving) && lastGoalStatus === "complete");
+	const initial = saved || (!followUp ? stripGoalPrefix(raw) : "");
+	const parts = [];
+	if (needSetGoal && initial) {
+		push(parts, prefixNativeGoal(initial));
+	}
+	if (followUp) {
+		push(parts, followUp);
+	} else if (!needSetGoal && raw) {
+		push(parts, raw);
+	}
+	push(parts, protocol);
+	return {
+		parts,
+		recordFirst: Boolean(goalPreserving) && !saved && Boolean(initial),
+		resetStatus: needSetGoal,
+		recordedInitial: !saved && initial ? stripGoalPrefix(initial) : null,
+	};
+};
+
 let lastInputForError = null;
 
 const run = async () => {
@@ -404,6 +542,11 @@ const run = async () => {
 	);
 	let context = null;
 	let promptActive = false;
+	let goalCapabilityAvailable = false;
+	let preservedGoalPrompt = null;
+	let lastGoalStatus = null;
+	let goalSetThisSession = false;
+	let goalTurnSettlement = null;
 	const cancel = async () => {
 		if (context && sessionIdRef.current && promptActive) {
 			await context.notify(acp.methods.agent.session.cancel, {
@@ -456,8 +599,27 @@ const run = async () => {
 					});
 					continue;
 				}
+				if (event.kind === "turn") {
+					goalTurnSettlement?.onTurnCompleted();
+					await appendProtocolEvent(activeInput.stdoutPath, {
+						type: "log",
+						level: "debug",
+						source: "driver",
+						message: "turn_completed",
+					});
+					continue;
+				}
 				const activity = activityForEvent(event);
-				if (activity) snapshots.schedule(activity);
+				if (!activity) continue;
+				if (event.kind === "goal") {
+					lastGoalStatus = event.goal?.status || null;
+					goalTurnSettlement?.onGoalStatus(lastGoalStatus);
+					// Do not replay or synthesize this update when a persistent
+					// driver switches to another task.
+					await snapshots.immediate("running", activity);
+					continue;
+				}
+				snapshots.schedule(activity);
 			}
 		});
 
@@ -469,6 +631,10 @@ const run = async () => {
 		});
 		assertCapability(initialized.agentCapabilities, "resume");
 		assertCapability(initialized.agentCapabilities, "close");
+		goalCapabilityAvailable = hasGoalCapability(initialized);
+		if (initialInput.goalEnabled && !goalCapabilityAvailable) {
+			throw new Error("ACP adapter does not advertise Goal v1 capability");
+		}
 		const openSession = async () => {
 			const common = {
 				cwd: initialInput.cwd,
@@ -500,6 +666,9 @@ const run = async () => {
 		});
 
 		const runTask = async (taskInput) => {
+			if (taskInput.goalEnabled && !goalCapabilityAvailable) {
+				throw new Error("ACP adapter does not advertise Goal v1 capability");
+			}
 			activeInput = taskInput;
 			lastInputForError = taskInput;
 			snapshots.setInput(taskInput);
@@ -521,15 +690,20 @@ const run = async () => {
 				kind: "prompt",
 				label: "Starting",
 			});
-			const requestPrompt = async (promptText) => {
+			const requestPrompt = async (promptTextOrParts, timeoutMs) => {
+				const prompt = Array.isArray(promptTextOrParts)
+					? promptTextOrParts.filter(
+							(part) => part && typeof part.text === "string" && part.text.trim(),
+						)
+					: [{ type: "text", text: String(promptTextOrParts ?? "") }];
 				promptActive = true;
 				try {
 					const response = await withTimeout(
 						ctx.request(acp.methods.agent.session.prompt, {
 							sessionId: sessionIdRef.current,
-							prompt: [{ type: "text", text: promptText }],
+							prompt,
 						}),
-						Number(taskInput.promptTimeoutMs || PROMPT_TIMEOUT_MS),
+						timeoutMs,
 						cancel,
 					);
 					await snapshots.flush();
@@ -559,7 +733,45 @@ const run = async () => {
 				}
 			};
 
-			let response = await requestPrompt(taskInput.prompt);
+			if (taskInput.initialGoalPrompt && !preservedGoalPrompt) {
+				preservedGoalPrompt = stripGoalPrefix(taskInput.initialGoalPrompt);
+			}
+			const resolvedGoal = resolveGoalPromptParts({
+				prompt: taskInput.prompt,
+				followUpPrompt: taskInput.followUpPrompt,
+				outputProtocolPrompt: taskInput.outputProtocolPrompt,
+				goalEnabled: Boolean(taskInput.goalEnabled),
+				goalPreserving: Boolean(taskInput.goalPreserving),
+				goalSetThisSession,
+				preservedGoalPrompt,
+				initialGoalPrompt: taskInput.initialGoalPrompt,
+				lastGoalStatus,
+			});
+			if (resolvedGoal.recordFirst && resolvedGoal.recordedInitial) {
+				preservedGoalPrompt = resolvedGoal.recordedInitial;
+			}
+			if (resolvedGoal.resetStatus) {
+				goalSetThisSession = true;
+				lastGoalStatus = null;
+			}
+			const remainingMs = createDeadline(
+				Number(taskInput.promptTimeoutMs || PROMPT_TIMEOUT_MS),
+			);
+			const settlement = taskInput.goalEnabled
+				? createGoalTurnSettlement(() =>
+						hasValidOutputEnvelopeSync(
+							taskInput.structuredOutputResultPathInContainer,
+						),
+					)
+				: null;
+			goalTurnSettlement = settlement;
+			let response = await requestPrompt(resolvedGoal.parts, remainingMs());
+			if (settlement && response.stopReason !== "cancelled") {
+				await withTimeout(settlement.promise, remainingMs(), cancel);
+				if (promptActive) await cancel().catch(() => {});
+				response = { ...response, stopReason: "end_turn" };
+			}
+			goalTurnSettlement = null;
 			let structuredOutputExists = await waitForStructuredOutput(
 				taskInput,
 				response.stopReason,
@@ -579,7 +791,10 @@ const run = async () => {
 					kind: "writing",
 					label: "Writing required output",
 				});
-				response = await requestPrompt(structuredOutputRecoveryPrompt(taskInput));
+				response = await requestPrompt(
+					structuredOutputRecoveryPrompt(taskInput),
+					remainingMs(),
+				);
 				structuredOutputExists = await waitForStructuredOutput(
 					taskInput,
 					response.stopReason,

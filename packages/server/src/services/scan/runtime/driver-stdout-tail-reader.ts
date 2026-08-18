@@ -10,7 +10,8 @@ type TailEntry = {
 	identity: string;
 	offset: number;
 	mtimeMs: number;
-	ctimeMs: number;
+	mtimeNs: string;
+	ctimeNs: string;
 	size: number;
 	remainder: string;
 	parsed: ParsedDriverStdout;
@@ -20,6 +21,8 @@ type TailEntry = {
 const emptyParsed = (): ParsedDriverStdout => ({
 	events: [],
 	latestActivity: null,
+	activityRevision: 0,
+	activityEvents: [],
 	latestUsage: null,
 	latestTask: null,
 	latestLog: null,
@@ -31,6 +34,12 @@ const applyEvent = (parsed: ParsedDriverStdout, event: DriverStdoutEvent) => {
 	switch (event.type) {
 		case "activity":
 			parsed.latestActivity = event.activity ?? null;
+			parsed.activityRevision += 1;
+			parsed.activityEvents.push({
+				revision: parsed.activityRevision,
+				activity: event.activity ?? null,
+			});
+			if (parsed.activityEvents.length > 256) parsed.activityEvents.shift();
 			break;
 		case "usage":
 			parsed.latestUsage = event.usage ?? null;
@@ -65,9 +74,10 @@ export class DriverStdoutTailReader {
 		else {
 			const placeholder = {
 				identity: "",
-				offset: 0,
-				mtimeMs: 0,
-				ctimeMs: 0,
+					offset: 0,
+					mtimeMs: 0,
+					mtimeNs: "0",
+					ctimeNs: "0",
 				size: 0,
 				remainder: "",
 				parsed: emptyParsed(),
@@ -95,41 +105,48 @@ export class DriverStdoutTailReader {
 		filePath: string,
 		existing?: TailEntry,
 	): Promise<ParsedDriverStdout> {
-		const fileStat = await stat(filePath).catch(() => null);
+		const fileStat = await stat(filePath, { bigint: true }).catch(() => null);
 		if (!fileStat || !fileStat.isFile()) {
 			this.entries.delete(filePath);
 			return emptyParsed();
 		}
 
+		const fileSize = Number(fileStat.size);
+		const fileMtimeMs = Number(fileStat.mtimeMs);
 		const identity = identityFor(fileStat);
 		const rebuiltAtSameSize =
 			existing !== undefined &&
-			fileStat.ctimeMs !== existing.ctimeMs &&
-			fileStat.size <= existing.offset;
+			fileStat.ctimeNs.toString() !== existing.ctimeNs &&
+			fileSize <= existing.offset;
 		const needsReset =
 			!existing ||
 			existing.identity !== identity ||
-			fileStat.size < existing.offset ||
-			(fileStat.mtimeMs !== existing.mtimeMs && fileStat.size <= existing.offset) ||
+			fileSize < existing.offset ||
+			(fileStat.mtimeNs.toString() !== existing.mtimeNs && fileSize <= existing.offset) ||
 			rebuiltAtSameSize;
 		const entry: TailEntry = needsReset
 			? {
 					identity,
 					offset: 0,
-					mtimeMs: fileStat.mtimeMs,
-					ctimeMs: fileStat.ctimeMs,
+					mtimeMs: fileMtimeMs,
+					mtimeNs: fileStat.mtimeNs.toString(),
+					ctimeNs: fileStat.ctimeNs.toString(),
 					size: 0,
 					remainder: "",
 					parsed: emptyParsed(),
 				}
 			: existing;
 
-		if (!needsReset && fileStat.size === entry.size && fileStat.mtimeMs === entry.mtimeMs) {
+		if (
+			!needsReset &&
+			fileSize === entry.size &&
+			fileStat.mtimeNs.toString() === entry.mtimeNs
+		) {
 			return entry.parsed;
 		}
 
 		const start = entry.offset;
-		const length = Math.max(0, fileStat.size - start);
+		const length = Math.max(0, fileSize - start);
 		if (length > 0) {
 			const handle = await open(filePath, "r");
 			try {
@@ -149,9 +166,10 @@ export class DriverStdoutTailReader {
 			}
 		}
 		entry.identity = identity;
-		entry.mtimeMs = fileStat.mtimeMs;
-		entry.ctimeMs = fileStat.ctimeMs;
-		entry.size = fileStat.size;
+		entry.mtimeMs = fileMtimeMs;
+		entry.mtimeNs = fileStat.mtimeNs.toString();
+		entry.ctimeNs = fileStat.ctimeNs.toString();
+		entry.size = fileSize;
 		this.entries.set(filePath, entry);
 		return entry.parsed;
 	}

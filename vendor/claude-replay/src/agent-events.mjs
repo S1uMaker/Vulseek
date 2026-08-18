@@ -1,4 +1,6 @@
 const SUPPORTED_FORMATS = new Set(["codex", "claude-code"]);
+const GOAL_STATUSES = new Set(["active", "paused", "blocked", "limited", "complete"]);
+const GOAL_CONTROL_METHOD = "_session/goal";
 
 const asRecord = (value) =>
   value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -64,6 +66,47 @@ const contentText = (content) => {
 const isErrorStatus = (status) =>
   status === "failed" || status === "rejected" || status === "cancelled";
 
+const normalizeGoal = (value) => {
+  if (value === null) return { valid: true, goal: null };
+  const goal = asRecord(value);
+  if (
+    !goal.objective ||
+    typeof goal.objective !== "string" ||
+    !GOAL_STATUSES.has(goal.status) ||
+    goal.controlMethod !== GOAL_CONTROL_METHOD
+  ) {
+    return { valid: false, goal: null };
+  }
+
+  const snapshot = {
+    objective: goal.objective.trim(),
+    status: goal.status,
+    controlMethod: GOAL_CONTROL_METHOD,
+  };
+  if (!snapshot.objective) return { valid: false, goal: null };
+  for (const key of ["iterations", "createdAt", "updatedAt", "tokensUsed", "timeUsedSeconds"]) {
+    if (goal[key] !== undefined) {
+      if (typeof goal[key] !== "number" || !Number.isFinite(goal[key])) {
+        return { valid: false, goal: null };
+      }
+      snapshot[key] = goal[key];
+    }
+  }
+  if (goal.tokenBudget !== undefined) {
+    if (goal.tokenBudget !== null && (typeof goal.tokenBudget !== "number" || !Number.isFinite(goal.tokenBudget))) {
+      return { valid: false, goal: null };
+    }
+    snapshot.tokenBudget = goal.tokenBudget;
+  }
+  if (goal.lastReason !== undefined) {
+    if (goal.lastReason !== null && typeof goal.lastReason !== "string") {
+      return { valid: false, goal: null };
+    }
+    snapshot.lastReason = goal.lastReason;
+  }
+  return { valid: true, goal: snapshot };
+};
+
 export function createAgentEventNormalizer({ format }) {
   if (!SUPPORTED_FORMATS.has(format)) {
     throw new Error(`Unsupported agent event format: ${format}`);
@@ -94,6 +137,19 @@ export function createAgentEventNormalizer({ format }) {
           used: update.used,
           ...(typeof update.size === "number" ? { size: update.size } : {}),
         }];
+      }
+      if (type === "session_info_update") {
+        const meta = asRecord(update._meta);
+        const events = [];
+        if (Object.prototype.hasOwnProperty.call(meta, "goal")) {
+          const normalized = normalizeGoal(meta.goal);
+          if (normalized.valid) events.push({ kind: "goal", goal: normalized.goal });
+        }
+        const turn = asRecord(meta.turn);
+        if (turn.status === "completed") {
+          events.push({ kind: "turn", status: "completed" });
+        }
+        return events;
       }
       if (type === "tool_call") {
         if (typeof update.toolCallId !== "string" || !update.toolCallId) return [];
@@ -129,4 +185,3 @@ export function createAgentEventNormalizer({ format }) {
     },
   };
 }
-

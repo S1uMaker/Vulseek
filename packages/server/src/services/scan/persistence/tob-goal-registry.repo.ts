@@ -4,6 +4,9 @@ import {
 	upsertTobGoalCandidateRepo,
 } from "./tob-goal-candidate.repo";
 import { upsertTobGoalFindingRepo } from "./tob-goal-finding.repo";
+import { resolvePersistCandidate } from "./tob-goal-persist";
+
+export { resolvePersistCandidate } from "./tob-goal-persist";
 
 export type TobGoalRegistryOperation =
 	| "persist-candidate"
@@ -29,33 +32,24 @@ export const applyTobGoalRegistryEffect = async (input: {
 	const stageInput = asRecord(input.stageInput) ?? {};
 
 	if (input.operation === "persist-candidate") {
-		const outcome = readString(output.outcome);
-		if (outcome !== "candidate") {
-			return { applied: false as const, reason: "not-candidate" };
-		}
-		const candidate = asRecord(output.candidate);
-		if (!candidate) {
-			return { applied: false as const, reason: "missing-candidate" };
-		}
-		const candidateId = readString(candidate.candidateId);
-		const huntGoalId =
-			readString(candidate.huntGoalId) ||
-			readString(asRecord(stageInput.huntGoal)?.huntGoalId);
-		const title = readString(candidate.title);
-		if (!candidateId || !huntGoalId || !title) {
-			return { applied: false as const, reason: "incomplete-candidate" };
+		const resolved = resolvePersistCandidate({
+			stageOutput: input.stageOutput,
+			stageInput: input.stageInput,
+		});
+		if (!resolved.ok) {
+			return { applied: false as const, reason: resolved.reason };
 		}
 		await upsertTobGoalCandidateRepo({
 			scanJobId: input.scanJobId,
-			candidateId,
-			huntGoalId,
+			candidateId: resolved.candidateId,
+			huntGoalId: resolved.huntGoalId,
 			huntTaskId: input.taskId,
 			status: "discovered",
-			title,
-			summary: readString(candidate.description) ?? title,
-			content: candidate as TobGoalCandidateContent,
+			title: resolved.title,
+			summary: resolved.summary,
+			content: resolved.content as TobGoalCandidateContent,
 		});
-		return { applied: true as const, candidateId };
+		return { applied: true as const, candidateId: resolved.candidateId };
 	}
 
 	if (input.operation === "apply-judge") {

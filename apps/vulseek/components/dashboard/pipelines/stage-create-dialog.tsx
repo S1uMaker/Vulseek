@@ -41,6 +41,7 @@ const defaultStage = (
 	concurrency: 1,
 	disableable: true,
 	goal: false,
+	goalPreserving: false,
 	inputArtifacts: [],
 	outputArtifacts: [],
 	jobOutput: false,

@@ -5,6 +5,7 @@ Independently verify:
 2. PoC feasibility at least as a clear contour (not necessarily a full exploit).
 
 Decide confirmed, rejected, or needs-more-evidence. Reject theoretical paths that require disallowed preconditions. Do not invent fixes. Do not communicate with other judges.
+Do not propose the next hunt surface. Surface will choose the next direction from your verdict.
 
 Return the structured GoalJudgeVerdict required by the stage schema. Use the
 `confirmed` route only for decision=confirmed; otherwise use `rejected`.

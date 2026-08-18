@@ -78,6 +78,8 @@ export const launchAgentStageRuntime = async (input: {
 		stageDirPath: runtime.stageDirPath,
 		stageRootInContainer: runtime.stageRootInContainer,
 		taskRealRootInContainer: runtime.taskRealRootInContainer,
+		laneHostPath:
+			input.ctx.laneIndex !== null ? runtime.stageDirPath : undefined,
 		persistent: input.ctx.persistent,
 		reuseContainer: input.reuseContainer ?? input.ctx.reuseContainer,
 	});
@@ -108,8 +110,12 @@ export const resolveStageRuntimePrompt = async (
 	ctx: StageContext,
 	promptTemplate: string,
 	values: PromptTemplateValues,
+	options?: { injectSkills?: boolean },
 ) => {
 	const rendered = renderPromptTemplateString(promptTemplate, values);
+	if (options?.injectSkills === false) {
+		return rendered;
+	}
 	const skills = await createStageRuntimeConfig(
 		ctx.scanJobId,
 		ctx.stageName,

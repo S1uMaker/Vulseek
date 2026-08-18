@@ -29,6 +29,7 @@ tob-goal:
       foreach: "$.huntGoals[*]"
       input:
         goalSpecPath: "$input.goalSpecPath"
+        goalPrompt: "$item.goalPrompt"
         repositoryPath: "$input.repositoryPath"
         huntGoal: "$item"
       artifacts:
@@ -45,31 +46,9 @@ tob-goal:
         default: true
       input:
         goalSpecPath: "$input.goalSpecPath"
+        goalPrompt: "$input.goalPrompt"
         huntGoal: "$input.huntGoal"
         candidate: "$output.candidate"
-      artifacts:
-        - from: "$input.goalSpecPath"
-          to: inputs/goal-spec.json
-          inputField: goalSpecPath
-
-    - name: goal-hunt-exhausted-to-goal-surface
-      from: goal-hunt
-      to: goal-surface
-      mode: map
-      route:
-        key: exhausted
-        # non-default; candidate is the default route key
-      input:
-        goalSpecPath: "$input.goalSpecPath"
-        repositoryPath: "$input.repositoryPath"
-        feedback:
-          kind: hunt-exhausted
-          huntGoalId: "$input.huntGoal.huntGoalId"
-          candidateId: null
-          summary: "$output.exhaustion.reason"
-          payload:
-            coveredPaths: "$output.exhaustion.coveredPaths"
-            methodsTried: "$output.exhaustion.methodsTried"
       artifacts:
         - from: "$input.goalSpecPath"
           to: inputs/goal-spec.json
@@ -83,6 +62,7 @@ tob-goal:
         key: confirmed
       input:
         goalSpecPath: "$input.goalSpecPath"
+        goalPrompt: "$input.goalPrompt"
         huntGoal: "$input.huntGoal"
         candidate: "$input.candidate"
         judge: "$output"
@@ -107,6 +87,11 @@ tob-goal:
           candidateId: "$input.candidate.candidateId"
           summary: "$output.summary"
           payload:
+            huntGoalTitle: "$input.huntGoal.title"
+            scopeStatement: "$input.huntGoal.scopeStatement"
+            focusPaths: "$input.huntGoal.focusPaths"
+            judgeDecision: "$output.decision"
+            judgeReasons: "$output.reasons"
             rootCauseKey: "$input.candidate.rootCauseKey"
       artifacts:
         - from: "$input.goalSpecPath"
@@ -128,6 +113,11 @@ tob-goal:
           candidateId: "$input.candidate.candidateId"
           summary: "$output.summary"
           payload:
+            huntGoalTitle: "$input.huntGoal.title"
+            scopeStatement: "$input.huntGoal.scopeStatement"
+            focusPaths: "$input.huntGoal.focusPaths"
+            judgeDecision: "$input.judge.decision"
+            judgeReasons: "$input.judge.reasons"
             rootCauseKey: "$input.candidate.rootCauseKey"
       artifacts:
         - from: "$input.goalSpecPath"
@@ -150,6 +140,11 @@ tob-goal:
           candidateId: "$input.candidate.candidateId"
           summary: "$output.summary"
           payload:
+            huntGoalTitle: "$input.huntGoal.title"
+            scopeStatement: "$input.huntGoal.scopeStatement"
+            focusPaths: "$input.huntGoal.focusPaths"
+            judgeDecision: "$input.judge.decision"
+            judgeReasons: "$input.judge.reasons"
             rootCauseKey: "$input.candidate.rootCauseKey"
       artifacts:
         - from: "$input.goalSpecPath"
