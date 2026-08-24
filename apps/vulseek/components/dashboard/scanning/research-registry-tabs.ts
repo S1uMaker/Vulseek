@@ -12,8 +12,8 @@ const RESEARCH_REGISTRY_TABS = [
 ] as const;
 
 export const getResearchRegistryTabs = (
-	pipelineSystemKey: string | null | undefined,
-) => (pipelineSystemKey === "research" ? RESEARCH_REGISTRY_TABS : []);
+	kind: string | null | undefined,
+) => (kind === "research" ? RESEARCH_REGISTRY_TABS : []);
 
 export const isResearchRegistryTab = (
 	value: string | null | undefined,

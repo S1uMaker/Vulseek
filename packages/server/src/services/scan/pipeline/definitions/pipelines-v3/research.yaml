@@ -7,6 +7,75 @@ root: research-scope
 limits:
   maxTasks: 10000
   maxDurationSeconds: 86400
+presentation:
+  jobTabs:
+    - id: findings
+      label: Findings
+      renderer: entity-table
+      dataSource: research-findings
+      columns:
+        - title
+        - trackKey
+        - vulnerabilityClass
+        - location
+        - status
+        - confidence
+        - updatedAt
+      filters:
+        - status
+      defaultSort:
+        field: updatedAt
+        direction: desc
+      detail: research-finding
+    - id: tracks
+      label: Tracks
+      renderer: entity-table
+      dataSource: research-tracks
+      columns:
+        - trackKey
+        - approachFamily
+        - researchIdea
+        - status
+        - iteration
+        - updatedAt
+      filters:
+        - status
+      defaultSort:
+        field: updatedAt
+        direction: desc
+      detail: research-track
+    - id: primitives
+      label: Primitives
+      renderer: entity-table
+      dataSource: exploit-primitives
+      columns:
+        - name
+        - findingId
+        - capability
+        - trustLevel
+        - status
+        - updatedAt
+      filters:
+        - status
+        - trustLevel
+      defaultSort:
+        field: updatedAt
+        direction: desc
+      detail: exploit-primitive
+    - id: chains
+      label: Chains
+      renderer: entity-table
+      dataSource: exploit-chains
+      columns:
+        - chainKey
+        - status
+        - updatedAt
+      filters:
+        - status
+      defaultSort:
+        field: updatedAt
+        direction: desc
+      detail: exploit-chain
 schemas:
   analyze-finding-stage-input:
     type: object

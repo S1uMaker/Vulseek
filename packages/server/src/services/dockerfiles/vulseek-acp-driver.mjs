@@ -6,7 +6,7 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-export const VULSEEK_ACP_DRIVER_VERSION = "2026-08-16-goal-turn-1";
+export const VULSEEK_ACP_DRIVER_VERSION = "2026-08-24-runtime-identity-env-1";
 const PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
 const SNAPSHOT_DEBOUNCE_MS = 150;
 const TERMINAL_TOOL_STATUSES = new Set([
@@ -20,6 +20,37 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const asRecord = (value) =>
 	value && typeof value === "object" && !Array.isArray(value) ? value : {};
 const asString = (value) => (typeof value === "string" ? value : "");
+
+const resolveRuntimeIdentity = (taskInput) => ({
+	scanJobId:
+		asString(taskInput.scanJobId) || process.env.VULSEEK_SCAN_JOB_ID || "",
+	taskId: asString(taskInput.taskId),
+	stageName: asString(taskInput.stageName),
+});
+
+const runtimeIdentityEnvironment = (identity) => ({
+	...(identity.scanJobId ? { VULSEEK_SCAN_JOB_ID: identity.scanJobId } : {}),
+	...(identity.taskId ? { VULSEEK_TASK_ID: identity.taskId } : {}),
+	...(identity.stageName ? { VULSEEK_STAGE_NAME: identity.stageName } : {}),
+});
+
+const setRuntimeIdentityEnvironment = (taskInput) => {
+	const identity = resolveRuntimeIdentity(taskInput);
+	const values = {
+		VULSEEK_SCAN_JOB_ID: identity.scanJobId,
+		VULSEEK_TASK_ID: identity.taskId,
+		VULSEEK_STAGE_NAME: identity.stageName,
+	};
+	for (const [key, value] of Object.entries(values)) {
+		if (value) {
+			process.env[key] = value;
+		} else {
+			delete process.env[key];
+		}
+	}
+	return identity;
+};
+
 const pendingJsonWrites = new Map();
 const pendingProtocolWrites = new Map();
 
@@ -78,6 +109,13 @@ const activityForEvent = (event) => {
 			label: `Goal ${event.goal.status}`,
 			detail: event.goal.objective,
 			goal: event.goal,
+		};
+	}
+	if (event.kind === "task" && event.status === "completed") {
+		return {
+			kind: "goal",
+			label: "Task completed",
+			task: { status: "completed" },
 		};
 	}
 	if (event.kind !== "tool") return null;
@@ -180,10 +218,22 @@ const choosePermission = (params) => {
 		: { outcome: { outcome: "cancelled" } };
 };
 
-const withTimeout = async (promise, timeoutMs, onTimeout) => {
+const SETTLED_ERROR_CODE = "SETTLED";
+
+const createSettledError = () => {
+	const error = new Error("ACP prompt settled");
+	error.code = SETTLED_ERROR_CODE;
+	return error;
+};
+
+const isSettledError = (error) =>
+	Boolean(error && error.code === SETTLED_ERROR_CODE);
+
+const withTimeout = async (promise, timeoutMs, onTimeout, signal) => {
 	let timer;
+	let abort = null;
 	try {
-		return await Promise.race([
+		const candidates = [
 			promise,
 			new Promise((_, reject) => {
 				timer = setTimeout(async () => {
@@ -195,9 +245,23 @@ const withTimeout = async (promise, timeoutMs, onTimeout) => {
 					);
 				}, timeoutMs);
 			}),
-		]);
+		];
+		if (signal) {
+			candidates.push(
+				new Promise((_, reject) => {
+					abort = () => reject(createSettledError());
+					if (signal.aborted) {
+						abort();
+						return;
+					}
+					signal.addEventListener("abort", abort, { once: true });
+				}),
+			);
+		}
+		return await Promise.race(candidates);
 	} finally {
 		if (timer) clearTimeout(timer);
+		if (signal && abort) signal.removeEventListener("abort", abort);
 	}
 };
 
@@ -324,6 +388,8 @@ const hasValidOutputEnvelopeSync = (filePath) => {
 
 const createGoalTurnSettlement = (hasOutputEnvelope) => {
 	let seenComplete = false;
+	let seenTurn = false;
+	let seenTask = false;
 	let settled = false;
 	let resolveFn = () => {};
 	const promise = new Promise((resolve) => {
@@ -331,7 +397,16 @@ const createGoalTurnSettlement = (hasOutputEnvelope) => {
 	});
 	const trySettle = () => {
 		if (settled) return;
-		if (!seenComplete && !hasOutputEnvelope?.()) return;
+		const hasEnvelope = Boolean(hasOutputEnvelope?.());
+		if (
+			!(
+				(seenComplete && seenTurn) ||
+				(seenComplete && seenTask) ||
+				(hasEnvelope && (seenComplete || seenTurn || seenTask))
+			)
+		) {
+			return;
+		}
 		settled = true;
 		resolveFn();
 	};
@@ -340,6 +415,7 @@ const createGoalTurnSettlement = (hasOutputEnvelope) => {
 		onGoalStatus(status) {
 			if (status === "complete") {
 				seenComplete = true;
+				trySettle();
 				return;
 			}
 			if (
@@ -352,6 +428,11 @@ const createGoalTurnSettlement = (hasOutputEnvelope) => {
 			}
 		},
 		onTurnCompleted() {
+			seenTurn = true;
+			trySettle();
+		},
+		onTaskCompleted() {
+			seenTask = true;
 			trySettle();
 		},
 	};
@@ -485,6 +566,7 @@ const run = async () => {
 	};
 	const initialInput = await readNextTaskInput();
 	if (!initialInput) return false;
+	const initialIdentity = setRuntimeIdentityEnvironment(initialInput);
 	let activeInput = initialInput;
 	await appendProtocolEvent(initialInput.stdoutPath, {
 		type: "start",
@@ -519,6 +601,7 @@ const run = async () => {
 	const adapterEnvironment = {
 		...process.env,
 		...(initialInput.adapterEnv || {}),
+		...runtimeIdentityEnvironment(initialIdentity),
 		...(initialInput.agentHomePathInContainer
 			? initialInput.provider === "claude"
 				? { CLAUDE_CONFIG_DIR: initialInput.agentHomePathInContainer }
@@ -547,6 +630,7 @@ const run = async () => {
 	let lastGoalStatus = null;
 	let goalSetThisSession = false;
 	let goalTurnSettlement = null;
+	let promptTurnIndex = 0;
 	const cancel = async () => {
 		if (context && sessionIdRef.current && promptActive) {
 			await context.notify(acp.methods.agent.session.cancel, {
@@ -609,6 +693,20 @@ const run = async () => {
 					});
 					continue;
 				}
+				if (event.kind === "task") {
+					if (event.status === "completed") {
+						goalTurnSettlement?.onTaskCompleted();
+						await appendProtocolEvent(activeInput.stdoutPath, {
+							type: "log",
+							level: "debug",
+							source: "driver",
+							message: "task_completed",
+						});
+					}
+					const activity = activityForEvent(event);
+					if (activity) await snapshots.immediate("running", activity);
+					continue;
+				}
 				const activity = activityForEvent(event);
 				if (!activity) continue;
 				if (event.kind === "goal") {
@@ -666,6 +764,7 @@ const run = async () => {
 		});
 
 		const runTask = async (taskInput) => {
+			setRuntimeIdentityEnvironment(taskInput);
 			if (taskInput.goalEnabled && !goalCapabilityAvailable) {
 				throw new Error("ACP adapter does not advertise Goal v1 capability");
 			}
@@ -690,21 +789,36 @@ const run = async () => {
 				kind: "prompt",
 				label: "Starting",
 			});
-			const requestPrompt = async (promptTextOrParts, timeoutMs) => {
+			const requestPrompt = async (promptTextOrParts, timeoutMs, settleSignal) => {
 				const prompt = Array.isArray(promptTextOrParts)
 					? promptTextOrParts.filter(
 							(part) => part && typeof part.text === "string" && part.text.trim(),
 						)
 					: [{ type: "text", text: String(promptTextOrParts ?? "") }];
+				const promptText = prompt.map((part) => part.text).join("\n\n");
+				if (promptText.trim()) {
+					await appendProtocolEvent(taskInput.stdoutPath, {
+						type: "vulseek_prompt",
+						promptId: randomUUID(),
+						taskId: taskInput.taskId || null,
+						sessionId: sessionIdRef.current || null,
+						turnIndex: ++promptTurnIndex,
+						timestamp: new Date().toISOString(),
+						text: promptText,
+					});
+				}
 				promptActive = true;
 				try {
+					const rpc = ctx.request(acp.methods.agent.session.prompt, {
+						sessionId: sessionIdRef.current,
+						prompt,
+					});
+					void rpc.catch(() => {});
 					const response = await withTimeout(
-						ctx.request(acp.methods.agent.session.prompt, {
-							sessionId: sessionIdRef.current,
-							prompt,
-						}),
+						rpc,
 						timeoutMs,
 						cancel,
+						settleSignal,
 					);
 					await snapshots.flush();
 					const usage = asRecord(response.usage);
@@ -716,6 +830,16 @@ const run = async () => {
 					}
 					return response;
 				} catch (error) {
+					if (isSettledError(error)) {
+						await appendProtocolEvent(taskInput.stdoutPath, {
+							type: "log",
+							level: "info",
+							source: "driver",
+							message: "goal_turn_settled",
+						});
+						await cancel().catch(() => {});
+						return { stopReason: "end_turn" };
+					}
 					await snapshots.immediate("error", {
 						kind: "error",
 						label: "Error",
@@ -765,7 +889,17 @@ const run = async () => {
 					)
 				: null;
 			goalTurnSettlement = settlement;
-			let response = await requestPrompt(resolvedGoal.parts, remainingMs());
+			const settleController = new AbortController();
+			if (settlement) {
+				void settlement.promise.then(() => {
+					if (!settleController.signal.aborted) settleController.abort();
+				});
+			}
+			let response = await requestPrompt(
+				resolvedGoal.parts,
+				remainingMs(),
+				settlement ? settleController.signal : undefined,
+			);
 			if (settlement && response.stopReason !== "cancelled") {
 				await withTimeout(settlement.promise, remainingMs(), cancel);
 				if (promptActive) await cancel().catch(() => {});

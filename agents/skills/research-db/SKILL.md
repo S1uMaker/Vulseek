@@ -87,9 +87,6 @@ and monotonic `revision` are the source of truth.
 
 Never read `auth.json`, `.credentials.json`, or an agent API token to construct
 database credentials. The runtime provides `VULSEEK_RESEARCH_DATABASE_URL`,
-`VULSEEK_SCAN_JOB_ID`, and `VULSEEK_TASK_ID`. For Research tasks, the runtime
-also writes `/task/task-context.json` immediately before the agent turn. The
-context artifact is authoritative for the current task and stage input; use it
-to keep `producerTaskId` and `trackId` aligned when creating findings. This is
-important because stage containers may be reused and their process environment
-can contain an older task ID.
+`VULSEEK_SCAN_JOB_ID`, `VULSEEK_TASK_ID`, and `VULSEEK_STAGE_NAME`. The current
+stage input is available at `/task/inputs/task-input.json`; use it to keep
+`producerTaskId` and `trackId` aligned when creating findings.

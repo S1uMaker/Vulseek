@@ -205,3 +205,31 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps deletes stale rows whe
 		},
 	]);
 });
+
+test("syncVulnerabilityCandidatesFromProducerTaskWithDeps accepts a single Hunter candidate", async () => {
+	const sourceOutput = makeProducerTask().output as { candidates: unknown[] };
+	const task = makeProducerTask({
+		stageName: "hunter",
+		output: { candidate: sourceOutput.candidates[0] },
+	});
+	let synced: PersistedVulnerabilityCandidateInput[] = [];
+
+	const result = await syncVulnerabilityCandidatesFromProducerTaskWithDeps(
+		task.taskId,
+		{
+			findTaskById: async () => task,
+			readTaskJsonArtifact: async () => {
+				throw new Error("inline Hunter candidates should not read artifacts");
+			},
+			upsertCandidates: async (candidates) => {
+				synced = candidates;
+			},
+			deleteStaleCandidatesForProducerTask: async ({ keepCandidateIds }) => {
+				assert.deepEqual(keepCandidateIds, ["candidate-1"]);
+			},
+		},
+	);
+
+	assert.equal(result.synced, 1);
+	assert.equal(synced[0]?.vulnerabilityCandidateId, "candidate-1");
+});

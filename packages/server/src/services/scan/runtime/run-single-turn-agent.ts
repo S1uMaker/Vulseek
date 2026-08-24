@@ -19,8 +19,12 @@ import {
 	AGENT_RUNTIME_FILE_NAMES,
 	initializeAgentRuntimeFiles,
 } from "./agent-runtime-files";
-import { ensureCodexGoalsFeature } from "./codex-config-compat";
+import { applyCodexRuntimeConfigToml } from "./codex-config-compat";
 import { installRuntimeSkillsInContainer } from "./runtime-skills";
+import {
+	buildScanRuntimeApiEnvPairs,
+	ensureScanRuntimeProxyBypass,
+} from "./scan-runtime-api-auth";
 import {
 	buildStructuredOutputEnvelopeJsonSchema,
 	buildStructuredOutputPromptSuffix,
@@ -28,26 +32,6 @@ import {
 } from "./structured-output-schema";
 
 export { buildStructuredOutputPromptSuffix } from "./structured-output-schema";
-
-const RUNTIME_CUSTOM_SKILLS = [
-	"codeql",
-	"semgrep",
-	"delta-scope",
-	"full-scan",
-	"full-scan-subagent",
-	"repository-profile",
-	"attack-surface-model",
-	"identify-target",
-	"scan-target",
-	"analyze-finding",
-	"critique-finding",
-	"verify-finding",
-	"search-registries",
-	"tree-sitter",
-	"research-agent",
-	"research-db",
-	"output-validator",
-] as const;
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const TASK_ALIAS_ROOT_IN_CONTAINER = "/task";
@@ -82,6 +66,23 @@ const buildProjectProfileCacheRoot = () =>
 	path.posix.join(buildProjectProfileContextRoot(), "cache");
 
 const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
+
+const buildRuntimeIdentityExecEnvArgs = (identity: {
+	scanJobId: string;
+	taskId: string;
+	stageName: string;
+}) =>
+	[
+		["VULSEEK_SCAN_JOB_ID", identity.scanJobId],
+		["VULSEEK_TASK_ID", identity.taskId],
+		["VULSEEK_STAGE_NAME", identity.stageName],
+	]
+		.filter(([, value]) => Boolean(value))
+		.map(
+			([key, value]) =>
+				`-e '${escapeSingleQuotes(`${key}=${value}`)}'`,
+		)
+		.join(" ");
 
 const buildNamespaceEnabledContainerArgs = () => {
 	const configured = process.env.VULSEEK_SCAN_CONTAINER_EXTRA_ARGS?.trim();
@@ -128,7 +129,7 @@ const resolveCurrentDockerNetworkArg = async () => {
 const sanitizeProviderName = (value: string) =>
 	value.toLowerCase().replace(/[^a-z0-9_-]/g, "-") || "provider";
 
-const CODEX_AUTO_APPROVE_CONFIG_TOML = ensureCodexGoalsFeature(
+const CODEX_AUTO_APPROVE_CONFIG_TOML = applyCodexRuntimeConfigToml(
 	[`approval_policy = "never"`, `sandbox_mode = "danger-full-access"`, ""].join(
 		"\n",
 	),
@@ -153,7 +154,7 @@ const withCodexAutoApproveConfigToml = (configToml: string) => {
 		defaults.length === 0
 			? configToml
 			: joinTomlBlocks(`${defaults.join("\n")}\n`, configToml);
-	return ensureCodexGoalsFeature(withDefaults);
+	return applyCodexRuntimeConfigToml(withDefaults);
 };
 
 export const buildCodexConfigToml = (agentProfile: AgentProfileLike) => {
@@ -1088,6 +1089,7 @@ const copyClaudeAssetsToContainerHome = async (
 export type StageContainerInput = {
 	scanJob: ScanJob;
 	taskId?: string;
+	stageName?: string;
 	agentProfile: AgentProfileLike | null;
 	containerName: string;
 	codexHome: string;
@@ -1115,6 +1117,8 @@ export type StageContainerInput = {
 	 * false (stage YAML runtimeConfig.includePolicy).
 	 */
 	includePolicy?: boolean;
+	/** Skills explicitly required by this stage. */
+	skillNames?: readonly string[];
 	/**
 	 * When true, still write policy/schema files but do not append their
 	 * instructions to the prompt. Unused by goal stages; they now receive
@@ -1165,8 +1169,6 @@ export const buildResearchContainerEnvPairs = (
 ) =>
 	isResearchPipeline(scanJob)
 		? [
-				`VULSEEK_SCAN_JOB_ID=${scanJobId}`,
-				`VULSEEK_TASK_ID=${taskId}`,
 				"VULSEEK_RESEARCH_DATABASE_URL",
 			]
 		: [];
@@ -1198,7 +1200,9 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		input.datasetAgentRuntime,
 	);
 	requireResearchDatabaseContext(input.scanJob, process.env);
-	const globalContainerEnvPairs = getGlobalContainerEnvironmentPairs();
+	const globalContainerEnvPairs = ensureScanRuntimeProxyBypass(
+		getGlobalContainerEnvironmentPairs(),
+	);
 	const agentsDir = await resolveAgentsDirectory();
 	const hostProfileDir =
 		input.datasetAgentRuntime?.profileHostDir ||
@@ -1230,6 +1234,11 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 			input.scanJob,
 			input.scanJob.scanJobId,
 			input.taskId || "",
+		),
+		...buildScanRuntimeApiEnvPairs(
+			input.scanJob.scanJobId,
+			input.taskId || "",
+			input.stageName || "",
 		),
 	];
 	const runtimeFileNames = AGENT_RUNTIME_FILE_NAMES;
@@ -1395,7 +1404,7 @@ export const startContainer = async (input: StageContainerInput) => {
 			containerName: input.containerName,
 			agentsDir: runtime.agentsDir,
 			agentHomeDir: runtime.agentHome.codexContainerDir,
-			skillNames: RUNTIME_CUSTOM_SKILLS,
+			skillNames: input.skillNames ?? [],
 			logPath,
 		}),
 	);
@@ -1893,7 +1902,9 @@ export const runSingleTurnAgentInContainer = async (
 			)
 		: {};
 	const buildDriverTaskInput = () => ({
+		scanJobId: input.scanJob.scanJobId,
 		taskId: input.taskId || undefined,
+		stageName: input.stageName || undefined,
 		provider:
 			input.agentProfile?.provider === "claude_code" ? "claude" : "codex",
 		cwd: input.cwd,
@@ -1981,7 +1992,11 @@ export const runSingleTurnAgentInContainer = async (
 	);
 	await withHostBootstrapLog(taskStderrPath, "launch_driver", "", () =>
 		execAsync(
-			`docker exec -d ${input.containerName} node '${escapeSingleQuotes(driverScriptPath)}' '${escapeSingleQuotes(driverInputPath)}'`,
+			`docker exec -d ${buildRuntimeIdentityExecEnvArgs({
+				scanJobId: input.scanJob.scanJobId,
+				taskId: input.taskId || "",
+				stageName: input.stageName || "",
+			})} ${input.containerName} node '${escapeSingleQuotes(driverScriptPath)}' '${escapeSingleQuotes(driverInputPath)}'`,
 		),
 	);
 	await appendHostBootstrapLog(

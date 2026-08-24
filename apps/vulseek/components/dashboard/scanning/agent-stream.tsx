@@ -236,6 +236,15 @@ export const AgentStream = ({
 				setTurns(parserRef.current.finish().turns);
 				return;
 			}
+			if (event.type === "prompt") {
+				if (!parserRef.current) return;
+				const result = parserRef.current.pushPrompt(event.payload);
+				setTurns((current) =>
+					mergeAgentStreamTurns(current, result.turns, result.changedFrom),
+				);
+				setHasNewContent(!autoFollowRef.current);
+				return;
+			}
 			if (event.type === "waiting") {
 				return;
 			}

@@ -871,7 +871,7 @@ describe("dataset.evaluations.create", () => {
 			root: "discovery",
 			limits: { maxTasks: 100, maxDurationSeconds: 3600 },
 			prepareRepository: "target",
-			capabilities: { candidates: true, research: false, tobGoal: false },
+			presentation: { jobTabs: [] },
 			schemas: {},
 			stages: [{ id: "discovery" }],
 			edges: [],

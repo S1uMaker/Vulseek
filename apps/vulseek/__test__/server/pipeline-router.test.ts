@@ -178,7 +178,7 @@ const pipelineRow = (overrides: Record<string, unknown> = {}) => ({
 	draftRevision: 0,
 	draftBaseVersionId: null,
 	currentPublishedVersionId: null,
-	systemKey: null,
+
 	archivedAt: null,
 	createdAt: "2026-08-07T00:00:00.000Z",
 	updatedAt: "2026-08-07T00:00:00.000Z",
@@ -193,7 +193,7 @@ const versionRow = (overrides: Record<string, unknown> = {}) => ({
 	versionNumber: 1,
 	yaml: VALID_YAML,
 	contentHash: "abc123",
-	source: "user",
+
 	publishedBy: "user-1",
 	publishedAt: "2026-08-07T00:00:00.000Z",
 	...overrides,

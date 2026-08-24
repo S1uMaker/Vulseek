@@ -46,15 +46,21 @@ WHERE sj."pipelineId" IS NULL
     )
   );
 
--- Legacy jobs without a valid organization/system pipeline are disposable.
-DELETE FROM "scan_jobs" WHERE "pipelineId" IS NULL;
-
+-- Do not delete unmapped jobs. If backfill could not set pipelineId, leave
+-- the rows in place and keep pipelineId nullable.
 ALTER TABLE "scan_jobs"
   DROP CONSTRAINT IF EXISTS "scan_jobs_pipelineId_scan_pipelines_pipelineId_fk";
 ALTER TABLE "scan_jobs"
   ADD CONSTRAINT "scan_jobs_pipelineId_scan_pipelines_pipelineId_fk"
   FOREIGN KEY ("pipelineId") REFERENCES "scan_pipelines"("pipelineId") ON DELETE restrict;
-ALTER TABLE "scan_jobs" ALTER COLUMN "pipelineId" SET NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM "scan_jobs" WHERE "pipelineId" IS NULL
+  ) THEN
+    ALTER TABLE "scan_jobs" ALTER COLUMN "pipelineId" SET NOT NULL;
+  END IF;
+END $$;
 
 ALTER TABLE "scan_jobs" DROP COLUMN "scanType";
 DROP TYPE IF EXISTS "scanType";

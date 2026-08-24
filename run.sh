@@ -18,6 +18,7 @@ TRAEFIK_SERVICE="vulseek-traefik-release"
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-ghcr.io/fuzzing-peach/vulseek}"
 RELEASE_TAG="${RELEASE_TAG:-latest}"
 IMAGE_NAME="${IMAGE_REPOSITORY}:${RELEASE_TAG}"
+BUILD_IMAGE_NAME="${BUILD_IMAGE_NAME:-vulseek-release:local}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 
 VULSEEK_PORT="${VULSEEK_RELEASE_PORT:-33000}"
@@ -29,7 +30,7 @@ TRAEFIK_DASHBOARD_PORT="${TRAEFIK_RELEASE_DASHBOARD_PORT:-38080}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SCAN_CONTEXT_HOST_PATH="${SCRIPT_DIR}/vulseek-data-release"
 SCAN_CONTEXT_HOST_PATH="${VULSEEK_SCAN_CONTEXT_HOST_PATH:-}"
-PIPELINE_DEFINITIONS_HOST_PATH="${VULSEEK_SCAN_PIPELINE_DEFINITIONS_HOST_PATH:-${SCRIPT_DIR}/vulseek-pipeline-release}"
+PIPELINE_DEFINITIONS_HOST_PATH="${VULSEEK_SCAN_PIPELINE_DEFINITIONS_HOST_PATH:-${SCRIPT_DIR}/packages/server/src/services/scan}"
 PIPELINE_DEFINITIONS_CONTAINER_PATH="/opt/vulseek/scan-pipeline"
 
 resolve_scan_context_host_path() {
@@ -136,6 +137,7 @@ show_help() {
     echo ""
     echo "Commands:"
     echo "  init        Initialize Docker Swarm, network, and volumes"
+    echo "  build       Build the local release image (${BUILD_IMAGE_NAME}) from Dockerfile"
     echo "  pull        Pull ${IMAGE_NAME}"
     echo "  start       Start the release environment"
     echo "  stop        Stop release services"
@@ -186,9 +188,70 @@ check_env_file() {
     fi
 }
 
+rewrite_proxy_host() {
+    local proxy_value="$1"
+    if [ -z "$proxy_value" ]; then
+        echo ""
+        return 0
+    fi
+    echo "$proxy_value" | sed -E 's#^(([a-zA-Z][a-zA-Z0-9+.-]*://)?([^/@]+@)?)([^/:?#]+)(:[0-9]+)?(.*)$#\1172.17.0.1\5\6#'
+}
+
 pull_image() {
+    if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+        echo -e "${YELLOW}Using local release image: ${IMAGE_NAME}${NC}"
+        return 0
+    fi
     echo -e "${BLUE}Pulling release image: ${IMAGE_NAME}${NC}"
     docker pull --platform linux/amd64 "$IMAGE_NAME"
+}
+
+build_image() {
+    echo -e "${YELLOW}Building release image: ${BUILD_IMAGE_NAME}${NC}"
+    cd "$SCRIPT_DIR"
+
+    local build_http_proxy="${http_proxy:-${HTTP_PROXY:-}}"
+    local build_https_proxy="${https_proxy:-${HTTPS_PROXY:-}}"
+    local build_all_proxy="${all_proxy:-${ALL_PROXY:-}}"
+    local build_no_proxy="${no_proxy:-${NO_PROXY:-}}"
+    build_http_proxy="$(rewrite_proxy_host "$build_http_proxy")"
+    build_https_proxy="$(rewrite_proxy_host "$build_https_proxy")"
+    build_all_proxy="$(rewrite_proxy_host "$build_all_proxy")"
+    # Host scan-context trees and leftover core dumps are root-owned. Docker
+    # still walks ignored paths and fails, so copy a filtered context first.
+    local context_dir
+    context_dir="$(mktemp -d /tmp/vulseek-release-context.XXXXXX)"
+    trap 'rm -rf "$context_dir"' RETURN
+    rsync -a \
+        --exclude='.git/' \
+        --exclude='.backup/' \
+        --exclude='vulseek-data/' \
+        --exclude='vulseek-data-dev/' \
+        --exclude='vulseek-data-release/' \
+        --exclude='node_modules/' \
+        --exclude='apps/vulseek/node_modules/' \
+        --exclude='apps/vulseek/.next/' \
+        --exclude='apps/vulseek/core' \
+        --exclude='packages/server/node_modules/' \
+        --exclude='apps/api/node_modules.root-owned.20260707001805/' \
+        --exclude='apps/schedules/node_modules.root-owned.20260707001805/' \
+        --exclude='DockerSandboxes-linux-amd64/' \
+        --exclude='DockerSandboxes-linux-amd64.tar.gz' \
+        --exclude='third_party/raptor/' \
+        "$SCRIPT_DIR/" "$context_dir/"
+    docker build --progress=plain \
+        --build-arg http_proxy="$build_http_proxy" \
+        --build-arg https_proxy="$build_https_proxy" \
+        --build-arg all_proxy="$build_all_proxy" \
+        --build-arg no_proxy="$build_no_proxy" \
+        --build-arg HTTP_PROXY="$build_http_proxy" \
+        --build-arg HTTPS_PROXY="$build_https_proxy" \
+        --build-arg ALL_PROXY="$build_all_proxy" \
+        --build-arg NO_PROXY="$build_no_proxy" \
+        -f "$context_dir/Dockerfile" \
+        -t "$BUILD_IMAGE_NAME" \
+        "$context_dir"
+    echo -e "${GREEN}Release image built: ${BUILD_IMAGE_NAME}${NC}"
 }
 
 start_postgres() {
@@ -210,7 +273,13 @@ start_postgres() {
         --health-timeout 5s \
         --health-retries 5 \
         --constraint 'node.role==manager' \
-        postgres:16
+        postgres:16 \
+        -c wal_level=replica \
+        -c archive_mode=on \
+        -c archive_timeout=300 \
+        -c wal_keep_size=1GB \
+        -c max_wal_senders=10 \
+        -c "archive_command=mkdir -p /var/lib/postgresql/data/wal_archive && test ! -f /var/lib/postgresql/data/wal_archive/%f && cp %p /var/lib/postgresql/data/wal_archive/%f"
 }
 
 start_redis() {
@@ -396,6 +465,7 @@ done
 
 case "${COMMAND:-help}" in
     init) init_swarm ;;
+    build) build_image ;;
     pull) pull_image ;;
     start) start_all ;;
     stop) stop_all ;;

@@ -70,7 +70,6 @@ agents/schemas/codex-app-server/
 /DockerSandboxes-linux-amd64/
 /DockerSandboxes-linux-amd64.tar.gz
 /apps/dokploy/
-/apps/vulseek-qa/
 /apps/vulseek/core
 *.orig
 /third_party/*

@@ -7,6 +7,7 @@ import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
 import {
 	compilePipelineDocumentV3,
+	inferJobTabsFromStages,
 	parsePipelineDocumentV3,
 	type CompiledPipelineDefinition,
 	type PipelineDocumentV3,
@@ -56,6 +57,55 @@ export type CreatePipelineRunInput = {
 	>;
 };
 
+type PipelineStageOverride = NonNullable<
+	CreatePipelineRunInput["stageOverrides"]
+>[string];
+
+const hasOwn = (value: object, key: string) =>
+	Object.prototype.hasOwnProperty.call(value, key);
+
+/** Freeze a complete per-stage runtime configuration into every new Job. */
+export const buildPipelineRunRuntimeSettings = (input: {
+	compiled: CompiledPipelineDefinition;
+	baseSettings?: ScanRuntimeSettings | null;
+	stageOverrides?: Record<string, PipelineStageOverride>;
+}): ScanRuntimeSettings => {
+	const baseStages = input.baseSettings?.stages ?? {};
+	const stages = Object.fromEntries(
+		input.compiled.stages.map((stage) => {
+			const base = baseStages[stage.id] ?? {};
+			const override = input.stageOverrides?.[stage.id];
+			const runtime = stage.runtime;
+			const agentProfileId =
+				override && hasOwn(override, "agentProfileId")
+					? override.agentProfileId
+					: base.agentProfileId !== undefined
+						? base.agentProfileId
+						: runtime.agentProfileId;
+			return [
+				stage.id,
+				{
+					disabled:
+						override && hasOwn(override, "enabled")
+							? override.enabled !== true
+							: base.disabled === true,
+					concurrency:
+						override?.concurrency ??
+						base.concurrency ??
+						stage.concurrency,
+					agentProfileId: agentProfileId ?? null,
+				},
+			];
+		}),
+	);
+	return {
+		stages,
+		...(input.baseSettings?.threatDirection
+			? { threatDirection: input.baseSettings.threatDirection }
+			: {}),
+	};
+};
+
 const runtimeSettingsToStageOverrides = (
 	settings: ScanRuntimeSettings,
 ): NonNullable<CreatePipelineRunInput["stageOverrides"]> => {
@@ -100,23 +150,50 @@ const isDocumentShape = (value: unknown): value is PipelineDocumentV3 =>
  * definition (new publishes) or the canonical document (Phase 2 seed rows).
  * Normalize both into the compiled shape.
  */
+const omitLegacyCapabilities = (
+	compiled: CompiledPipelineDefinition,
+): CompiledPipelineDefinition => {
+	if (!compiled || typeof compiled !== "object" || !("capabilities" in compiled)) {
+		return compiled;
+	}
+	const { capabilities: _capabilities, ...rest } = compiled as CompiledPipelineDefinition & {
+		capabilities?: unknown;
+	};
+	return rest;
+};
+
+const withPresentation = (
+	compiled: CompiledPipelineDefinition,
+): CompiledPipelineDefinition => {
+	const next = omitLegacyCapabilities(compiled);
+	if (next.presentation?.jobTabs) {
+		return next;
+	}
+	return {
+		...next,
+		presentation: {
+			jobTabs: inferJobTabsFromStages(next.stages),
+		},
+	};
+};
+
 export const resolveCompiledDefinition = (
 	stored: unknown,
 	yaml: string,
 ): CompiledPipelineDefinition => {
 	if (isCompiledDefinition(stored)) {
-		return stored;
+		return withPresentation(stored);
 	}
 	// Phase 2 seed rows stored the canonical document shape — compile it
 	// directly without needing the raw YAML again.
 	if (isDocumentShape(stored)) {
-		return compilePipelineDocumentV3(stored);
+		return withPresentation(compilePipelineDocumentV3(stored));
 	}
 	const parsed = parsePipelineDocumentV3(yaml).document;
 	if (!parsed) {
 		throw new Error("Stored pipeline YAML no longer parses as a V3 document");
 	}
-	return compilePipelineDocumentV3(parsed);
+	return withPresentation(compilePipelineDocumentV3(parsed));
 };
 
 export const resolvePipelineVersionSnapshot = async (input: {
@@ -249,6 +326,11 @@ export const createPipelineRun = async (
 		scanRuntimeSettings = profile.settings ?? {};
 		stageOverrides = runtimeSettingsToStageOverrides(scanRuntimeSettings);
 	}
+	scanRuntimeSettings = buildPipelineRunRuntimeSettings({
+		compiled,
+		baseSettings: scanRuntimeSettings,
+		stageOverrides,
+	});
 
 	const scanJob = await createScanJobRepo({
 		applicationId: input.target.type === "application" ? input.target.applicationId : null,
@@ -266,6 +348,7 @@ export const createPipelineRun = async (
 		targetTag: input.repository?.targetTag ?? null,
 		commitWindow: input.repository?.commitWindow ?? 3,
 		scanRuntimeSettings,
+		runtimeStageIds: compiled.stages.map((stage) => stage.id),
 		pipelineId: pipeline.pipelineId,
 		pipelineVersionId: version.pipelineVersionId,
 		pipelineYamlSnapshot: version.yaml,

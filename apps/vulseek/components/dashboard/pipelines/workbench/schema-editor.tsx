@@ -15,6 +15,7 @@ import {
 	isRecord,
 	PATH_PROPERTY_TYPE,
 	PROPERTY_TYPES,
+	REFERENCE_PROPERTY_TYPE,
 	SCHEMA_TYPES,
 	schemaToFormState,
 } from "@/lib/pipeline-editor/schema-form";
@@ -213,6 +214,9 @@ export const SchemaEditor = ({
 															if (type === PATH_PROPERTY_TYPE) {
 																return { ...p, type, pathOf: p.pathOf || defaultPathOf };
 															}
+															if (type === REFERENCE_PROPERTY_TYPE) {
+																return { ...p, type, ref: p.ref || defaultPathOf };
+															}
 															return { ...p, type };
 														});
 														const next = { ...form, properties };
@@ -260,6 +264,24 @@ export const SchemaEditor = ({
 															formStateToSchema(next, schema),
 															`schema:${schemaId}:props`,
 														);
+													}}
+												/>
+											) : null}
+											{property.type === REFERENCE_PROPERTY_TYPE ? (
+												<PathOfReferenceField
+													label="Schema reference"
+													value={property.ref}
+													schemaIds={schemaIds.filter((id) => id !== schemaId)}
+													readOnly={readOnly}
+													description="Referenced JSON Schema for this field."
+													onNavigateToSchema={(id) => onSelect({ type: "schema", id })}
+													onChange={(ref) => {
+														const properties = form.properties.map((p, i) =>
+															i === index ? { ...p, ref } : p,
+														);
+														const next = { ...form, properties };
+														setForm(next);
+														setSchema(formStateToSchema(next, schema), `schema:${schemaId}:props`);
 													}}
 												/>
 											) : null}

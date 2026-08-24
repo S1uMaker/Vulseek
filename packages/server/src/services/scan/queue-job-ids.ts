@@ -25,6 +25,10 @@ export const buildKnownStageQueueJobIds = (input: {
 			return dedupe([currentJobId, `attack-surface-model:${input.taskId}`]);
 		case "scan-target":
 			return dedupe([currentJobId, `function:${input.taskId}`]);
+		case "orchestrator":
+			return dedupe([currentJobId, `orchestrator:${input.scanJobId}`]);
+		case "hunter":
+			return dedupe([currentJobId, `function:${input.taskId}`]);
 		case "analyze-finding":
 			return dedupe([currentJobId, `analysis:${input.taskId}`]);
 		case "verify-finding":

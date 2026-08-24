@@ -3,15 +3,18 @@ import type {
 	PipelineStageV3,
 	PipelineEdgeV3,
 } from "./pipeline-document-v3";
+import {
+	inferJobTabsFromStages,
+	type PipelinePresentation,
+} from "./pipeline-job-tabs";
 
 /**
  * Compiles a validated PipelineDocumentV3 into the immutable
  * `CompiledPipelineDefinition` frozen onto scan jobs and evaluations.
  *
  * The compiled shape is the *runtime* contract: the runner consumes it (via
- * `buildPipelineFromCompiled`) instead of re-parsing YAML or reading
- * `scanType`. The compiler also derives the result capabilities that decide
- * which tabs (Candidates / Research / Goal) the run detail page shows.
+ * `buildPipelineFromCompiled`) instead of re-parsing YAML. Job result tabs
+ * come from `presentation.jobTabs`.
  */
 
 export type CompiledStageV3 = PipelineStageV3 & {
@@ -19,12 +22,6 @@ export type CompiledStageV3 = PipelineStageV3 & {
 };
 
 export type CompiledEdgeV3 = PipelineEdgeV3;
-
-export type CompiledPipelineCapabilities = {
-	candidates: boolean;
-	research: boolean;
-	tobGoal: boolean;
-};
 
 export type CompiledPipelineDefinition = {
 	version: 3;
@@ -35,7 +32,7 @@ export type CompiledPipelineDefinition = {
 	root: string;
 	limits: PipelineDocumentV3["limits"];
 	prepareRepository: "none" | "target" | "diff";
-	capabilities: CompiledPipelineCapabilities;
+	presentation: PipelinePresentation;
 	schemas: PipelineDocumentV3["schemas"];
 	stages: CompiledStageV3[];
 	edges: CompiledEdgeV3[];
@@ -44,37 +41,10 @@ export type CompiledPipelineDefinition = {
 	 * Stage overrides applied at run creation (enabled/concurrency/profile).
 	 * Kept in the snapshot so a rerun of a finished job uses the same shape.
 	 */
-	stageOverrides?: Record<string, { enabled?: boolean; concurrency?: number }>;
-};
-
-export const derivePipelineCapabilities = (
-	document: Pick<PipelineDocumentV3, "stages">,
-): CompiledPipelineCapabilities => {
-	let candidates = false;
-	let research = false;
-	let tobGoal = false;
-	for (const stage of Object.values(document.stages)) {
-		for (const effect of stage.effects ?? []) {
-			if (
-				effect.type === "sync-candidates" ||
-				effect.type === "project-candidate-result"
-			) {
-				candidates = true;
-			}
-			if (effect.type === "research-registry") {
-				research = true;
-			}
-			if (effect.type === "tob-goal-registry") {
-				tobGoal = true;
-			}
-		}
-		for (const plugin of stage.runtime.plugins ?? []) {
-			if (plugin === "research-track" || plugin === "research-deadline") {
-				research = true;
-			}
-		}
-	}
-	return { candidates, research, tobGoal };
+	stageOverrides?: Record<
+		string,
+		{ enabled?: boolean; concurrency?: number; agentProfileId?: string | null }
+	>;
 };
 
 const resolvePrepareRepository = (
@@ -94,7 +64,11 @@ export const compilePipelineDocumentV3 = (
 	root: document.root,
 	limits: document.limits,
 	prepareRepository: resolvePrepareRepository(document),
-	capabilities: derivePipelineCapabilities(document),
+	presentation: {
+		jobTabs: document.presentation
+			? document.presentation.jobTabs
+			: inferJobTabsFromStages(Object.values(document.stages)),
+	},
 	schemas: document.schemas,
 	stages: Object.entries(document.stages).map(([id, stage]) => ({
 		...stage,

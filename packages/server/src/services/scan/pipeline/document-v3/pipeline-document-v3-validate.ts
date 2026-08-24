@@ -4,6 +4,7 @@ import {
 	type PipelineDiagnostic,
 	type PipelineDocumentV3,
 } from "./pipeline-document-v3";
+import { collectJobTabDiagnostics } from "./pipeline-job-tabs";
 
 /**
  * Semantic validation of a parsed V3 document.
@@ -517,6 +518,10 @@ export const validatePipelineDocumentV3 = (
 			}),
 		);
 	}
+
+	diagnostics.push(
+		...collectJobTabDiagnostics(document.presentation?.jobTabs),
+	);
 
 	return diagnostics;
 };

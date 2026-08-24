@@ -69,6 +69,11 @@ describe("driver stdout protocol", () => {
 			[
 				"not json",
 				JSON.stringify({ type: "unknown", value: true }),
+				JSON.stringify({
+					type: "vulseek_prompt",
+					promptId: "prompt-1",
+					text: "Inspect the repository",
+				}),
 				JSON.stringify({ type: "usage", usage: { totalTokens: 12 } }),
 			].join("\n"),
 		);

@@ -77,13 +77,13 @@ const NewPipelinePage = (_: InferGetServerSidePropsType<typeof getServerSideProp
 		}
 	};
 
-	const duplicateSystem = (systemKey: "full" | "delta" | "research" | "tob-goal") => {
-		const template = templates.data?.find((item) => item.systemKey === systemKey);
+	const loadBuiltinTemplate = (slug: "full" | "delta" | "research" | "tob-goal") => {
+		const template = templates.data?.find((item) => item.slug === slug);
 		if (!template) {
 			toast.error("Template not loaded yet — try again");
 			return;
 		}
-		setSlug(`${systemKey}-copy`);
+		setSlug(`${slug}-copy`);
 		setName(template.name);
 		setInitialYaml(template.yaml);
 		toast.info("Template loaded — adjust the slug/name and create");
@@ -171,7 +171,7 @@ const NewPipelinePage = (_: InferGetServerSidePropsType<typeof getServerSideProp
 							<CardHeader>
 								<CardTitle>Start from a built-in</CardTitle>
 								<CardDescription>
-									Load the system template into the YAML box, then rename and
+									Load a built-in template into the YAML box, then rename and
 									create your copy.
 								</CardDescription>
 							</CardHeader>
@@ -188,7 +188,7 @@ const NewPipelinePage = (_: InferGetServerSidePropsType<typeof getServerSideProp
 										key={key}
 										variant="outline"
 										className="w-full justify-start"
-										onClick={() => duplicateSystem(key)}
+										onClick={() => loadBuiltinTemplate(key)}
 									>
 										{label}
 									</Button>

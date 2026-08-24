@@ -15,7 +15,8 @@ import { api } from "@/utils/api";
 import {
 	formatResourceTypeLabel,
 	formatScanJobStatusLabel,
-	formatPipelineSystemKeyLabel,
+	formatPipelineKindLabel,
+	resolveScanJobPipelineKind,
 	type ScanTranslation,
 	scanT,
 } from "./scan-i18n";
@@ -210,7 +211,10 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 									variant="outline"
 									className="h-5 border-border px-1.5 text-[11px] font-normal leading-none"
 								>
-									{formatPipelineSystemKeyLabel(t, row.original.pipelineSystemKey)}
+									{formatPipelineKindLabel(
+										t,
+										resolveScanJobPipelineKind(row.original),
+									)}
 								</Badge>
 							),
 						},
@@ -271,7 +275,10 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 										variant="outline"
 										className="h-5 border-border px-1.5 text-[11px] font-normal leading-none"
 									>
-										{formatPipelineSystemKeyLabel(t, job.pipelineSystemKey)}
+										{formatPipelineKindLabel(
+											t,
+											resolveScanJobPipelineKind(job),
+										)}
 									</Badge>
 									<span>{formatTriggerSource(t, job.triggerSource)}</span>
 									<span className="opacity-30" aria-hidden>

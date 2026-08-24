@@ -1,26 +1,40 @@
 import { describe, expect, it } from "vitest";
-import {
-	getResearchRegistryTabs,
-	isResearchRegistryTab,
-} from "../../components/dashboard/scanning/research-registry-tabs";
+import { jobTabsFromSnapshot } from "@vulseek/server/services/scan/pipeline/document-v3";
 
-describe("research registry job tabs", () => {
-	it("shows three registry tabs for research jobs", () => {
-		expect(getResearchRegistryTabs("research").map((tab) => tab.value)).toEqual(
-			["findings", "tracks", "primitives", "chains"],
-		);
+describe("jobTabsFromSnapshot", () => {
+	it("returns configured presentation tabs", () => {
+		expect(
+			jobTabsFromSnapshot({
+				presentation: {
+					jobTabs: [
+						{
+							id: "findings",
+							label: "Findings",
+							renderer: "entity-table",
+							dataSource: "research-findings",
+							columns: ["title"],
+							filters: [],
+						},
+					],
+				},
+			}).map((tab) => tab.id),
+		).toEqual(["findings"]);
 	});
 
-	it("does not show registry tabs for full or delta jobs", () => {
-		expect(getResearchRegistryTabs("full")).toEqual([]);
-		expect(getResearchRegistryTabs("delta")).toEqual([]);
+	it("infers research tabs from effects when presentation is missing", () => {
+		expect(
+			jobTabsFromSnapshot({
+				stages: [
+					{
+						effects: [{ type: "research-registry" }],
+						runtime: { plugins: ["research-track"] },
+					},
+				],
+			}).map((tab) => tab.id),
+		).toEqual(["findings", "tracks", "primitives", "chains"]);
 	});
 
-	it("recognizes only supported registry route segments", () => {
-		expect(isResearchRegistryTab("tracks")).toBe(true);
-		expect(isResearchRegistryTab("findings")).toBe(true);
-		expect(isResearchRegistryTab("primitives")).toBe(true);
-		expect(isResearchRegistryTab("chains")).toBe(true);
-		expect(isResearchRegistryTab("registry")).toBe(false);
+	it("infers no business tabs for an empty pipeline", () => {
+		expect(jobTabsFromSnapshot({ stages: [] })).toEqual([]);
 	});
 });

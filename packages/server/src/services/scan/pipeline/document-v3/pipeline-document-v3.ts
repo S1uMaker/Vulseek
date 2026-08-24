@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { pipelinePresentationSchema } from "./pipeline-job-tabs";
 
 /**
  * Pipeline Document V3 — the single, frontend/backend-shared contract for a
@@ -228,6 +229,7 @@ export const pipelineDocumentV3Schema = z.object({
 	stages: z.record(slugSchema, stageSchema),
 	edges: z.array(edgeSchema).optional().default([]),
 	groups: z.array(groupSchema).optional().default([]),
+	presentation: pipelinePresentationSchema.optional(),
 	ui: uiSchema,
 }).strict();
 
@@ -239,6 +241,9 @@ export type PipelineRuntimeV3 = z.infer<typeof runtimeSchema>;
 export type PipelineArtifactMappingV3 = z.infer<typeof artifactMappingSchema>;
 export type PipelineEffectV3 = z.infer<typeof effectSchema>;
 export type PipelineUiV3 = z.infer<typeof uiSchema>;
+export type PipelinePresentationV3 = NonNullable<
+	PipelineDocumentV3["presentation"]
+>;
 export type AllowedRuntimePlugin = (typeof ALLOWED_RUNTIME_PLUGINS)[number];
 
 // ---------------------------------------------------------------------------

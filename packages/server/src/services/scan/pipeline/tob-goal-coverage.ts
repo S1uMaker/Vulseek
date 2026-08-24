@@ -20,7 +20,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const readTrimmedString = (value: unknown) =>
 	typeof value === "string" && value.trim() ? value.trim() : null;
 
-export const readHuntGoalId = (value: unknown) => {
+export const readHuntGoalId = (value: unknown): string | null => {
 	if (!isRecord(value)) return null;
 	return (
 		readTrimmedString(value.huntGoalId) ||

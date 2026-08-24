@@ -53,11 +53,11 @@ export const organizationRouter = createTRPCRouter({
 				userId: ctx.user.id,
 			});
 
-			// Seed the four built-in system pipelines for the new org.
-			const { seedSystemPipelinesForOrganization } = await import(
+			// Seed the four built-in pipelines for the new org.
+			const { seedBuiltinPipelinesForOrganization } = await import(
 				"@vulseek/server/services/pipeline-system"
 			);
-			await seedSystemPipelinesForOrganization(result.id, ctx.user.id);
+			await seedBuiltinPipelinesForOrganization(result.id, ctx.user.id);
 
 			return result;
 		}),

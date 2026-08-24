@@ -49,6 +49,10 @@ export type PipelineYamlPatchOp =
 			>;
 	  }
 	| { op: "updateLimits"; limits: { maxTasks: number; maxDurationSeconds: number } }
+	| {
+			op: "updatePresentation";
+			presentation: NonNullable<PipelineDocumentV3["presentation"]>;
+	  }
 	| { op: "moveNode"; stageId: string; position: { x: number; y: number } }
 	| {
 			op: "updateLayout";
@@ -238,6 +242,9 @@ const applyOp = (doc: Document.Parsed, op: PipelineYamlPatchOp): void => {
 		}
 		case "updateLimits":
 			setIfChanged(doc, ["limits"], op.limits);
+			return;
+		case "updatePresentation":
+			setIfChanged(doc, ["presentation"], op.presentation);
 			return;
 		case "moveNode": {
 			requireStage(op.stageId);

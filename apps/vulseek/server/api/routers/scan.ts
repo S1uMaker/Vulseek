@@ -42,6 +42,8 @@ import {
 	listScanTaskDirectory,
 	listTobGoalCandidatesPageRepo,
 	listTobGoalFindingsPageRepo,
+	queryJobTabData,
+	queryJobTabDetail,
 	pauseScanJob,
 	readCandidateFileContent,
 	readScanJobFileContent,
@@ -636,29 +638,10 @@ export const scanRouter = createTRPCRouter({
 	cancel: protectedProcedure
 		.input(apiFindOneScanJob)
 		.mutation(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
-			if (scanJob.applicationId) {
-				const application = await findApplicationById(scanJob.applicationId);
-				organizationId = application.environment.project.organizationId;
-			}
-			if (scanJob.composeId) {
-				const compose = await findComposeById(scanJob.composeId);
-				organizationId = compose.environment.project.organizationId;
-			}
-			if (!organizationId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Invalid scan job target",
-				});
-			}
-
-			if (organizationId !== ctx.session.activeOrganizationId) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message: "You are not authorized to cancel this scan job",
-				});
-			}
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 
 			const cancellation = await cancelScanJob(input.scanJobId);
 			await Promise.all([
@@ -706,60 +689,20 @@ export const scanRouter = createTRPCRouter({
 	pause: protectedProcedure
 		.input(apiFindOneScanJob)
 		.mutation(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
-			if (scanJob.applicationId) {
-				const application = await findApplicationById(scanJob.applicationId);
-				organizationId = application.environment.project.organizationId;
-			}
-			if (scanJob.composeId) {
-				const compose = await findComposeById(scanJob.composeId);
-				organizationId = compose.environment.project.organizationId;
-			}
-			if (!organizationId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Invalid scan job target",
-				});
-			}
-
-			if (organizationId !== ctx.session.activeOrganizationId) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message: "You are not authorized to pause this scan job",
-				});
-			}
-
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			return await pauseScanJob(input.scanJobId);
 		}),
 
 	resume: protectedProcedure
 		.input(apiFindOneScanJob)
 		.mutation(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
-			if (scanJob.applicationId) {
-				const application = await findApplicationById(scanJob.applicationId);
-				organizationId = application.environment.project.organizationId;
-			}
-			if (scanJob.composeId) {
-				const compose = await findComposeById(scanJob.composeId);
-				organizationId = compose.environment.project.organizationId;
-			}
-			if (!organizationId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Invalid scan job target",
-				});
-			}
-
-			if (organizationId !== ctx.session.activeOrganizationId) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message: "You are not authorized to resume this scan job",
-				});
-			}
-
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			return await resumeScanJob(input.scanJobId);
 		}),
 
@@ -971,6 +914,43 @@ export const scanRouter = createTRPCRouter({
 				ctx.session.activeOrganizationId,
 			);
 			return await listExploitChainsPageRepo(input);
+		}),
+
+	jobTabData: protectedProcedure
+		.input(
+			z.object({
+				scanJobId: z.string().min(1),
+				tabId: z.string().min(1),
+				page: z.number().int().min(1).default(1),
+				pageSize: z.number().int().min(1).max(100).default(20),
+				query: z.string().optional(),
+				sortField: z.string().optional(),
+				sortDirection: z.enum(["asc", "desc"]).optional(),
+				filters: z.record(z.array(z.string())).optional(),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			return queryJobTabData(input);
+		}),
+
+	jobTabDetail: protectedProcedure
+		.input(
+			z.object({
+				scanJobId: z.string().min(1),
+				tabId: z.string().min(1),
+				itemId: z.string().min(1),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			return queryJobTabDetail(input);
 		}),
 
 	resultSummary: protectedProcedure

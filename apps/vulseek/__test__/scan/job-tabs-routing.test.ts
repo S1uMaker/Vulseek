@@ -14,7 +14,7 @@ describe("job tab routing", () => {
 		const handlerStart = contextSource.indexOf("handleTabChange: (value) =>");
 		const handlerSource = contextSource.slice(
 			handlerStart,
-			contextSource.indexOf("researchRegistryTabs,", handlerStart),
+			contextSource.indexOf("jobTabs,", handlerStart),
 		);
 
 		expect(handlerSource).toContain("const nextTab = value as ScanJobTab;");

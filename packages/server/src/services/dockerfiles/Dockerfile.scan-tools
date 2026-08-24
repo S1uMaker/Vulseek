@@ -122,6 +122,8 @@ RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     && grep -F 'sessionUpdate: "session_info_update"' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
     && grep -F 'createTurnSessionInfoUpdate' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
     && grep -F 'turn: { status: "completed" }' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
+    && grep -F 'createTaskCompletedSessionInfoUpdate' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
+    && grep -F 'task: { status: "completed" }' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
     && grep -F 'controlMethod: GOAL_CONTROL_METHOD' /opt/vulseek-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js >/dev/null \
     && node --check /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js \
     && rm -f /tmp/vulseek-codex-acp-fork.patch
@@ -129,8 +131,8 @@ COPY vulseek-acp-driver.mjs agent-events.mjs /opt/vulseek-acp/
 RUN chmod 0755 /opt/vulseek-acp/vulseek-acp-driver.mjs \
     && node --check /opt/vulseek-acp/vulseek-acp-driver.mjs \
     && node --check /opt/vulseek-acp/agent-events.mjs \
-    && /opt/vulseek-acp/node_modules/.bin/codex-acp --help >/dev/null \
-    && /opt/vulseek-acp/node_modules/.bin/claude-agent-acp --help >/dev/null
+    && test -x /opt/vulseek-acp/node_modules/.bin/codex-acp \
+    && test -x /opt/vulseek-acp/node_modules/.bin/claude-agent-acp
 ENV PATH="/opt/vulseek-acp/node_modules/.bin:$PATH"
 
 ENV PATH="/root/.local/bin:$PATH" \

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
 	compilePipelineDocumentV3,
-	derivePipelineCapabilities,
 	type CompiledPipelineDefinition,
 	type PipelineDocumentV3,
 } from "@vulseek/server/services/scan/pipeline/document-v3";
@@ -106,34 +105,35 @@ describe("compilePipelineDocumentV3", () => {
 	});
 });
 
-describe("derivePipelineCapabilities", () => {
-	it("detects candidate producers", () => {
+describe("compiled presentation.jobTabs", () => {
+	it("infers a candidates tab from sync-candidates", () => {
 		const document = baseDocument();
 		document.stages.start!.effects = [{ type: "sync-candidates" }];
-		expect(derivePipelineCapabilities(document)).toEqual({
-			candidates: true,
-			research: false,
-			tobGoal: false,
-		});
+		expect(
+			compilePipelineDocumentV3(document).presentation.jobTabs.map(
+				(tab) => tab.id,
+			),
+		).toEqual(["candidates"]);
 	});
 
-	it("detects research and tob-goal behavior from effects", () => {
+	it("infers research and tob-goal tabs from effects", () => {
 		const research = baseDocument();
 		research.stages.start!.effects = [
 			{ type: "research-registry", operation: "persist-scope" },
 		];
-		expect(derivePipelineCapabilities(research)).toMatchObject({
-			research: true,
-		});
+		expect(
+			compilePipelineDocumentV3(research).presentation.jobTabs.map(
+				(tab) => tab.id,
+			),
+		).toEqual(["findings", "tracks", "primitives", "chains"]);
 
 		const goal = baseDocument();
 		goal.stages.start!.effects = [
 			{ type: "tob-goal-registry", operation: "persist-candidate" },
 		];
-		expect(derivePipelineCapabilities(goal)).toMatchObject({
-			tobGoal: true,
-			candidates: false,
-		});
+		expect(
+			compilePipelineDocumentV3(goal).presentation.jobTabs.map((tab) => tab.id),
+		).toEqual(["goal-candidates", "goal-findings"]);
 	});
 });
 
@@ -142,6 +142,16 @@ describe("resolveCompiledDefinition", () => {
 		const compiled: CompiledPipelineDefinition =
 			compilePipelineDocumentV3(baseDocument());
 		expect(resolveCompiledDefinition(compiled, "")).toBe(compiled);
+		expect(compiled).not.toHaveProperty("capabilities");
+	});
+
+	it("strips legacy compiled capabilities from stored snapshots", () => {
+		const compiled = compilePipelineDocumentV3(baseDocument());
+		const resolved = resolveCompiledDefinition(
+			{ ...compiled, capabilities: { candidates: true, research: false, tobGoal: false } },
+			"",
+		);
+		expect(resolved).not.toHaveProperty("capabilities");
 	});
 
 	it("compiles a stored canonical document on the fly (Phase 2 seed rows)", () => {

@@ -1,5 +1,4 @@
 import { cachedInputPercent } from "@/lib/scan/token-usage";
-import { isResearchRegistryTab } from "./research-registry-tabs";
 import {
 	formatAnalysisResultLabel,
 	formatScanJobStatusLabel,
@@ -10,18 +9,14 @@ import {
 	scanT,
 } from "./scan-i18n";
 
-export type ScanJobTab =
-	| "overview"
-	| "tasks"
-	| "candidates"
-	| "goal-candidates"
-	| "goal-findings"
-	| "findings"
-	| "tracks"
-	| "primitives"
-	| "chains"
-	| "monitoring"
-	| "files";
+export const CORE_JOB_TABS = [
+	"overview",
+	"tasks",
+	"monitoring",
+	"files",
+] as const;
+
+export type ScanJobTab = string;
 
 export const RESULT_SHORT_LABELS: Record<string, string> = {
 	real_vulnerability: "Real",
@@ -235,28 +230,20 @@ export const formatTokenUsageWithCache = (
 
 export const resolveRequestedTab = (
 	value: string | string[] | undefined,
-): ScanJobTab => {
+	allowedTabIds: readonly string[] = CORE_JOB_TABS,
+): { tab: ScanJobTab; unknown: boolean } => {
 	const rawTab =
 		typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
-	if (
-		rawTab === "overview" ||
-		rawTab === "tasks" ||
-		rawTab === "candidates" ||
-		rawTab === "goal-candidates" ||
-		rawTab === "goal-findings" ||
-		isResearchRegistryTab(rawTab) ||
-		rawTab === "monitoring" ||
-		rawTab === "files"
-	) {
-		return rawTab;
-	}
 	if (rawTab === "stream") {
-		return "tasks";
+		return { tab: "tasks", unknown: false };
 	}
-	if (rawTab === "status" || rawTab === "analysis" || rawTab === "verify") {
-		return "candidates";
+	if (rawTab && allowedTabIds.includes(rawTab)) {
+		return { tab: rawTab, unknown: false };
 	}
-	return "overview";
+	if (rawTab) {
+		return { tab: "overview", unknown: true };
+	}
+	return { tab: "overview", unknown: false };
 };
 
 export const getShortResultLabel = (
@@ -535,6 +522,13 @@ export const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
 	"exploit-validation": 18,
 	"exploit-review": 19,
 	"research-report": 20,
+	"goal-craft": 21,
+	"goal-surface": 22,
+	"goal-hunt": 23,
+	"goal-judge": 24,
+	"goal-dedup": 25,
+	orchestrator: 26,
+	hunter: 27,
 };
 
 export const TASK_STAGE_OPTION_BY_STAGE_NAME: Record<string, string> = {

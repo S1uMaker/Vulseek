@@ -3,6 +3,8 @@ import type { Candidate, Task, VulnerabilityCandidate } from "../types";
 
 export const CANDIDATE_PRODUCER_STAGE_NAMES = [
 	"scan-target",
+	"orchestrator",
+	"hunter",
 ] as const;
 
 export type CandidateProducerStageName =
@@ -96,7 +98,9 @@ export const syncVulnerabilityCandidatesFromProducerTaskWithDeps = async (
 	const output = asRecord(task.output);
 	const rawCandidates = Array.isArray(output?.candidates)
 		? output.candidates
-		: [];
+		: output?.candidate
+			? [output.candidate]
+			: [];
 	const candidates = await Promise.all(
 		rawCandidates.map((rawCandidate) =>
 			parseCandidateOutput(task, rawCandidate, deps),

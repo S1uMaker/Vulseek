@@ -38,6 +38,7 @@ import { EntityList } from "./entity-list";
 import { GroupEditor } from "./group-editor";
 import { LayoutEditor } from "./layout-editor";
 import { OverviewEditor } from "./overview-editor";
+import { PresentationEditor } from "./presentation-editor";
 import { SchemaEditor } from "./schema-editor";
 import { StageEditor } from "./stage-editor";
 import { EmptyState, SelectField } from "./workbench-fields";
@@ -50,6 +51,7 @@ import { EmptyState, SelectField } from "./workbench-fields";
 
 export type DefinitionSection =
 	| "overview"
+	| "presentation"
 	| "stages"
 	| "edges"
 	| "schemas"
@@ -73,6 +75,7 @@ export type DefinitionViewProps = {
 
 const sectionLabel: Record<DefinitionSection, string> = {
 	overview: "Overview",
+	presentation: "Presentation",
 	stages: "Stages",
 	edges: "Edges",
 	schemas: "Schemas",
@@ -152,6 +155,7 @@ export const DefinitionView = ({
 			{(
 				[
 					["overview", "Overview", null],
+					["presentation", "Presentation", null],
 					["stages", `Stages ${counts.stages}`, "stage"],
 					["edges", `Edges ${counts.edges}`, "edge"],
 					["schemas", `Schemas ${counts.schemas}`, "schema"],
@@ -298,6 +302,13 @@ export const DefinitionView = ({
 					dispatch={dispatch}
 					readOnly={readOnly}
 					draftState={draftState}
+				/>
+			) : null}
+			{section === "presentation" ? (
+				<PresentationEditor
+					document={document}
+					dispatch={dispatch}
+					readOnly={readOnly}
 				/>
 			) : null}
 			{section === "layout" ? (

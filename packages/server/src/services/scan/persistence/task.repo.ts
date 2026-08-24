@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { db } from "@vulseek/server/db";
 import {
 	scanJobs,
+	type TaskAgentProfileSnapshot,
 	type taskStatusEnum,
 	tasks,
 	vulnerabilityCandidates,
@@ -24,6 +25,7 @@ import {
 } from "../artifacts/contracts/domain-object.contract";
 import { computePatchedTaskCost, computeTaskCost } from "../cost";
 import {
+	getOrchHuntRunningTaskPresentation,
 	getResearchRunningTaskPresentation,
 	mapRunningTaskStage,
 	RUNNING_TASK_VIEW_STATUSES,
@@ -568,6 +570,47 @@ export const findTaskByIdRepo = async (taskId: string) => {
 	return task;
 };
 
+export type TaskSessionRuntimeMetadata = {
+	taskId: string;
+	scanJobId: string;
+	stageName: string;
+	name: string;
+	status: (typeof taskStatusEnum.enumValues)[number];
+	containerName: string | null;
+	threadId: string | null;
+	agentProfile: TaskAgentProfileSnapshot | null;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export const listTaskSessionRuntimeMetadataByThreadRepo = async (input: {
+	scanJobId: string;
+	stageName: string;
+	threadId: string;
+}): Promise<TaskSessionRuntimeMetadata[]> =>
+	await db
+		.select({
+			taskId: tasks.taskId,
+			scanJobId: tasks.scanJobId,
+			stageName: tasks.stageName,
+			name: tasks.name,
+			status: tasks.status,
+			containerName: tasks.containerName,
+			threadId: tasks.threadId,
+			agentProfile: tasks.agentProfile,
+			createdAt: tasks.createdAt,
+			updatedAt: tasks.updatedAt,
+		})
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, input.scanJobId),
+				eq(tasks.stageName, input.stageName),
+				eq(tasks.threadId, input.threadId),
+			),
+		)
+		.orderBy(asc(tasks.createdAt), asc(tasks.taskId));
+
 export const listTasksByScanJobIdRepo = async (scanJobId: string) =>
 	await db
 		.select()
@@ -701,6 +744,43 @@ export const listRunningTaskRuntimeMetadataRepo = async (scanJobId: string) =>
 		)
 		.orderBy(desc(tasks.updatedAt));
 
+export type RunningStageTaskRepoRow = {
+	taskId: string;
+	stageName: string;
+	title: string;
+	status: (typeof RUNNING_TASK_VIEW_STATUSES)[number];
+	startedAt: string | null;
+	updatedAt: string;
+};
+
+export const listRunningTaskViewsByScanJobAndStageRepo = async (input: {
+	scanJobId: string;
+	stageName: string;
+}): Promise<RunningStageTaskRepoRow[]> => {
+	const rows = await db
+		.select({
+			taskId: tasks.taskId,
+			stageName: tasks.stageName,
+			title: tasks.name,
+			status: tasks.status,
+			startedAt: tasks.startedAt,
+			updatedAt: tasks.updatedAt,
+		})
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, input.scanJobId),
+				eq(tasks.stageName, input.stageName),
+				inArray(tasks.status, [...RUNNING_TASK_VIEW_STATUSES]),
+			),
+		)
+		.orderBy(desc(tasks.updatedAt), desc(tasks.taskId));
+	return rows.map((row) => ({
+		...row,
+		status: row.status as RunningStageTaskRepoRow["status"],
+	}));
+};
+
 export type RunningTaskViewRepoRow = {
 	id: string;
 	taskId: string;
@@ -786,14 +866,23 @@ export const listRunningTaskViewsByScanJobIdRepo = async (
 				stageName,
 				String(value.name || ""),
 			);
+			const orchHuntPresentation = getOrchHuntRunningTaskPresentation(
+				stageName,
+				String(value.name || ""),
+			);
 			const stage =
-				researchPresentation?.stage ?? mapRunningTaskStage(stageName);
+				researchPresentation?.stage ??
+				orchHuntPresentation?.stage ??
+				mapRunningTaskStage(stageName);
 			if (!stage) {
 				return null;
 			}
 			if (researchPresentation) {
 				title = researchPresentation.title;
 				subtitle = researchPresentation.subtitle;
+			} else if (orchHuntPresentation) {
+				title = orchHuntPresentation.title;
+				subtitle = orchHuntPresentation.subtitle;
 			} else if (stageName === "delta-scope") {
 				title = "Delta Scope";
 				subtitle = "Diff impact function scoping";

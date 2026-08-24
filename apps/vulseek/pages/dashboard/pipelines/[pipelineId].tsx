@@ -86,7 +86,6 @@ const EditorPage = ({
 		typeof router.query.profileId === "string"
 			? router.query.profileId
 			: undefined;
-	const isProfilesView = router.query.view === "profiles";
 	const pipelineProfiles = api.pipeline.profilesList.useQuery(
 		{ pipelineId },
 		{
@@ -324,9 +323,9 @@ const EditorPage = ({
 	// Version view: the read-only workbench renders the *version's* YAML
 	// (see PipelineWorkbench.readOnlyYaml), never the draft buffer.
 	const versionLabel = selectedVersion
-		? `v${selectedVersion.versionNumber} · ${selectedVersion.source}`
+		? `v${selectedVersion.versionNumber}`
 		: data.currentVersion
-			? `v${data.currentVersion.versionNumber} · ${data.currentVersion.source}`
+			? `v${data.currentVersion.versionNumber}`
 			: null;
 	const workbenchView =
 		router.query.view === "visual" ||
@@ -382,12 +381,8 @@ const EditorPage = ({
 				}
 			/>
 			<DashboardPage
-				className={
-					isProfilesView
-						? "h-auto min-h-0 flex-none"
-						: "h-auto min-h-0 flex-1"
-				}
-				contentClassName={isProfilesView ? "h-auto overflow-visible" : "overflow-hidden"}
+				className="h-auto min-h-0 flex-1"
+				contentClassName="overflow-hidden"
 			>
 				<DashboardPageHeader
 					icon={<Workflow />}
@@ -395,11 +390,6 @@ const EditorPage = ({
 					description={`${data.slug}${data.currentVersion ? ` · v${data.currentVersion.versionNumber} current` : " · no published version"}`}
 					status={
 						<>
-							{data.systemKey ? (
-								<Badge variant="outline" className="border-sky-500/40 text-sky-600">
-									System
-								</Badge>
-							) : null}
 							{data.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}
 							{isManagerView ? (
 								<Badge
@@ -441,7 +431,7 @@ const EditorPage = ({
 												key={version.pipelineVersionId}
 												value={version.pipelineVersionId}
 											>
-												v{version.versionNumber} · {version.source}
+												v{version.versionNumber}
 											</SelectItem>
 										))}
 									</SelectContent>
@@ -515,7 +505,7 @@ const EditorPage = ({
 								>
 									Publish
 								</Button>
-								{!data.systemKey && !data.archivedAt ? (
+								{!data.archivedAt ? (
 									<Button
 										variant="ghost"
 										size="icon"

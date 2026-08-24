@@ -7,6 +7,28 @@ root: delta-scope
 limits:
   maxTasks: 10000
   maxDurationSeconds: 86400
+presentation:
+  jobTabs:
+    - id: candidates
+      label: Candidates
+      renderer: candidate-results
+      dataSource: vulnerability-candidates
+      columns:
+        - title
+        - filePath
+        - analysisResult
+        - verificationResult
+        - triageResult
+        - score
+        - createdAt
+      filters:
+        - analysisResult
+        - verificationResult
+        - triageResult
+      defaultSort:
+        field: createdAt
+        direction: desc
+      detail: vulnerability-candidate
 schemas:
   analyze-finding-stage-input:
     type: object

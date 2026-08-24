@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Play } from "lucide-react";
+import { useRouter } from "next/router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,6 +47,7 @@ export const RunPipelineDialog = ({
 	defaultPipelineId,
 	triggerClassName,
 }: RunPipelineDialogProps) => {
+	const router = useRouter();
 	const options = api.pipeline.publishedOptions.useQuery({ targetType: "project" });
 	const run = api.pipeline.run.useMutation();
 
@@ -100,7 +102,7 @@ export const RunPipelineDialog = ({
 	const submit = async () => {
 		if (!canRun) return;
 		try {
-			await run.mutateAsync({
+			const scanJob = await run.mutateAsync({
 				target,
 				pipelineId,
 				pipelineVersionId: versionId || undefined,
@@ -113,6 +115,8 @@ export const RunPipelineDialog = ({
 			});
 			toast.success("Scan started");
 			setOpen(false);
+			const currentPath = router.asPath.split(/[?#]/, 1)[0].replace(/\/$/, "");
+			await router.push(`${currentPath}/jobs/${encodeURIComponent(scanJob.scanJobId)}`);
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : "Unable to start scan");
 		}

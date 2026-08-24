@@ -192,7 +192,7 @@ const scanJobRow = (overrides: Record<string, unknown> = {}) => ({
 	description: "",
 	note: null,
 	pipelineId: "pipeline-full",
-	pipelineSystemKey: "full",
+	pipelineSlug: "full",
 	status: "finished",
 	triggerSource: "manual",
 	createdAt: "2026-01-01T00:00:00.000Z",
@@ -255,7 +255,7 @@ describe("listScanJobsByApplicationIdPageRepo", () => {
 		expect(itemQuery?.offset).toBe(20);
 	});
 
-	it("counts without the task join", async () => {
+	it("counts without a task join", async () => {
 		seedSelect("scan_jobs", [scanJobRow()], [{ count: 1 }]);
 
 		await listScanJobsByApplicationIdPageRepo("app-1", {

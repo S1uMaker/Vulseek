@@ -72,7 +72,30 @@ rewrite_proxy_host() {
 
 resolve_container_environment() {
     if [ -n "${VULSEEK_CONTAINER_ENV:-}" ]; then
-        printf '%s' "$VULSEEK_CONTAINER_ENV"
+        # The database setting may predate the internal Docker service name.
+        # Preserve configured variables but always repair both proxy bypass
+        # spellings before passing the environment to scan containers.
+        printf '%s\n' "$VULSEEK_CONTAINER_ENV" | awk -v service="vulseek-dev" '
+            function add_service(value,    item, parts, i) {
+                if (value == "") value = "localhost,127.0.0.1,::1"
+                count = split(value, parts, ",")
+                for (i = 1; i <= count; i++) {
+                    item = parts[i]
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", item)
+                    if (item == service) return value
+                }
+                return value "," service
+            }
+            /^NO_PROXY=/ { no_proxy = substr($0, 10); next }
+            /^no_proxy=/ { lower_no_proxy = substr($0, 10); next }
+            NF { print }
+            END {
+                if (no_proxy == "") no_proxy = lower_no_proxy
+                if (lower_no_proxy == "") lower_no_proxy = no_proxy
+                print "NO_PROXY=" add_service(no_proxy)
+                print "no_proxy=" add_service(lower_no_proxy)
+            }
+        '
         return 0
     fi
 
@@ -91,9 +114,14 @@ resolve_container_environment() {
     done
 
     value="${NO_PROXY:-${no_proxy:-}}"
+    # Keep traffic to the dev service on the Docker network. Otherwise
+    # runtime API calls from scan containers are sent through the host proxy.
     if [ -n "$value" ]; then
-        result+="NO_PROXY=${value}\nno_proxy=${value}\n"
+        value="${value},vulseek-dev"
+    else
+        value="localhost,127.0.0.1,::1,vulseek-dev"
     fi
+    result+="NO_PROXY=${value}\nno_proxy=${value}\n"
     printf '%b' "$result"
 }
 
@@ -346,7 +374,13 @@ start_postgres() {
         --health-timeout 5s \
         --health-retries 5 \
         --constraint 'node.role==manager' \
-        postgres:16
+        postgres:16 \
+        -c wal_level=replica \
+        -c archive_mode=on \
+        -c archive_timeout=300 \
+        -c wal_keep_size=1GB \
+        -c max_wal_senders=10 \
+        -c "archive_command=mkdir -p /var/lib/postgresql/data/wal_archive && test ! -f /var/lib/postgresql/data/wal_archive/%f && cp %p /var/lib/postgresql/data/wal_archive/%f"
 }
 
 # 启动 Redis 服务

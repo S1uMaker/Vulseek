@@ -6,6 +6,16 @@ export type AgentStreamMetadata = {
 	status: string;
 };
 
+export type AgentStreamPrompt = {
+	promptId: string;
+	taskId: string | null;
+	sessionId: string | null;
+	turnIndex: number;
+	timestamp: string;
+	text: string;
+	offset: number;
+};
+
 export type AgentStreamEvent =
 	| { type: "metadata"; payload: AgentStreamMetadata }
 	| { type: "waiting"; payload: { reason: string } }
@@ -13,6 +23,7 @@ export type AgentStreamEvent =
 	| { type: "chunk"; payload: { text: string; offset: number } }
 	| { type: "snapshot_end"; payload: { length: number } }
 	| { type: "append"; payload: { text: string; offset: number } }
+	| { type: "prompt"; payload: AgentStreamPrompt }
 	| { type: "done"; payload: { status: string; taskId: string } }
 	| { type: "stream_error"; payload: { code?: string; message?: string } };
 
@@ -36,6 +47,7 @@ export class SseAgentStreamTransport implements AgentStreamTransport {
 			"chunk",
 			"snapshot_end",
 			"append",
+			"prompt",
 			"done",
 			"stream_error",
 		] as const;

@@ -24,7 +24,9 @@ export type RunningTaskStage =
 	| "goal-surface"
 	| "goal-hunt"
 	| "goal-judge"
-	| "goal-dedup";
+	| "goal-dedup"
+	| "orchestrator"
+	| "hunter";
 
 export const RESEARCH_RUNNING_TASK_STAGES = [
 	"research-scope",
@@ -97,6 +99,38 @@ export const getTobGoalRunningTaskPresentation = (
 	};
 };
 
+export const ORCH_HUNT_RUNNING_TASK_STAGES = [
+	"orchestrator",
+	"hunter",
+] as const satisfies readonly RunningTaskStage[];
+
+export const ORCH_HUNT_RUNNING_TASK_STAGE_DISPLAY_NAMES: Record<
+	(typeof ORCH_HUNT_RUNNING_TASK_STAGES)[number],
+	string
+> = {
+	orchestrator: "Orchestrator",
+	hunter: "Hunter",
+};
+
+export const isOrchHuntRunningTaskStage = (
+	stageName: string,
+): stageName is (typeof ORCH_HUNT_RUNNING_TASK_STAGES)[number] =>
+	(ORCH_HUNT_RUNNING_TASK_STAGES as readonly string[]).includes(stageName);
+
+export const getOrchHuntRunningTaskPresentation = (
+	stageName: string,
+	taskName: string,
+) => {
+	if (!isOrchHuntRunningTaskStage(stageName)) {
+		return null;
+	}
+	return {
+		title: taskName,
+		subtitle: ORCH_HUNT_RUNNING_TASK_STAGE_DISPLAY_NAMES[stageName],
+		stage: stageName,
+	};
+};
+
 export const isResearchRunningTaskStage = (
 	stageName: string,
 ): stageName is (typeof RESEARCH_RUNNING_TASK_STAGES)[number] =>
@@ -162,6 +196,8 @@ export const mapRunningTaskStage = (
 		case "goal-hunt":
 		case "goal-judge":
 		case "goal-dedup":
+		case "orchestrator":
+		case "hunter":
 			return stageName;
 		default:
 			return null;

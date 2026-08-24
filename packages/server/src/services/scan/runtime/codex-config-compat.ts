@@ -33,3 +33,24 @@ export const ensureCodexGoalsFeature = (configToml: string) => {
 	const block = ["[features]", "goals = true"].join("\n");
 	return source ? `${source}\n\n${block}` : block;
 };
+
+/**
+ * Let Codex `exec` inherit the ACP driver environment, including
+ * `VULSEEK_*` identity and `VULSEEK_RUNTIME_TOKEN`. The default policy
+ * drops names matching TOKEN/KEY/SECRET/PASSWORD.
+ */
+export const ensureCodexShellEnvironmentPolicy = (configToml: string) => {
+	const source = (configToml || "").trimEnd();
+	if (/^\s*\[shell_environment_policy\]\s*(?:#.*)?$/m.test(source)) {
+		return source;
+	}
+	const block = [
+		"[shell_environment_policy]",
+		'inherit = "all"',
+		"ignore_default_excludes = true",
+	].join("\n");
+	return source ? `${source}\n\n${block}` : block;
+};
+
+export const applyCodexRuntimeConfigToml = (configToml: string) =>
+	ensureCodexShellEnvironmentPolicy(ensureCodexGoalsFeature(configToml));

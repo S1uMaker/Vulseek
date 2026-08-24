@@ -203,18 +203,18 @@ def _print_json(value):
     print(json.dumps(value, separators=(",", ":"), ensure_ascii=True))
 
 
-def _load_task_context():
-    path = os.environ.get("VULSEEK_RESEARCH_TASK_CONTEXT_FILE", "/task/task-context.json")
+def _load_stage_input():
+    path = "/task/inputs/task-input.json"
     try:
         with open(path, "r", encoding="utf-8") as handle:
             value = json.load(handle)
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as error:
-        raise ValueError("invalid research task context") from error
+        raise ValueError("invalid research stage input") from error
     if not isinstance(value, dict):
-        raise ValueError("invalid research task context")
-    return value
+        raise ValueError("invalid research stage input")
+    return {"stageInput": value}
 
 
 def run(argv=None, connect_fn=connect_database):
@@ -237,8 +237,7 @@ def run(argv=None, connect_fn=connect_database):
 
     connection = None
     try:
-        task_context = _load_task_context()
-        task_id = task_context.get("taskId") or task_id
+        task_context = _load_stage_input()
         connection = connect_fn(database_url)
         store = ResearchStore(connection, scan_job_id, task_id, task_context)
         if args.action == "list":

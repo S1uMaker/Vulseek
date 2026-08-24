@@ -10,6 +10,11 @@ import {
 	type PipelineDocumentV3,
 	type PipelineEffectV3,
 } from "./pipeline-document-v3";
+import {
+	RESEARCH_JOB_TABS,
+	TOB_GOAL_JOB_TABS,
+	VULNERABILITY_CANDIDATES_TAB,
+} from "./pipeline-job-tabs";
 
 /**
  * V2 → V3 conversion.
@@ -17,8 +22,8 @@ import {
  * The legacy filesystem definitions (pipelines/*.yaml + stages/*.yaml +
  * schemas/*.yaml) are the only V2 source still read at runtime; every new
  * pipeline is authored and stored as a single V3 document. This converter is
- * used to seed the built-in system pipelines (`systemKey = full|delta|
- * research|tob-goal`) per organization.
+ * used to seed the built-in pipelines (`slug = full|delta|research|tob-goal`)
+ * per organization when no matching pipeline exists.
  *
  * Conversion rules:
  * - Stage id = legacy stage file name (kebab-case slug).
@@ -267,6 +272,14 @@ const convertPipeline = (
 			leader: group.leader,
 			members: group.members,
 		})),
+		presentation: {
+			jobTabs:
+				kind === "research"
+					? RESEARCH_JOB_TABS
+					: kind === "tob-goal"
+						? TOB_GOAL_JOB_TABS
+						: [VULNERABILITY_CANDIDATES_TAB],
+		},
 	};
 };
 

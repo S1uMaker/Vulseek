@@ -267,7 +267,8 @@ export const PipelineWorkbench = ({
 			<div
 				className={cn(
 					"flex w-full min-w-0 p-4 pt-5 sm:px-6",
-					view === "profiles" ? "flex-none" : "min-h-0 flex-1",
+					"min-h-0 flex-1",
+					view === "profiles" && "overflow-y-auto",
 				)}
 			>
 				<div

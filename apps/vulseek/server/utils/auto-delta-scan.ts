@@ -431,7 +431,7 @@ const findLatestDeltaScanJobByTarget = async (input: {
 		.where(
 			and(
 				eq(scanPipelines.organizationId, organizationId),
-				eq(scanPipelines.systemKey, "delta"),
+				eq(scanPipelines.slug, "delta"),
 			),
 		)
 		.limit(1)
@@ -469,12 +469,12 @@ const enqueueAutoDeltaScan = async (input: {
 		.where(
 			and(
 				eq(scanPipelines.organizationId, organizationId),
-				eq(scanPipelines.systemKey, "delta"),
+				eq(scanPipelines.slug, "delta"),
 			),
 		)
 		.limit(1)
 		.then((rows) => rows[0]);
-	if (!pipeline) throw new Error("Delta system pipeline is not configured");
+	if (!pipeline) throw new Error("Delta pipeline is not configured");
 	const scanJob = await createPipelineRun({
 		organizationId,
 		target: input.applicationId

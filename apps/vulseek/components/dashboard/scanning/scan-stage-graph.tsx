@@ -620,15 +620,11 @@ const StageDetailDialog = ({
 	onOpenChange: (open: boolean) => void;
 }) => {
 	const { t } = useTranslation("scan");
-	const agentProfile = stage?.agentProfile;
-	const defaultAgentProfileLabel =
-		agentProfile?.name ||
-		agentProfile?.agentProfileId ||
-		scanT(
-			t,
-			"scan.stageGraph.noDefaultProfile",
-			"No default profile configured",
-		);
+	const inheritProfileLabel = scanT(
+		t,
+		"scan.stageGraph.inheritPipelineDefault",
+		"No override (pipeline YAML default)",
+	);
 	const runtimeRecord = (stage ?? {}) as unknown as Record<string, unknown>;
 	const [disabled, setDisabled] = useState(false);
 	const [concurrency, setConcurrency] = useState("1");
@@ -751,11 +747,11 @@ const StageDetailDialog = ({
 										onValueChange={setAgentProfileId}
 									>
 										<SelectTrigger>
-											<SelectValue placeholder={defaultAgentProfileLabel} />
+											<SelectValue placeholder={inheritProfileLabel} />
 										</SelectTrigger>
 										<SelectContent>
 											<SelectItem value={DEFAULT_PROFILE_VALUE}>
-												{defaultAgentProfileLabel}
+												{inheritProfileLabel}
 											</SelectItem>
 											{enabledProfiles.map((profile) => (
 												<SelectItem

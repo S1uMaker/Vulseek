@@ -20,7 +20,28 @@ import {
 	normalizePipelineDefinitionSnapshot,
 	type ScanPipelineDefinitions,
 } from "../pipeline/scan-pipeline-definitions";
-import { normalizeScanRuntimeSettings } from "../runtime-settings";
+import {
+	normalizeScanRuntimeSettings,
+	normalizeScanRuntimeSettingsForStages,
+} from "../runtime-settings";
+
+const scanJobRootStageName = sql<string>`
+	coalesce(
+		${scanJobs.pipelineCompiledSnapshot}->>'root',
+		jsonb_extract_path_text(
+			${scanJobs.scanPipelineDefinitionSnapshot},
+			VARIADIC ARRAY['pipelines', ${scanJobs.pipelineId}::text, 'rootStageId']::text[]
+		)
+	)`;
+
+const latestRepositoryTaskId = sql<string>`(
+	select "taskId"
+	from "tasks"
+	where "scanJobId" = ${scanJobs.scanJobId}
+	  and "stageName" = ${scanJobRootStageName}
+	order by "createdAt" desc, "taskId" desc
+	limit 1
+)`;
 
 const selectScanJobWithRepositoryTaskStatus = {
 	scanJobId: scanJobs.scanJobId,
@@ -28,8 +49,8 @@ const selectScanJobWithRepositoryTaskStatus = {
 	description: scanJobs.description,
 	note: scanJobs.note,
 	pipelineId: scanJobs.pipelineId,
-	pipelineSystemKey: sql<string | null>`(
-		select "systemKey" from "scan_pipelines"
+	pipelineSlug: sql<string | null>`(
+		select "slug" from "scan_pipelines"
 		where "pipelineId" = ${scanJobs.pipelineId}
 	)`,
 	status: scanJobs.status,
@@ -70,16 +91,6 @@ const selectScanJobWithRepositoryTaskStatus = {
 	>`coalesce(${tasks.status}, 'pending')`,
 };
 
-const scanJobRootStageName = sql<string>`
-	coalesce(
-		${scanJobs.pipelineCompiledSnapshot}->>'root',
-		jsonb_extract_path_text(
-			${scanJobs.scanPipelineDefinitionSnapshot},
-			VARIADIC ARRAY['pipelines', ${scanJobs.pipelineId}::text, 'rootStageId']::text[]
-		)
-	)
-`;
-
 export const findScanJobByIdRepo = async (scanJobId: string) => {
 	const scanJob = await db
 		.select(selectScanJobWithRepositoryTaskStatus)
@@ -89,6 +100,7 @@ export const findScanJobByIdRepo = async (scanJobId: string) => {
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
 				eq(tasks.stageName, scanJobRootStageName),
+				eq(tasks.taskId, latestRepositoryTaskId),
 			),
 		)
 		.where(eq(scanJobs.scanJobId, scanJobId))
@@ -364,6 +376,7 @@ export const listScanJobsByApplicationIdPageRepo = async (
 				and(
 					eq(tasks.scanJobId, scanJobs.scanJobId),
 					eq(tasks.stageName, scanJobRootStageName),
+					eq(tasks.taskId, latestRepositoryTaskId),
 				),
 			)
 			.where(and(...conditions))
@@ -396,6 +409,7 @@ export const listScanJobsByComposeIdPageRepo = async (
 				and(
 					eq(tasks.scanJobId, scanJobs.scanJobId),
 					eq(tasks.stageName, scanJobRootStageName),
+					eq(tasks.taskId, latestRepositoryTaskId),
 				),
 			)
 			.where(and(...conditions))
@@ -420,6 +434,7 @@ export const listUnfinishedScanJobsRepo = async () =>
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
 				eq(tasks.stageName, scanJobRootStageName),
+				eq(tasks.taskId, latestRepositoryTaskId),
 			),
 		)
 		.where(sql`${scanJobs.status} in ('pending', 'running', 'finalizing')`);
@@ -453,6 +468,7 @@ export const createScanJobRepo = async (input: {
 	pipelineCompiledSnapshot?: Record<string, unknown> | null;
 	maxTasks?: number | null;
 	deadlineAt?: string | null;
+	runtimeStageIds?: readonly string[];
 }) => {
 	const created = await db
 		.insert(scanJobs)
@@ -467,8 +483,9 @@ export const createScanJobRepo = async (input: {
 			baseSha: input.baseSha,
 			targetRef: input.targetRef,
 			targetTag: input.targetTag,
-			scanRuntimeSettings: normalizeScanRuntimeSettings(
+			scanRuntimeSettings: normalizeScanRuntimeSettingsForStages(
 				input.scanRuntimeSettings ?? {},
+				input.runtimeStageIds ?? [],
 			),
 			scanPipelineDefinitionSnapshot:
 				input.scanPipelineDefinitionSnapshot ?? {},

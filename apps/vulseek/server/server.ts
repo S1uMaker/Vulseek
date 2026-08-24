@@ -75,13 +75,12 @@ void app.prepare().then(async () => {
 			await syncContainerEnvironmentSettingToProcess();
 		}
 
-		// Organization system pipelines: seed built-ins for every org and
-		// backfill profile defaults. Idempotent; also upgrades templates on
-		// ship when their content hash changed.
+		// Organization system pipelines: seed built-ins only when an org has
+		// no matching pipeline. Existing rows stay on the published DB version.
 		try {
-			const { seedAllOrganizationsSystemPipelines, backfillProfileDefaultPipelines } =
+			const { seedAllOrganizationsBuiltinPipelines, backfillProfileDefaultPipelines } =
 				await import("@vulseek/server/services/pipeline-system");
-			await seedAllOrganizationsSystemPipelines();
+			await seedAllOrganizationsBuiltinPipelines();
 			await backfillProfileDefaultPipelines();
 		} catch (error) {
 			console.log(

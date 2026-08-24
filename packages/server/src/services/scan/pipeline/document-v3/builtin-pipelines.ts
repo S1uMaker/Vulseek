@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { computePipelineContentHash } from "./pipeline-document-v3-hash";
 import {
 	normalizePipelineDocumentV3,
@@ -9,30 +8,24 @@ import {
 } from "./pipeline-document-v3-io";
 import type { PipelineDocumentV3 } from "./pipeline-document-v3";
 import { convertV2DefinitionsToV3, type PipelineKind } from "./pipeline-v2-converter";
+import { resolveScanPipelineDefinitionsDir } from "../scan-pipeline-definitions";
 
 /**
  * Built-in system pipelines.
  *
  * The four V2 pipelines (full / delta / research / tob-goal) are converted
- * once into V3 documents (prompts inlined). At runtime the system prefers the
- * generated `definitions/pipelines-v3/*.yaml` files when present; otherwise
- * it converts the legacy definitions on the fly. The generated files are
- * checked in and are the product templates seeded per organization.
+ * once into V3 documents (prompts inlined). Runtime prefers the checked-in
+ * `definitions/pipelines-v3/*.yaml` files (same tree for dev and release);
+ * otherwise it converts the legacy definitions on the fly. YAML is only
+ * seeded into an organization that does not already have the pipeline.
  */
 
 export type BuiltinPipelineTemplate = {
 	kind: PipelineKind;
-	systemKey: string;
+	slug: string;
 	name: string;
 	yaml: string;
 	contentHash: string;
-};
-
-export const BUILTIN_SYSTEM_KEYS: Record<PipelineKind, string> = {
-	full: "full",
-	delta: "delta",
-	research: "research",
-	"tob-goal": "tob-goal",
 };
 
 export const BUILTIN_DOCUMENT_NAME: Record<PipelineKind, string> = {
@@ -43,20 +36,12 @@ export const BUILTIN_DOCUMENT_NAME: Record<PipelineKind, string> = {
 };
 
 const resolvePipelinesV3Dir = (): string | null => {
-	// The generated templates sit next to the legacy definitions:
-	//   src:  …/scan/pipeline/definitions/pipelines-v3
-	//   dist: …/scan/pipeline/definitions/pipelines-v3
-	// (dev/prod share the layout because `server:script` keeps @vulseek/server
-	// resolved to src; import.meta.url works in both ESM and tsx.)
-	const moduleDir = dirname(fileURLToPath(import.meta.url));
-	for (const depth of [1, 2, 3]) {
-		const candidate = join(
-			moduleDir,
-			...Array.from({ length: depth }, () => ".."),
-			"definitions",
-			"pipelines-v3",
-		);
+	try {
+		const definitionsDir = resolveScanPipelineDefinitionsDir(import.meta.url);
+		const candidate = join(definitionsDir, "pipelines-v3");
 		if (existsSync(candidate)) return candidate;
+	} catch {
+		return null;
 	}
 	return null;
 };
@@ -76,7 +61,7 @@ const loadGeneratedTemplate = (kind: PipelineKind): BuiltinPipelineTemplate | nu
 	}
 	return {
 		kind,
-		systemKey: BUILTIN_SYSTEM_KEYS[kind],
+		slug: kind,
 		name: BUILTIN_DOCUMENT_NAME[kind],
 		yaml: serializePipelineDocumentV3(document),
 		contentHash: computePipelineContentHash(document),
@@ -90,7 +75,7 @@ const buildTemplateFromV2 = (
 	const canonical = normalizePipelineDocumentV3(document);
 	return {
 		kind,
-		systemKey: BUILTIN_SYSTEM_KEYS[kind],
+		slug: kind,
 		name: BUILTIN_DOCUMENT_NAME[kind],
 		yaml: serializePipelineDocumentV3(canonical),
 		contentHash: computePipelineContentHash(canonical),

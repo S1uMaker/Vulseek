@@ -10,7 +10,7 @@ import { startContainer } from "../runtime/run-single-turn-agent";
 import type { AgentProfileLike, ScanJob } from "../types";
 import type { StageContext } from "./full-scan-stage.runtime";
 
-const DEFAULT_RUNTIME_SKILLS = ["output-validator"] as const;
+export const DEFAULT_RUNTIME_SKILLS = ["output-validator"] as const;
 
 export type AgentStageRuntime = {
 	agentProfile: AgentProfileLike | null;
@@ -60,6 +60,7 @@ export const launchAgentStageRuntime = async (input: {
 	containerNameParts?: Array<string | null | undefined>;
 	codexHomeName?: string;
 	reuseContainer?: boolean;
+	skillNames?: readonly string[];
 }) => {
 	const runtime = await resolveAgentStageRuntime(input);
 	await bindTaskRuntimeRepo({
@@ -72,6 +73,7 @@ export const launchAgentStageRuntime = async (input: {
 	await startContainer({
 		scanJob: input.scanJob,
 		taskId: input.ctx.taskId,
+		stageName: input.ctx.stageName,
 		agentProfile: runtime.agentProfile,
 		containerName: runtime.containerName,
 		codexHome: runtime.codexHome,
@@ -82,6 +84,10 @@ export const launchAgentStageRuntime = async (input: {
 			input.ctx.laneIndex !== null ? runtime.stageDirPath : undefined,
 		persistent: input.ctx.persistent,
 		reuseContainer: input.reuseContainer ?? input.ctx.reuseContainer,
+		skillNames: [
+			...(input.skillNames ?? []),
+			...DEFAULT_RUNTIME_SKILLS,
+		],
 	});
 	return runtime;
 };

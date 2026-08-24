@@ -1,15 +1,17 @@
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -23893,7 +23893,7 @@
+@@ -23893,7 +23893,9 @@
          await this.flushPendingPlanUpdates();
          this.clearPlanTurnState();
          this.sessionState.currentTurnId = null;
 -        return null;
 +        return this.createTurnSessionInfoUpdate();
++      case "task_complete":
++        return this.createTaskCompletedSessionInfoUpdate();
        case "thread/tokenUsage/updated":
          return this.createUsageUpdate(notification.params);
        case "thread/name/updated":
-@@ -24076,6 +24076,12 @@
+@@ -24076,6 +24078,18 @@
        _meta: { goal }
      };
    }
@@ -17,6 +19,12 @@
 +    return {
 +      sessionUpdate: "session_info_update",
 +      _meta: { turn: { status: "completed" } }
++    };
++  }
++  createTaskCompletedSessionInfoUpdate() {
++    return {
++      sessionUpdate: "session_info_update",
++      _meta: { task: { status: "completed" } }
 +    };
 +  }
    createReasoningDeltaEvent(event) {

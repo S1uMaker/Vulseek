@@ -55,7 +55,8 @@ export const reduceAgentStreamConnectionState = (
 	if (
 		event.type === "snapshot_start" ||
 		event.type === "chunk" ||
-		event.type === "append"
+		event.type === "append" ||
+		event.type === "prompt"
 	) {
 		return { status: "streaming", error: null };
 	}

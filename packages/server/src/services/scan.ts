@@ -144,12 +144,13 @@ import {
 	retryFailedScanJobTasksWithDeps,
 } from "./scan/retry-failed-tasks";
 import {
+	getOrchHuntRunningTaskPresentation,
 	getResearchRunningTaskPresentation,
 	getTobGoalRunningTaskPresentation,
 	type RunningTaskStage,
 } from "./scan/running-task-stage";
 import {
-	ensureCodexGoalsFeature,
+	applyCodexRuntimeConfigToml,
 	sanitizeCodexAcpConfigToml,
 } from "./scan/runtime/codex-config-compat";
 import {
@@ -304,6 +305,8 @@ const IN_PROGRESS_TASK_STAGE_ORDER: Record<
 	"goal-hunt": 23,
 	"goal-judge": 24,
 	"goal-dedup": 25,
+	orchestrator: 26,
+	hunter: 27,
 };
 
 const compareInProgressTaskView = (
@@ -801,6 +804,19 @@ const buildInProgressTaskView = (
 			id: `${researchPresentation.stage}-${task.taskId}`,
 			taskId: task.taskId,
 			...researchPresentation,
+			startedAt: task.startedAt,
+			updatedAt: task.updatedAt,
+		};
+	}
+	const orchHuntPresentation = getOrchHuntRunningTaskPresentation(
+		task.stageName,
+		task.name,
+	);
+	if (orchHuntPresentation) {
+		return {
+			id: `${orchHuntPresentation.stage}-${task.taskId}`,
+			taskId: task.taskId,
+			...orchHuntPresentation,
 			startedAt: task.startedAt,
 			updatedAt: task.updatedAt,
 		};
@@ -2051,7 +2067,7 @@ const toImageTagFromAppName = (appName: string) =>
 const sanitizeProviderName = (value: string) =>
 	value.toLowerCase().replace(/[^a-z0-9_-]/g, "-") || "provider";
 
-const CODEX_AUTO_APPROVE_CONFIG_TOML = ensureCodexGoalsFeature(
+const CODEX_AUTO_APPROVE_CONFIG_TOML = applyCodexRuntimeConfigToml(
 	[`approval_policy = "never"`, `sandbox_mode = "danger-full-access"`, ""].join(
 		"\n",
 	),
@@ -2094,7 +2110,7 @@ const withCodexAutoApproveConfigToml = (configToml: string) => {
 		defaults.length === 0
 			? configToml
 			: joinTomlBlocks(`${defaults.join("\n")}\n`, configToml);
-	return ensureCodexGoalsFeature(withDefaults);
+	return applyCodexRuntimeConfigToml(withDefaults);
 };
 
 const stripProfileControlledCodexConfigToml = (configToml: string) => {
@@ -4368,10 +4384,17 @@ const buildPipelineFromStageConfigs = (input: {
 				const {
 					ctx,
 					fromTaskId,
+					stageInput: parentStageInput,
 					stageOutput,
 					nextInputObjects,
 					dispatchKeyForItem,
 				} = taskInput;
+				const parentInput =
+					parentStageInput &&
+					typeof parentStageInput === "object" &&
+					!Array.isArray(parentStageInput)
+						? (parentStageInput as Record<string, unknown>)
+						: {};
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
 					context,
@@ -4433,7 +4456,10 @@ const buildPipelineFromStageConfigs = (input: {
 					for (const artifact of edgeConfig.artifacts) {
 						const fromValue = await renderPipelineTemplate(artifact.from, {
 							ctx,
-							stageInput: input,
+							stageInput: {
+								...parentInput,
+								...input,
+							},
 							stageOutput,
 							readJsonFile: async (containerPath) =>
 								await readTaskJsonArtifact({
@@ -4672,8 +4698,18 @@ export const buildPipelineFromCompiled = (
 		groups,
 		stageConfigs,
 		schemas: compiled.schemas,
-		useTaskNameResolvers:
-			compiled.capabilities.research || compiled.capabilities.tobGoal,
+		useTaskNameResolvers: compiled.stages.some(
+			(stage) =>
+				(stage.effects ?? []).some(
+					(effect) =>
+						effect.type === "research-registry" ||
+						effect.type === "tob-goal-registry",
+				) ||
+				(stage.runtime.plugins ?? []).some(
+					(plugin) =>
+						plugin === "research-track" || plugin === "research-deadline",
+				),
+		),
 		runtimeConfigBuilder: (stageId) =>
 			createCompiledStageRuntimeConfig(compiled, stageId) as ReturnType<
 				typeof createStageRuntimeConfig

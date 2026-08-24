@@ -54,8 +54,11 @@ The Job was canceled immediately. Database verification showed one producer/trac
 
 ## Code Changes
 
-- Research turns now write an atomic `/task/task-context.json` containing the task and stage input.
-- `research_db.py` prefers this context over the static container environment and rejects stale producer IDs and mismatched Finding tracks.
+- Research turns receive `VULSEEK_SCAN_JOB_ID`, `VULSEEK_TASK_ID`, and
+  `VULSEEK_STAGE_NAME` from the ACP Driver; the current stage input remains in
+  `/task/inputs/task-input.json`.
+- `research_db.py` uses the injected runtime identity and stage input, rejecting
+  stale producer IDs and mismatched Finding tracks.
 - Research tasks now force `reuseContainer=false` and add the task ID to the container name. Full and Delta scan reuse behavior is unchanged.
 - Added Research container-isolation and Registry regression tests.
 

@@ -1,8 +1,10 @@
 import {
+	DriverPromptEventParser,
 	findAgentStreamRuntimeByTaskId,
 	findScanJobOrganizationId,
 	validateRequest,
 } from "@vulseek/server";
+import { existsSync } from "node:fs";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getFileStreamBuffer } from "@/server/utils/file-stream-buffer";
 
@@ -19,19 +21,28 @@ const sendEvent = (res: NextApiResponse, event: string, payload: unknown) => {
 	res.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
 
-const sendSnapshot = (
+const sendPrompt = (
 	res: NextApiResponse,
-	content: string,
-	metadata: Record<string, unknown>,
+	sourceTaskId: string,
+	event: {
+		promptId: string;
+		taskId: string | null;
+		sessionId: string | null;
+		turnIndex: number;
+		timestamp: string;
+		text: string;
+		offset: number;
+	},
 ) => {
-	sendEvent(res, "snapshot_start", metadata);
-	for (let offset = 0; offset < content.length; offset += SNAPSHOT_CHUNK_SIZE) {
-		sendEvent(res, "chunk", {
-			text: content.slice(offset, offset + SNAPSHOT_CHUNK_SIZE),
-			offset,
-		});
-	}
-	sendEvent(res, "snapshot_end", { length: content.length });
+	sendEvent(res, "prompt", {
+		promptId: event.promptId,
+		taskId: event.taskId || sourceTaskId,
+		sessionId: event.sessionId,
+		turnIndex: event.turnIndex,
+		timestamp: event.timestamp,
+		text: event.text,
+		offset: event.offset,
+	});
 };
 
 export default async function handler(
@@ -77,16 +88,21 @@ export default async function handler(
 	res.flushHeaders?.();
 
 	let closed = false;
-	let activePath: string | null = null;
-	let unsubscribe: (() => void) | null = null;
+	let activeTranscriptPath: string | null = null;
+	let activePromptSourceKey = "";
+	let nextPromptTurnIndex = 0;
+	let transcriptUnsubscribe: (() => void) | null = null;
+	let promptUnsubscribes: Array<() => void> = [];
 	let statusPoll: NodeJS.Timeout | null = null;
 	let heartbeat: NodeJS.Timeout | null = null;
 	let polling = false;
 
 	const cleanup = () => {
 		closed = true;
-		unsubscribe?.();
-		unsubscribe = null;
+		transcriptUnsubscribe?.();
+		transcriptUnsubscribe = null;
+		for (const unsubscribe of promptUnsubscribes) unsubscribe();
+		promptUnsubscribes = [];
 		if (statusPoll) clearInterval(statusPoll);
 		if (heartbeat) clearInterval(heartbeat);
 	};
@@ -101,42 +117,152 @@ export default async function handler(
 
 	sendEvent(res, "metadata", metadata(streamRuntime));
 
-	const attachTranscript = async (current: typeof streamRuntime) => {
-		if (
-			closed ||
-			!current.transcriptPath ||
-			current.transcriptPath === activePath
+	const promptSourceKey = (current: typeof streamRuntime) =>
+		current.promptSources
+			.map((source) => `${source.taskId}:${source.stdoutPath}`)
+			.join("|");
+
+	const hasSessionSource = (current: typeof streamRuntime) => {
+		if (current.transcriptPath) return true;
+		return current.promptSources.some((source) => existsSync(source.stdoutPath));
+	};
+
+	const readPromptSnapshot = async (
+		source: (typeof streamRuntime.promptSources)[number],
+	) => {
+		const buffer = getFileStreamBuffer(source.stdoutPath);
+		const snapshot = await buffer.getSnapshot();
+		const parser = new DriverPromptEventParser();
+		parser.reset(0);
+		const events = parser.push(snapshot.content);
+		return { buffer, parser, events };
+	};
+
+	const sendCombinedSnapshot = async (current: typeof streamRuntime) => {
+		if (closed) return;
+		const transcriptSnapshot = current.transcriptPath
+			? await getFileStreamBuffer(current.transcriptPath).getSnapshot()
+			: { content: "", offset: 0 };
+		const promptSnapshots = await Promise.all(
+			current.promptSources.map(async (source) => ({
+				source,
+				...(await readPromptSnapshot(source)),
+			})),
+		);
+
+		activeTranscriptPath = current.transcriptPath;
+		activePromptSourceKey = promptSourceKey(current);
+
+		const prompts = promptSnapshots
+			.flatMap(({ source, events }, sourceIndex) =>
+				events.map((event) => ({
+					sourceIndex,
+					sourceTaskId: source.taskId,
+					event,
+				})),
+			)
+			.sort(
+				(left, right) =>
+					left.sourceIndex - right.sourceIndex ||
+					left.event.turnIndex - right.event.turnIndex ||
+					left.event.timestamp.localeCompare(right.event.timestamp) ||
+					left.sourceTaskId.localeCompare(right.sourceTaskId),
+			);
+		nextPromptTurnIndex = 0;
+
+		sendEvent(res, "snapshot_start", metadata(current));
+		for (
+			let offset = 0;
+			offset < transcriptSnapshot.content.length;
+			offset += SNAPSHOT_CHUNK_SIZE
 		) {
-			return Boolean(activePath);
+			sendEvent(res, "chunk", {
+				text: transcriptSnapshot.content.slice(
+					offset,
+					offset + SNAPSHOT_CHUNK_SIZE,
+				),
+				offset,
+			});
+		}
+		for (const { sourceTaskId, event } of prompts) {
+			sendPrompt(res, sourceTaskId, {
+				...event,
+				turnIndex: ++nextPromptTurnIndex,
+			});
+		}
+		sendEvent(res, "snapshot_end", {
+			length: transcriptSnapshot.content.length,
+		});
+	};
+
+	const attachSessionSources = async (current: typeof streamRuntime) => {
+		const nextTranscriptPath = current.transcriptPath;
+		const nextPromptSourceKey = promptSourceKey(current);
+		if (
+			nextTranscriptPath === activeTranscriptPath &&
+			nextPromptSourceKey === activePromptSourceKey &&
+			(nextTranscriptPath || nextPromptSourceKey)
+		) {
+			return true;
 		}
 
-		unsubscribe?.();
-		const transcriptPath = current.transcriptPath;
-		activePath = transcriptPath;
-		const buffer = getFileStreamBuffer(transcriptPath);
-		const snapshot = await buffer.getSnapshot();
+		transcriptUnsubscribe?.();
+		transcriptUnsubscribe = null;
+		for (const unsubscribe of promptUnsubscribes) unsubscribe();
+		promptUnsubscribes = [];
+		activeTranscriptPath = nextTranscriptPath;
+		activePromptSourceKey = nextPromptSourceKey;
+
+		await sendCombinedSnapshot(current);
 		if (closed) return true;
-		sendSnapshot(res, snapshot.content, metadata(current));
-		unsubscribe = buffer.subscribe((event) => {
-			if (closed) return;
-			if (event.type === "append") {
-				sendEvent(res, "append", {
-					text: event.content,
-					offset: event.offset,
-				});
-				return;
-			}
-			sendSnapshot(res, event.content, metadata(current));
-		});
+
+		if (current.transcriptPath) {
+			const transcriptBuffer = getFileStreamBuffer(current.transcriptPath);
+			transcriptUnsubscribe = transcriptBuffer.subscribe((event) => {
+				if (closed) return;
+				if (event.type === "append") {
+					sendEvent(res, "append", {
+						text: event.content,
+						offset: event.offset,
+					});
+					return;
+				}
+				void sendCombinedSnapshot(current);
+			});
+		}
+
+		for (const source of current.promptSources) {
+			const buffer = getFileStreamBuffer(source.stdoutPath);
+			const parser = new DriverPromptEventParser();
+			const snapshot = await buffer.getSnapshot();
+			parser.reset(0);
+			parser.push(snapshot.content);
+			const unsubscribe = buffer.subscribe((event) => {
+				if (closed) return;
+				if (event.type === "append") {
+					for (const prompt of parser.push(event.content)) {
+						sendPrompt(res, source.taskId, {
+							...prompt,
+							turnIndex: ++nextPromptTurnIndex,
+						});
+					}
+					return;
+				}
+				parser.reset(0);
+				parser.push(event.content);
+				void sendCombinedSnapshot(current);
+			});
+			promptUnsubscribes.push(unsubscribe);
+		}
 		return true;
 	};
 
-	if (!streamRuntime.threadId || !streamRuntime.transcriptPath) {
+	if (hasSessionSource(streamRuntime)) {
+		await attachSessionSources(streamRuntime);
+	} else {
 		sendEvent(res, "waiting", {
 			reason: streamRuntime.threadId ? "transcript_not_found" : "thread_id",
 		});
-	} else {
-		await attachTranscript(streamRuntime);
 	}
 
 	const poll = async () => {
@@ -150,15 +276,15 @@ export default async function handler(
 				res.end();
 				return;
 			}
-			if (current.transcriptPath) {
-				await attachTranscript(current);
-			} else if (!activePath) {
+			if (hasSessionSource(current)) {
+				await attachSessionSources(current);
+			} else {
 				sendEvent(res, "waiting", {
 					reason: current.threadId ? "transcript_not_found" : "thread_id",
 				});
 			}
 			if (!isLiveStatus(current.runtime.status)) {
-				if (!activePath) {
+				if (!activeTranscriptPath && !activePromptSourceKey) {
 					sendEvent(res, "stream_error", {
 						code: "source_unavailable",
 						message: "Native agent transcript is unavailable",

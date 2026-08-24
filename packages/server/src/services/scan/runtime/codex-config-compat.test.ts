@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	applyCodexRuntimeConfigToml,
 	ensureCodexGoalsFeature,
 	sanitizeCodexAcpConfigToml,
 } from "./codex-config-compat";
@@ -61,4 +62,14 @@ test("ensureCodexGoalsFeature forces goals = true inside existing features table
 		ensureCodexGoalsFeature(source),
 		["[features]", "goals = true", "foo = true"].join("\n"),
 	);
+});
+
+test("applyCodexRuntimeConfigToml lets exec inherit VULSEEK env including TOKEN names", () => {
+	const config = applyCodexRuntimeConfigToml(
+		['model = "gpt-5.4-mini"', 'approval_policy = "never"'].join("\n"),
+	);
+	assert.match(config, /\[shell_environment_policy\]/);
+	assert.match(config, /inherit = "all"/);
+	assert.match(config, /ignore_default_excludes = true/);
+	assert.match(config, /goals = true/);
 });

@@ -2,7 +2,6 @@ import io
 import json
 import os
 import pathlib
-import tempfile
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -141,7 +140,7 @@ class ResearchDbCliContractTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(stdout.getvalue()), {"status": "ok", "items": [{"trackId": "track-a"}]})
 
-    def test_cli_prefers_task_context_over_reused_container_environment(self):
+    def test_cli_uses_runtime_identity_from_environment(self):
         seen = {}
 
         class FakeStore:
@@ -152,35 +151,25 @@ class ResearchDbCliContractTests(unittest.TestCase):
             def list_entities(self, entity, filters, limit, offset):
                 return {"status": "ok", "items": []}
 
-        with tempfile.NamedTemporaryFile("w", suffix=".json") as context:
-            json.dump(
-                {
-                    "taskId": "task-current",
-                    "scanJobId": "job-a",
-                    "stageInput": {"trackId": "track-a"},
-                },
-                context,
+        stdout = io.StringIO()
+        with patch.dict(
+            os.environ,
+            {
+                "VULSEEK_RESEARCH_DATABASE_URL": "postgresql://user:password@db/vulseek",
+                "VULSEEK_SCAN_JOB_ID": "job-a",
+                "VULSEEK_TASK_ID": "task-current",
+                "VULSEEK_STAGE_NAME": "track-plan",
+            },
+            clear=True,
+        ), patch.object(research_db, "ResearchStore", FakeStore), redirect_stdout(stdout):
+            result = research_db.run(
+                ["list-tracks"],
+                connect_fn=lambda _: object(),
             )
-            context.flush()
-            stdout = io.StringIO()
-            with patch.dict(
-                os.environ,
-                {
-                    "VULSEEK_RESEARCH_DATABASE_URL": "postgresql://user:password@db/vulseek",
-                    "VULSEEK_SCAN_JOB_ID": "job-a",
-                    "VULSEEK_TASK_ID": "task-stale",
-                    "VULSEEK_RESEARCH_TASK_CONTEXT_FILE": context.name,
-                },
-                clear=True,
-            ), patch.object(research_db, "ResearchStore", FakeStore), redirect_stdout(stdout):
-                result = research_db.run(
-                    ["list-tracks"],
-                    connect_fn=lambda _: object(),
-                )
 
         self.assertEqual(result, 0)
         self.assertEqual(seen["task_id"], "task-current")
-        self.assertEqual(seen["task_context"]["stageInput"]["trackId"], "track-a")
+        self.assertEqual(seen["task_context"], {})
 
 
 class ResearchStoreRevisionTests(unittest.TestCase):

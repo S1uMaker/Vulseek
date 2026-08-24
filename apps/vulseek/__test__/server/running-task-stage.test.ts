@@ -103,6 +103,11 @@ describe("mapRunningTaskStage", () => {
 		]);
 	});
 
+	it("includes orch-hunt stages", () => {
+		expect(mapRunningTaskStage("orchestrator")).toBe("orchestrator");
+		expect(mapRunningTaskStage("hunter")).toBe("hunter");
+	});
+
 	it("drops unknown stages", () => {
 		expect(mapRunningTaskStage("unknown-stage")).toBeNull();
 	});

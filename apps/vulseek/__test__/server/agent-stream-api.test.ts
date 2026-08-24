@@ -12,6 +12,17 @@ vi.mock("@vulseek/server", () => ({
 	validateRequest: mocks.validateRequest,
 	findAgentStreamRuntimeByTaskId: mocks.findRuntime,
 	findScanJobOrganizationId: mocks.findOrganization,
+	DriverPromptEventParser: class {
+		reset() {}
+		push(content: string) {
+			return content
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line))
+				.filter((event) => event.type === "vulseek_prompt")
+				.map((event) => ({ ...event, offset: content.length }));
+		}
+	},
 }));
 
 vi.mock("@/server/utils/file-stream-buffer", () => ({
@@ -23,18 +34,33 @@ vi.mock("@/server/utils/file-stream-buffer", () => ({
 
 import handler from "@/pages/api/scan/tasks/[taskId]/agent-stream";
 
-const runtime = (overrides: Record<string, unknown> = {}) => ({
+const runtime = (overrides: Record<string, unknown> = {}) => {
+	const { runtime: runtimeOverride, ...rest } = overrides;
+	return {
 	runtime: {
 		taskId: "task-1",
 		scanJobId: "job-1",
 		status: "running",
+		baseDir: "/scan",
+		runtimeDir: "/scan/task-1",
+		stdoutPath: "/scan/task-1/stdout",
+		createdAt: "2026-08-24T00:00:00.000Z",
+		updatedAt: "2026-08-24T00:00:00.000Z",
+		...((runtimeOverride as Record<string, unknown> | undefined) || {}),
 	},
 	provider: "codex",
 	threadId: "thread-1",
 	roots: ["/scan/task-1"],
 	transcriptPath: "/scan/task-1/agent-home/sessions/rollout-thread-1.jsonl",
-	...overrides,
-});
+	promptSources: [
+		{
+			taskId: "task-1",
+			stdoutPath: "/scan/task-1/stdout",
+		},
+	],
+	...rest,
+	};
+};
 
 const makeRequest = () => {
 	let close: (() => void) | undefined;
@@ -120,18 +146,18 @@ describe("task AgentStream SSE", () => {
 	});
 
 	it("sends a complete snapshot followed by native transcript appends", async () => {
-		let subscriber:
-			| ((event: { type: string; content: string; offset: number }) => void)
-			| undefined;
+		const subscribers: Array<
+			(event: { type: string; content: string; offset: number }) => void
+		> = [];
 		mocks.subscribe.mockImplementation((listener) => {
-			subscriber = listener;
+			subscribers.push(listener);
 			return vi.fn();
 		});
 		const { request, close } = makeRequest();
 		const { response, writes } = makeResponse();
 
 		await handler(request as never, response as never);
-		subscriber?.({ type: "append", content: "next\n", offset: 29 });
+		subscribers[0]?.({ type: "append", content: "next\n", offset: 29 });
 
 		expect(eventNames(writes)).toEqual([
 			"metadata",
@@ -140,6 +166,30 @@ describe("task AgentStream SSE", () => {
 			"snapshot_end",
 			"append",
 		]);
+		close();
+	});
+
+	it("sends stdout prompt events through the session stream", async () => {
+		const prompt = {
+			type: "vulseek_prompt",
+			promptId: "prompt-1",
+			taskId: "task-1",
+			sessionId: "thread-1",
+			turnIndex: 1,
+			timestamp: "2026-08-24T00:00:00.000Z",
+			text: "Inspect the repository",
+		};
+		mocks.getSnapshot.mockResolvedValue({
+			content: `${JSON.stringify(prompt)}\n`,
+			offset: JSON.stringify(prompt).length + 1,
+		});
+		const { request, close } = makeRequest();
+		const { response, writes } = makeResponse();
+
+		await handler(request as never, response as never);
+
+		expect(eventNames(writes)).toContain("prompt");
+		expect(writes.join("")).toContain("Inspect the repository");
 		close();
 	});
 
@@ -179,6 +229,6 @@ describe("task AgentStream SSE", () => {
 			expect(eventNames(writes)).toContain("snapshot_end");
 			close();
 		}
-		expect(mocks.getSnapshot).toHaveBeenCalledTimes(2);
+		expect(mocks.getSnapshot).toHaveBeenCalledTimes(6);
 	});
 });

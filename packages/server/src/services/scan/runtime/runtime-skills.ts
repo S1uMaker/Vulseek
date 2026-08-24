@@ -5,6 +5,20 @@ import { execAsync } from "../../../utils/process/execAsync";
 
 const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
 
+const isConcurrentCopyConflict = (error: unknown) => {
+	if (!error || typeof error !== "object") {
+		return false;
+	}
+
+	const commandError = error as {
+		message?: unknown;
+		stderr?: unknown;
+	};
+	return [commandError.message, commandError.stderr].some(
+		(value) => typeof value === "string" && value.includes("File exists"),
+	);
+};
+
 export const installRuntimeSkillsInContainer = async (input: {
 	containerName: string;
 	agentsDir: string | null;
@@ -107,11 +121,18 @@ export const installRuntimeSkillsInContainer = async (input: {
 
 		const agentHomeSkillsDir = path.posix.join(input.agentHomeDir, "skills");
 
-		await timed("agent_home_skills_copy", () =>
-			execAsync(
-				`docker exec ${input.containerName} bash -lc "mkdir -p '${escapeSingleQuotes(agentHomeSkillsDir)}' && cp -a '${containerRepoRoot}/skills/.' '${escapeSingleQuotes(agentHomeSkillsDir)}/'"`,
-			),
-		);
+		try {
+			await timed("agent_home_skills_copy", () =>
+				execAsync(
+					`docker exec ${input.containerName} bash -lc "mkdir -p '${escapeSingleQuotes(agentHomeSkillsDir)}' && cp -af '${containerRepoRoot}/skills/.' '${escapeSingleQuotes(agentHomeSkillsDir)}/'"`,
+				),
+			);
+		} catch (error) {
+			if (!isConcurrentCopyConflict(error)) {
+				throw error;
+			}
+			await log("agent_home_skills_copy_benign_conflict reason=file_exists");
+		}
 		await timed("agent_home_cache_schema_copy", () =>
 			execAsync(
 				`docker exec ${input.containerName} bash -lc "if [ -d '${containerRepoRoot}/cache-schema' ]; then mkdir -p '${escapeSingleQuotes(agentHomeSkillsDir)}/cache-schema' && cp -a '${containerRepoRoot}/cache-schema/.' '${escapeSingleQuotes(agentHomeSkillsDir)}/cache-schema/'; fi"`,

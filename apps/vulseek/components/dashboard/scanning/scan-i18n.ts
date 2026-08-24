@@ -36,6 +36,8 @@ const STAGE_DEFAULTS: Record<string, string> = {
 	"exploit-validation": "Exploit Validation",
 	"exploit-review": "Exploit Review",
 	"research-report": "Research Report",
+	orchestrator: "Orchestrator",
+	hunter: "Hunter",
 	repository: "Repository",
 	module: "Module",
 	function: "Function",
@@ -203,15 +205,26 @@ export const formatTriageResultLabel = (
 	);
 };
 
-export const formatPipelineSystemKeyLabel = (
+export type ScanJobPipelineKind = "full" | "delta" | "research" | "tob-goal";
+
+export const resolveScanJobPipelineKind = (job: {
+	pipelineSlug?: string | null;
+} | null | undefined): ScanJobPipelineKind => {
+	if (job?.pipelineSlug === "delta") return "delta";
+	if (job?.pipelineSlug === "research") return "research";
+	if (job?.pipelineSlug === "tob-goal") return "tob-goal";
+	return "full";
+};
+
+export const formatPipelineKindLabel = (
 	t: ScanTranslation,
-	pipelineSystemKey?: string | null,
+	kind: ScanJobPipelineKind,
 ) =>
-	pipelineSystemKey === "delta"
+	kind === "delta"
 		? scanT(t, "scan.scanType.delta", "Delta Scan")
-		: pipelineSystemKey === "research"
+		: kind === "research"
 			? scanT(t, "scan.scanType.research", "Research Scan")
-			: pipelineSystemKey === "tob-goal"
+			: kind === "tob-goal"
 				? scanT(t, "scan.scanType.goal", "Goal Scan")
 				: scanT(t, "scan.scanType.full", "Full Scan");
 

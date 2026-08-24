@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	formStateToSchema,
 	propertyTypeFromSchema,
+	REFERENCE_PROPERTY_TYPE,
 	schemaToFormState,
 } from "@/lib/pipeline-editor/schema-form";
 
@@ -34,6 +35,7 @@ describe("propertyTypeFromSchema", () => {
 		expect(propertyTypeFromSchema({ type: "string", $pathOf: "#/schemas/module" })).toBe("path");
 		expect(propertyTypeFromSchema({ type: "string" })).toBe("string");
 		expect(propertyTypeFromSchema({})).toBe("string");
+		expect(propertyTypeFromSchema({ $ref: "#/schemas/candidate" })).toBe(REFERENCE_PROPERTY_TYPE);
 	});
 });
 
@@ -119,5 +121,46 @@ describe("schema form $pathOf round-trip", () => {
 		expect(next.properties).toMatchObject({
 			report: { $pathOf: "file://local-schema" },
 		});
+	});
+
+	it("round-trips local schema references without converting them to strings", () => {
+		const base = {
+			type: "object",
+			properties: {
+				candidate: {
+					$ref: "#/schemas/candidate",
+					description: "Candidate output",
+					"x-keep": "reference",
+				},
+			},
+		};
+		const form = schemaToFormState(base);
+		expect(form.properties[0]).toMatchObject({
+			type: REFERENCE_PROPERTY_TYPE,
+			ref: "candidate",
+			description: "Candidate output",
+		});
+
+		const next = formStateToSchema(form, base);
+		expect(next.properties).toMatchObject({
+			candidate: {
+				$ref: "#/schemas/candidate",
+				description: "Candidate output",
+				"x-keep": "reference",
+			},
+		});
+		expect((next.properties as Record<string, Record<string, unknown>>).candidate).not.toHaveProperty("type");
+	});
+
+	it("preserves an external schema reference until it is replaced", () => {
+		const base = {
+			type: "object",
+			properties: {
+				payload: { $ref: "https://example.com/schema.json" },
+			},
+		};
+		const form = schemaToFormState(base);
+		const next = formStateToSchema(form, base);
+		expect(next.properties).toMatchObject({ payload: { $ref: "https://example.com/schema.json" } });
 	});
 });

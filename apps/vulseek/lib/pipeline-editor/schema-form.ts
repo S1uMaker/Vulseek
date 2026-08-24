@@ -19,9 +19,11 @@ export const SCHEMA_TYPES = [
 export const PROPERTY_TYPES = [
 	...SCHEMA_TYPES,
 	{ value: "path", label: "path" },
+	{ value: "reference", label: "schema reference" },
 ] as const;
 
 export const PATH_PROPERTY_TYPE = "path";
+export const REFERENCE_PROPERTY_TYPE = "reference";
 
 export type SchemaPropertyDraft = {
 	name: string;
@@ -31,6 +33,8 @@ export type SchemaPropertyDraft = {
 	enumValues: unknown[];
 	/** Document schema id referenced by `$pathOf`, or empty if unset. */
 	pathOf: string;
+	/** Document schema id referenced by `$ref`, or empty if unset. */
+	ref: string;
 };
 
 export type SchemaFormState = {
@@ -46,6 +50,9 @@ export const isRecord = (value: unknown): value is Record<string, unknown> =>
 	Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 export const propertyTypeFromSchema = (property: Record<string, unknown>): string => {
+	if (typeof property.$ref === "string" && property.$ref.length > 0) {
+		return REFERENCE_PROPERTY_TYPE;
+	}
 	if (typeof property.$pathOf === "string" && property.$pathOf.length > 0) {
 		return PATH_PROPERTY_TYPE;
 	}
@@ -67,6 +74,7 @@ export const schemaToFormState = (schema: Record<string, unknown>): SchemaFormSt
 				description: typeof property.description === "string" ? property.description : "",
 				enumValues: Array.isArray(property.enum) ? property.enum : [],
 				pathOf: schemaIdFromPointer(property.$pathOf) ?? "",
+				ref: schemaIdFromPointer(property.$ref) ?? "",
 			};
 		}),
 		required: Array.isArray(schema.required) ? (schema.required as string[]) : [],
@@ -94,9 +102,20 @@ const applyPropertyForm = (
 		} else {
 			delete entry.$pathOf;
 		}
+	} else if (property.type === REFERENCE_PROPERTY_TYPE) {
+		delete entry.type;
+		delete entry.$pathOf;
+		if (property.ref.trim()) {
+			entry.$ref = schemaPointer(property.ref.trim());
+		} else if (typeof baseProperty.$ref === "string" && !schemaIdFromPointer(baseProperty.$ref)) {
+			entry.$ref = baseProperty.$ref;
+		} else {
+			delete entry.$ref;
+		}
 	} else {
 		entry.type = property.type;
 		delete entry.$pathOf;
+		delete entry.$ref;
 	}
 	if (property.description.trim()) entry.description = property.description;
 	else delete entry.description;
@@ -148,4 +167,5 @@ export const emptyPropertyDraft = (name = "newProperty"): SchemaPropertyDraft =>
 	description: "",
 	enumValues: [],
 	pathOf: "",
+	ref: "",
 });

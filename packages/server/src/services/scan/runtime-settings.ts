@@ -102,11 +102,14 @@ export const createRuntimeSettingsPolicy = (definitions: RuntimeDefinitions) => 
 	const getStageConcurrency = (stageName: string) =>
 		stageById.get(stageName)?.concurrency ?? 1;
 
-	const normalize = (value: unknown): ScanRuntimeSettings => {
+	const normalize = (
+		value: unknown,
+		additionalStageIds: ReadonlySet<string> = new Set(),
+	): ScanRuntimeSettings => {
 		const parsed = ScanRuntimeSettingsSchema.catch({}).parse(value);
 		const stages: NonNullable<ScanRuntimeSettings["stages"]> = {};
 		for (const [stageName, setting] of Object.entries(parsed.stages ?? {})) {
-			if (!runtimeStageIds.has(stageName)) continue;
+			if (!runtimeStageIds.has(stageName) && !additionalStageIds.has(stageName)) continue;
 			stages[stageName] = {
 				disabled: isStageDisableable(stageName)
 					? setting.disabled === true
@@ -215,14 +218,17 @@ export const createRuntimeSettingsPolicy = (definitions: RuntimeDefinitions) => 
 		getStageConcurrency,
 		isStageDisableable,
 		getStageSetting: (settings: unknown, stageName: string) =>
-			normalize(settings).stages?.[stageName] ?? {},
+			normalize(settings, new Set([stageName])).stages?.[stageName] ?? {},
 	};
 };
 
 export const createRuntimeSettingsFunctions = (
 	loadDefinitions: () => RuntimeDefinitions = loadScanPipelineDefinitions,
 ) => ({
-	normalize: (value: unknown) => createRuntimeSettingsPolicy(loadDefinitions()).normalize(value),
+	normalize: (
+		value: unknown,
+		additionalStageIds?: ReadonlySet<string>,
+	) => createRuntimeSettingsPolicy(loadDefinitions()).normalize(value, additionalStageIds),
 	buildComplete: (input: {
 		pipelineId: string;
 		stageIds?: string[];
@@ -242,6 +248,10 @@ export const createRuntimeSettingsFunctions = (
 const runtimeSettingsFunctions = createRuntimeSettingsFunctions();
 
 export const normalizeScanRuntimeSettings = runtimeSettingsFunctions.normalize;
+export const normalizeScanRuntimeSettingsForStages = (
+	value: unknown,
+	stageIds: readonly string[],
+) => normalizeScanRuntimeSettings(value, new Set(stageIds));
 export const buildCompleteScanRuntimeSettings = runtimeSettingsFunctions.buildComplete;
 export const buildEffectiveDisabledStageSet =
 	runtimeSettingsFunctions.buildEffectiveDisabledStageSet;

@@ -104,6 +104,9 @@ describe("buildCodexConfigToml", () => {
 		expect(config).not.toContain('preferred_auth_method = "apikey"');
 		expect(config).not.toContain('model_provider = "profile-123"');
 		expect(config).not.toContain("[model_providers.profile-123]");
+		expect(config).toContain("[shell_environment_policy]");
+		expect(config).toContain('inherit = "all"');
+		expect(config).toContain("ignore_default_excludes = true");
 	});
 
 	test("keeps the configured API-key provider for API-key credentials", () => {
@@ -115,15 +118,80 @@ describe("buildCodexConfigToml", () => {
 	});
 });
 
+describe("buildScanRuntimeApiEnvPairs", () => {
+	test("injects API URL, job token, and scan job id", async () => {
+		const { buildScanRuntimeApiEnvPairs } = await import(
+			"../../../../../packages/server/src/services/scan/runtime/scan-runtime-api-auth"
+		);
+		const pairs = buildScanRuntimeApiEnvPairs("job-a", "task-a", "orchestrator", {
+			VULSEEK_RUNTIME_API_SECRET: "secret",
+			VULSEEK_SERVICE_NAME: "vulseek-dev",
+		});
+		expect(pairs).toEqual([
+			"VULSEEK_RUNTIME_API_URL=http://vulseek-dev:3000",
+			expect.stringMatching(/^VULSEEK_RUNTIME_TOKEN=[0-9a-f]{64}$/),
+			"VULSEEK_SCAN_JOB_ID=job-a",
+			"VULSEEK_TASK_ID=task-a",
+			"VULSEEK_STAGE_NAME=orchestrator",
+		]);
+	});
+
+	test("keeps identity pairs when no runtime secret is configured", async () => {
+		const { buildScanRuntimeApiEnvPairs } = await import(
+			"../../../../../packages/server/src/services/scan/runtime/scan-runtime-api-auth"
+		);
+		expect(
+			buildScanRuntimeApiEnvPairs("job-a", "task-a", "orchestrator", {
+				VULSEEK_RUNTIME_API_SECRET: "",
+				BETTER_AUTH_SECRET: "",
+				AUTH_SECRET: "",
+				JWT_SECRET: "",
+				SESSION_SECRET: "",
+				VULSEEK_SERVICE_NAME: "vulseek-dev",
+			}),
+		).toEqual([
+			"VULSEEK_SCAN_JOB_ID=job-a",
+			"VULSEEK_TASK_ID=task-a",
+			"VULSEEK_STAGE_NAME=orchestrator",
+		]);
+	});
+});
+
+describe("ensureScanRuntimeProxyBypass", () => {
+	test("adds the Vulseek service to both proxy bypass variables", async () => {
+		const { ensureScanRuntimeProxyBypass } = await import(
+			"../../../../../packages/server/src/services/scan/runtime/scan-runtime-api-auth"
+		);
+		expect(
+			ensureScanRuntimeProxyBypass(
+				["HTTP_PROXY=http://proxy:9870", "NO_PROXY=localhost"],
+				{ VULSEEK_SERVICE_NAME: "vulseek-dev" },
+			),
+		).toEqual([
+			"HTTP_PROXY=http://proxy:9870",
+			"NO_PROXY=localhost,vulseek-dev",
+			"no_proxy=vulseek-dev",
+		]);
+	});
+
+	test("does not duplicate an existing bypass entry", async () => {
+		const { ensureScanRuntimeProxyBypass } = await import(
+			"../../../../../packages/server/src/services/scan/runtime/scan-runtime-api-auth"
+		);
+		expect(
+			ensureScanRuntimeProxyBypass(
+				["NO_PROXY=localhost,vulseek-dev", "no_proxy=vulseek-dev"],
+				{ VULSEEK_SERVICE_NAME: "vulseek-dev" },
+			),
+		).toEqual(["NO_PROXY=localhost,vulseek-dev", "no_proxy=vulseek-dev"]);
+	});
+});
+
 describe("buildResearchContainerEnvPairs", () => {
 	test("passes the database URL by inherited environment name only", () => {
 		expect(
 			buildResearchContainerEnvPairs("research", "job-a", "task-a"),
-		).toEqual([
-			"VULSEEK_SCAN_JOB_ID=job-a",
-			"VULSEEK_TASK_ID=task-a",
-			"VULSEEK_RESEARCH_DATABASE_URL",
-		]);
+		).toEqual(["VULSEEK_RESEARCH_DATABASE_URL"]);
 	});
 
 	test("does not add Research database context to Full or Delta scans", () => {

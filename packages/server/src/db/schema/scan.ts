@@ -78,16 +78,10 @@ export const taskStatusEnum = pgEnum("taskStatus", [
 	"canceled",
 ]);
 
-export const scanPipelineVersionSourceEnum = pgEnum(
-	"scanPipelineVersionSource",
-	["user", "system", "migration"],
-);
-
 /**
  * Organization-level pipeline. A pipeline owns a single shared draft plus an
  * immutable append-only version history (`scanPipelineVersions`). Only
- * published versions can run; system pipelines (`systemKey != null`) cannot
- * be deleted or archived.
+ * published versions can run.
  */
 export const scanPipelines = pgTable(
 	"scan_pipelines",
@@ -109,7 +103,6 @@ export const scanPipelines = pgTable(
 		draftRevision: integer("draftRevision").notNull().default(0),
 		draftBaseVersionId: text("draftBaseVersionId"),
 		currentPublishedVersionId: text("currentPublishedVersionId"),
-		systemKey: text("systemKey"),
 		archivedAt: text("archivedAt"),
 		createdAt: text("createdAt")
 			.notNull()
@@ -125,9 +118,6 @@ export const scanPipelines = pgTable(
 			table.organizationId,
 			table.slug,
 		),
-		systemKeyUnique: uniqueIndex("scan_pipelines_system_key_unique")
-			.on(table.organizationId, table.systemKey)
-			.where(sql`${table.systemKey} is not null`),
 	}),
 );
 
@@ -151,7 +141,6 @@ export const scanPipelineVersions = pgTable(
 		yaml: text("yaml").notNull(),
 		contentHash: text("contentHash").notNull(),
 		compiledDefinition: jsonb("compiledDefinition"),
-		source: scanPipelineVersionSourceEnum("source").notNull().default("user"),
 		publishedBy: text("publishedBy"),
 		publishedAt: text("publishedAt")
 			.notNull()

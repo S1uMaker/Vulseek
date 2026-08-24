@@ -23,8 +23,23 @@ export type AgentStreamTurn = {
 	timestamp: string;
 };
 
+export type AgentStreamPrompt = {
+	promptId: string;
+	taskId: string | null;
+	sessionId: string | null;
+	turnIndex: number;
+	timestamp: string;
+	text: string;
+	offset?: number;
+};
+
 export type AgentStreamParser = {
 	push(chunk: string): {
+		turns: AgentStreamTurn[];
+		changedFrom: number;
+		warningCount: number;
+	};
+	pushPrompt(prompt: AgentStreamPrompt): {
 		turns: AgentStreamTurn[];
 		changedFrom: number;
 		warningCount: number;

@@ -22,7 +22,6 @@ import { api } from "@/utils/api";
 import { appRouter } from "@/server/api/root";
 
 const PIPELINE_FILTERS = [
-	{ value: "system", label: "System" },
 	{ value: "archived", label: "Archived" },
 ] as const;
 
@@ -53,19 +52,12 @@ export const getServerSideProps = async (
 };
 
 const statusBadge = (
-	row: { systemKey: string | null; archivedAt: string | null; hasDraft?: boolean },
+	row: { archivedAt: string | null; hasDraft?: boolean },
 ) => {
 	if (row.archivedAt) {
 		return (
 			<Badge variant="secondary" className="shrink-0">
 				Archived
-			</Badge>
-		);
-	}
-	if (row.systemKey) {
-		return (
-			<Badge variant="outline" className="shrink-0 border-sky-500/40 text-sky-600">
-				System
 			</Badge>
 		);
 	}
@@ -94,7 +86,7 @@ const PipelinesPage = ({
 	const filtered = rows.filter((row) => {
 		if (activeFilters.length === 0) return true;
 		return activeFilters.some((filter) =>
-			filter === "system" ? Boolean(row.systemKey) : Boolean(row.archivedAt),
+			filter === "archived" ? Boolean(row.archivedAt) : false,
 		);
 	});
 

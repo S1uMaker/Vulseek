@@ -1,15 +1,11 @@
 import Head from "next/head";
 import { useTranslation } from "next-i18next";
-import { ResearchRegistryPanels } from "@/components/dashboard/scanning/research-registry-panels";
-import { ScanJobCandidatesTab } from "@/components/dashboard/scanning/scan-job-candidates-tab";
+import { DynamicJobTabRenderer } from "@/components/dashboard/scanning/dynamic-job-tab-renderer";
 import { ScanJobFilesTab } from "@/components/dashboard/scanning/scan-job-files-tab";
 import { ScanJobOverviewTab } from "@/components/dashboard/scanning/scan-job-overview-tab";
 import { ScanJobTasksTab } from "@/components/dashboard/scanning/scan-job-tasks-tab";
 import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
-import {
-	TobGoalCandidatesPanel,
-	TobGoalFindingsPanel,
-} from "@/components/dashboard/scanning/tob-goal-registry-panels";
+
 import {
 	DashboardPage,
 	DashboardPageBody,
@@ -20,7 +16,7 @@ import {
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { isTerminalScanJobStatus, scanT } from "./scan-i18n";
+import { scanT } from "./scan-i18n";
 import {
 	type Props,
 	ScanJobDetailProvider,
@@ -45,36 +41,14 @@ const ScanJobDetailShell = () => {
 		serviceData,
 		activeTab,
 		handleTabChange,
-		researchRegistryTabs,
+		jobTabs,
+		unknownTab,
 		isLoadingJob,
 		scanJob,
 		queuePendingCounts,
 		resultSummary,
 		isLoadingResultSummary,
 		refreshScanJobViews,
-		candidates,
-		isLoadingCandidates,
-		isFetchingCandidates,
-		candidatePagination,
-		candidateQuery,
-		onSearchChange,
-		analysisFilters,
-		onAnalysisFilterToggle,
-		onClearAnalysisFilters,
-		verifyFilters,
-		onVerifyFilterToggle,
-		onClearVerifyFilters,
-		triageFilters,
-		onTriageFilterToggle,
-		onClearTriageFilters,
-		onToggleCandidateSort,
-		candidatePageSize,
-		onPageSizeChange,
-		onPageChange,
-		buildCandidateDetailHref,
-		onCandidateLinkClick,
-		reanalyzingCandidateId,
-		onReanalyzeCandidate,
 		runningTasksData,
 		runningTasksError,
 		queueCountsData,
@@ -165,37 +139,8 @@ const ScanJobDetailShell = () => {
 							value: "tasks",
 							label: scanT(t, "scan.job.tabs.tasks", "阶段任务"),
 						},
-						...(scanJob?.pipelineSystemKey !== "research" &&
-						scanJob?.pipelineSystemKey !== "tob-goal"
-							? [
-									{
-										value: "candidates",
-										label: scanT(t, "scan.job.tabs.candidates", "Candidates"),
-									},
-								]
-							: []),
-						...(scanJob?.pipelineSystemKey === "tob-goal"
-							? [
-									{
-										value: "goal-candidates",
-										label: scanT(
-											t,
-											"scan.job.tabs.goalCandidates",
-											"Goal Candidates",
-										),
-									},
-									{
-										value: "goal-findings",
-										label: scanT(
-											t,
-											"scan.job.tabs.goalFindings",
-											"Goal Findings",
-										),
-									},
-								]
-							: []),
-						...researchRegistryTabs.map((tab) => ({
-							value: tab.value,
+						...jobTabs.map((tab) => ({
+							value: tab.id,
 							label: tab.label,
 						})),
 						{
@@ -213,6 +158,11 @@ const ScanJobDetailShell = () => {
 							onValueChange={handleTabChange}
 							className="w-full"
 						>
+							{unknownTab ? (
+								<p className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-800">
+									This tab is not configured on the job snapshot. Showing Overview.
+								</p>
+							) : null}
 							<TabsContent value="overview" className="mt-0 pt-0">
 								<ScanJobOverviewTab
 									scanJobId={scanJobId}
@@ -227,62 +177,28 @@ const ScanJobDetailShell = () => {
 								/>
 							</TabsContent>
 
-							{scanJob?.pipelineSystemKey === "tob-goal" ? (
-								<>
-									<TabsContent
-										value="goal-candidates"
-										className="mt-0 rounded-xl border bg-card p-4 sm:p-6"
-									>
-										<TobGoalCandidatesPanel scanJobId={scanJobId} />
-									</TabsContent>
-									<TabsContent
-										value="goal-findings"
-										className="mt-0 rounded-xl border bg-card p-4 sm:p-6"
-									>
-										<TobGoalFindingsPanel scanJobId={scanJobId} />
-									</TabsContent>
-								</>
-							) : null}
-
-							{scanJob?.pipelineSystemKey !== "research" &&
-							 scanJob?.pipelineSystemKey !== "tob-goal" ? (
-								<TabsContent value="candidates" className="mt-0 pt-0">
-									<ScanJobCandidatesTab
-										scanJobId={scanJobId}
-										candidates={candidates}
-										isLoadingCandidates={isLoadingCandidates}
-										isFetchingCandidates={isFetchingCandidates}
-										candidatePagination={candidatePagination}
-										candidateQuery={candidateQuery}
-										onSearchChange={onSearchChange}
-										analysisFilters={analysisFilters}
-										onAnalysisFilterToggle={onAnalysisFilterToggle}
-										onClearAnalysisFilters={onClearAnalysisFilters}
-										verifyFilters={verifyFilters}
-										onVerifyFilterToggle={onVerifyFilterToggle}
-										onClearVerifyFilters={onClearVerifyFilters}
-										triageFilters={triageFilters}
-										onTriageFilterToggle={onTriageFilterToggle}
-										onClearTriageFilters={onClearTriageFilters}
-										onToggleCandidateSort={onToggleCandidateSort}
-										candidatePageSize={candidatePageSize}
-										onPageSizeChange={onPageSizeChange}
-										onPageChange={onPageChange}
-										buildCandidateDetailHref={buildCandidateDetailHref}
-										onCandidateLinkClick={onCandidateLinkClick}
-										reanalyzingCandidateId={reanalyzingCandidateId}
-										onReanalyzeCandidate={onReanalyzeCandidate}
-									/>
-								</TabsContent>
-							) : null}
-
-							{scanJob?.pipelineSystemKey === "research" ? (
-								<ResearchRegistryPanels
+							<TabsContent value="tasks" className="mt-0 pt-0">
+								<ScanJobTasksTab
 									scanJobId={scanJobId}
-									activeTab={activeTab}
-									live={!isTerminalScanJobStatus(scanJob.status)}
+									scanJob={scanJob}
+									runningTasksData={runningTasksData}
+									runningTasksError={runningTasksError}
+									queueCountsData={queueCountsData}
+									queueCountsError={queueCountsError}
+									jobPipeline={jobPipeline}
+									taskHref={buildTaskDetailHref}
 								/>
-							) : null}
+							</TabsContent>
+
+							{jobTabs.map((tab) => (
+								<TabsContent
+									key={tab.id}
+									value={tab.id}
+									className="mt-0 rounded-xl border bg-card p-4 sm:p-6"
+								>
+									<DynamicJobTabRenderer tab={tab} />
+								</TabsContent>
+							))}
 
 							<TabsContent value="monitoring" className="mt-0 pt-0">
 								<ScanMonitoring mode="job" scanJobId={scanJobId} />
@@ -299,19 +215,6 @@ const ScanJobDetailShell = () => {
 									onSelectFile={onSelectFile}
 									selectedFile={selectedFile}
 									isLoadingSelectedFile={isLoadingSelectedFile}
-								/>
-							</TabsContent>
-
-							<TabsContent value="tasks" className="mt-0 pt-0">
-								<ScanJobTasksTab
-									scanJobId={scanJobId}
-									scanJob={scanJob}
-									runningTasksData={runningTasksData}
-									runningTasksError={runningTasksError}
-									queueCountsData={queueCountsData}
-									queueCountsError={queueCountsError}
-									jobPipeline={jobPipeline}
-									taskHref={buildTaskDetailHref}
 								/>
 							</TabsContent>
 						</Tabs>

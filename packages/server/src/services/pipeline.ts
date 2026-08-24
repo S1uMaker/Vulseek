@@ -23,8 +23,7 @@ import {
  * Permissions: every read/write takes an explicit `organizationId`; rows are
  * always filtered by it. Manager operations (create / save draft / publish /
  * copy / set current / duplicate / archive) are guarded by the router via
- * `isPipelineManager`; this service only enforces org scoping and system
- * pipeline invariants (system pipelines cannot be archived).
+ * `isPipelineManager`; this service only enforces org scoping.
  *
  * Draft semantics:
  * - `draftYaml` stores the raw text verbatim; `draftRevision` is the
@@ -60,7 +59,6 @@ export const listPipelinesForOrganization = async (
 			slug: scanPipelines.slug,
 			name: scanPipelines.name,
 			description: scanPipelines.description,
-			systemKey: scanPipelines.systemKey,
 			archivedAt: scanPipelines.archivedAt,
 			createdAt: scanPipelines.createdAt,
 			updatedAt: scanPipelines.updatedAt,
@@ -120,7 +118,6 @@ export const getPipelineForOrganization = async (
 					versionNumber: scanPipelineVersions.versionNumber,
 					contentHash: scanPipelineVersions.contentHash,
 					publishedAt: scanPipelineVersions.publishedAt,
-					source: scanPipelineVersions.source,
 				})
 				.from(scanPipelineVersions)
 				.where(
@@ -150,7 +147,6 @@ export const getPipelineVersionForOrganization = async (
 			versionNumber: scanPipelineVersions.versionNumber,
 			yaml: scanPipelineVersions.yaml,
 			contentHash: scanPipelineVersions.contentHash,
-			source: scanPipelineVersions.source,
 			publishedBy: scanPipelineVersions.publishedBy,
 			publishedAt: scanPipelineVersions.publishedAt,
 		})
@@ -183,7 +179,6 @@ export const listPipelineVersionsForOrganization = async (
 			pipelineVersionId: scanPipelineVersions.pipelineVersionId,
 			versionNumber: scanPipelineVersions.versionNumber,
 			contentHash: scanPipelineVersions.contentHash,
-			source: scanPipelineVersions.source,
 			publishedBy: scanPipelineVersions.publishedBy,
 			publishedAt: scanPipelineVersions.publishedAt,
 		})
@@ -201,7 +196,6 @@ export const listPublishedPipelineOptions = async (
 			pipelineId: scanPipelines.pipelineId,
 			slug: scanPipelines.slug,
 			name: scanPipelines.name,
-			systemKey: scanPipelines.systemKey,
 			archivedAt: scanPipelines.archivedAt,
 			currentVersionNumber: scanPipelineVersions.versionNumber,
 			currentVersionId: scanPipelineVersions.pipelineVersionId,
@@ -270,7 +264,6 @@ export const createPipelineForOrganization = async (
 		name: string;
 		description?: string | null;
 		initialYaml?: string | null;
-		systemKey?: string | null;
 	},
 ) => {
 	const { organizationId, userId } = input;
@@ -306,7 +299,6 @@ export const createPipelineForOrganization = async (
 			description: input.description ?? null,
 			draftYaml,
 			draftRevision,
-			systemKey: input.systemKey ?? null,
 			createdBy: userId,
 			updatedBy: userId,
 		})
@@ -444,7 +436,6 @@ export const publishPipelineForOrganization = async (
 					compiledDefinition: compilePipelineDocumentV3(
 						canonical,
 					) as unknown,
-					source: "user",
 					publishedBy: userId,
 				})
 				.returning({ pipelineVersionId: scanPipelineVersions.pipelineVersionId });
@@ -549,13 +540,7 @@ export const archivePipelineForOrganization = async (
 	input: PipelineManagerInput & { pipelineId: string },
 ) => {
 	const { organizationId, pipelineId, userId } = input;
-	const pipeline = await findPipelineForOrganization(organizationId, pipelineId);
-	if (pipeline.systemKey) {
-		throw new TRPCError({
-			code: "FORBIDDEN",
-			message: "System pipelines cannot be archived",
-		});
-	}
+	await findPipelineForOrganization(organizationId, pipelineId);
 	await db
 		.update(scanPipelines)
 		.set({

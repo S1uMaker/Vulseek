@@ -53,16 +53,26 @@ test("ACP driver creates a session and writes normalized snapshots", async () =>
 	const inputPath = path.join(dir, "input.json");
 	const outputPath = path.join(dir, "output.json");
 	const stdoutPath = path.join(dir, "stdout");
+	const envPath = path.join(dir, "adapter-env.json");
 
 	await writeFile(
 		adapterPath,
 		`
+import { writeFileSync } from "node:fs";
 import readline from "node:readline";
+const envPath = process.argv[2];
 const rl = readline.createInterface({ input: process.stdin });
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 rl.on("line", (line) => {
   const message = JSON.parse(line);
-  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, fork: {}, close: {} } } } });
+  if (message.method === "initialize") {
+    writeFileSync(envPath, JSON.stringify({
+      scanJobId: process.env.VULSEEK_SCAN_JOB_ID,
+      taskId: process.env.VULSEEK_TASK_ID,
+      stageName: process.env.VULSEEK_STAGE_NAME,
+    }));
+    send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, fork: {}, close: {} } } } });
+  }
   if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "thread-1" } });
   if (message.method === "session/prompt") {
     send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "thread-1", update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Inspecting" } } } });
@@ -80,12 +90,14 @@ rl.on("line", (line) => {
 	await writeFile(
 		inputPath,
 		JSON.stringify({
+			scanJobId: "job-1",
 			taskId: "task-1",
+			stageName: "scan-target",
 			provider: "codex",
 			cwd: dir,
 			prompt: "Inspect the repository\nwith \"quotes\" and unicode 测试 \ and \nslashes",
 			adapterCommand: process.execPath,
-			adapterArgs: [adapterPath],
+			adapterArgs: [adapterPath, envPath],
 			stdoutPath,
 			structuredOutputResultPathInContainer: outputPath,
 			nullableOutput: true,
@@ -117,6 +129,11 @@ rl.on("line", (line) => {
 	);
 
 	assert.equal(result.code, 0, result.stderr);
+	assert.deepEqual(JSON.parse(await readFile(envPath, "utf-8")), {
+		scanJobId: "job-1",
+		taskId: "task-1",
+		stageName: "scan-target",
+	});
 	const events = await readEvents(stdoutPath);
 	assert.equal(events.some((event) => event.type === "start"), true);
 	assert.equal(
@@ -135,6 +152,13 @@ rl.on("line", (line) => {
 		events.find((event) => event.type === "log" && event.message === "task_input")?.input.prompt,
 		"Inspect the repository\nwith \"quotes\" and unicode 测试 \ and \nslashes",
 	);
+	const promptEvent = events.find((event) => event.type === "vulseek_prompt");
+	assert.equal(promptEvent?.taskId, "task-1");
+	assert.equal(promptEvent?.sessionId, "thread-1");
+	assert.equal(promptEvent?.turnIndex, 1);
+	assert.equal(typeof promptEvent?.promptId, "string");
+	assert.equal(typeof promptEvent?.timestamp, "string");
+	assert.equal(promptEvent?.text, events.find((event) => event.type === "log" && event.message === "task_input")?.input.prompt);
 	assert.deepEqual(
 		events.findLast((event) => event.type === "usage")?.usage,
 		{ used: 42, contextSize: 1000 },
@@ -407,6 +431,214 @@ rl.on("line", (line) => {
 	assert.equal(
 		events.some((event) => event.message === "structured output recovery prompt"),
 		false,
+	);
+});
+
+test("ACP driver cancels a hanging Goal prompt after goal complete when output.json is valid", async () => {
+	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-goal-hang-"));
+	const adapterPath = path.join(dir, "fake-adapter.mjs");
+	const inputPath = path.join(dir, "input.json");
+	const outputPath = path.join(dir, "output.json");
+	const stdoutPath = path.join(dir, "stdout");
+	const requestLogPath = path.join(dir, "requests.jsonl");
+	await writeFile(outputPath, JSON.stringify({ route: null, exit: false, output: {} }), "utf-8");
+	await writeFile(
+		adapterPath,
+		`
+import fs from "node:fs";
+import readline from "node:readline";
+const requestLogPath = process.argv[2];
+const rl = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+const goal = (status) => ({ objective: "planner", status, controlMethod: "_session/goal" });
+let promptId = null;
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  fs.appendFileSync(requestLogPath, JSON.stringify({ method: message.method }) + "\\n");
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } }, _meta: { goal: { version: 1, controlMethod: "_session/goal", actions: ["set", "pause", "resume", "clear"] } } } });
+  if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "goal-hang-thread" } });
+  if (message.method === "session/prompt") {
+    promptId = message.id;
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "goal-hang-thread", update: { sessionUpdate: "session_info_update", _meta: { goal: goal("active") } } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "goal-hang-thread", update: { sessionUpdate: "session_info_update", _meta: { goal: goal("complete") } } } });
+    return;
+  }
+  if (message.method === "session/cancel" && promptId !== null) {
+    send({ jsonrpc: "2.0", id: promptId, result: { stopReason: "cancelled" } });
+    promptId = null;
+  }
+  if (message.method === "session/close") { send({ jsonrpc: "2.0", id: message.id, result: {} }); process.exit(0); }
+});
+`,
+		"utf-8",
+	);
+	await writeFile(
+		inputPath,
+		JSON.stringify({
+			taskId: "task-goal-hang",
+			provider: "codex",
+			cwd: dir,
+			prompt: "Continue the standing planner goal.",
+			adapterCommand: process.execPath,
+			adapterArgs: [adapterPath, requestLogPath],
+			stdoutPath,
+			structuredOutputResultPathInContainer: outputPath,
+			nullableOutput: false,
+			goalEnabled: true,
+			promptTimeoutMs: 4000,
+		}),
+		"utf-8",
+	);
+
+	const startedAt = Date.now();
+	const result = await run(
+		process.execPath,
+		[
+			path.resolve(
+				process.cwd(),
+				"packages/server/src/services/dockerfiles/vulseek-acp-driver.mjs",
+			),
+			inputPath,
+		],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				VULSEEK_AGENT_EVENTS_PATH: path.resolve(
+					process.cwd(),
+					"vendor/claude-replay/src/agent-events.mjs",
+				),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+
+	assert.equal(result.code, 0, result.stderr);
+	assert.ok(Date.now() - startedAt < 3500);
+	const methods = (await readFile(requestLogPath, "utf-8"))
+		.trim()
+		.split("\n")
+		.map(JSON.parse)
+		.map((entry) => entry.method);
+	assert.equal(methods.includes("session/cancel"), true);
+	const events = await readEvents(stdoutPath);
+	assert.equal(
+		events.some((event) => event.type === "log" && event.message === "goal_turn_settled"),
+		true,
+	);
+	assert.equal(
+		events.some((event) => String(event.error || event.message || "").includes("timed out")),
+		false,
+	);
+	assert.deepEqual(events.findLast((event) => event.type === "task_done"), {
+		type: "task_done",
+		taskId: "task-goal-hang",
+		status: "completed",
+		stopReason: "end_turn",
+	});
+});
+
+test("ACP driver settles a Goal task on Codex task_complete metadata when output.json is valid", async () => {
+	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-goal-task-complete-"));
+	const adapterPath = path.join(dir, "fake-adapter.mjs");
+	const inputPath = path.join(dir, "input.json");
+	const outputPath = path.join(dir, "output.json");
+	const stdoutPath = path.join(dir, "stdout");
+	await writeFile(
+		adapterPath,
+		`
+import fs from "node:fs";
+import readline from "node:readline";
+const outputPath = process.argv[2];
+const rl = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+let promptId = null;
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } }, _meta: { goal: { version: 1, controlMethod: "_session/goal", actions: ["set", "pause", "resume", "clear"] } } } });
+  if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "goal-task-complete-thread" } });
+  if (message.method === "session/prompt") {
+    promptId = message.id;
+    fs.writeFileSync(outputPath, JSON.stringify({ route: null, exit: false, output: { done: true } }));
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "goal-task-complete-thread", update: { sessionUpdate: "session_info_update", _meta: { task: { status: "completed" } } } } });
+    return;
+  }
+  if (message.method === "session/cancel" && promptId !== null) {
+    send({ jsonrpc: "2.0", id: promptId, result: { stopReason: "cancelled" } });
+    promptId = null;
+  }
+  if (message.method === "session/close") { send({ jsonrpc: "2.0", id: message.id, result: {} }); process.exit(0); }
+});
+`,
+		"utf-8",
+	);
+	await writeFile(
+		inputPath,
+		JSON.stringify({
+			taskId: "task-goal-task-complete",
+			provider: "codex",
+			cwd: dir,
+			prompt: "Continue the standing planner goal.",
+			adapterCommand: process.execPath,
+			adapterArgs: [adapterPath, outputPath],
+			stdoutPath,
+			structuredOutputResultPathInContainer: outputPath,
+			nullableOutput: false,
+			goalEnabled: true,
+			promptTimeoutMs: 4000,
+		}),
+		"utf-8",
+	);
+
+	const startedAt = Date.now();
+	const result = await run(
+		process.execPath,
+		[
+			path.resolve(
+				process.cwd(),
+				"packages/server/src/services/dockerfiles/vulseek-acp-driver.mjs",
+			),
+			inputPath,
+		],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				VULSEEK_AGENT_EVENTS_PATH: path.resolve(
+					process.cwd(),
+					"vendor/claude-replay/src/agent-events.mjs",
+				),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+
+	assert.equal(result.code, 0, result.stderr);
+	assert.ok(Date.now() - startedAt < 3500);
+	const events = await readEvents(stdoutPath);
+	assert.equal(
+		events.some((event) => event.type === "log" && event.message === "task_completed"),
+		true,
+	);
+	assert.equal(
+		events.some((event) => event.type === "log" && event.message === "goal_turn_settled"),
+		true,
+	);
+	assert.deepEqual(events.findLast((event) => event.type === "task_done"), {
+		type: "task_done",
+		taskId: "task-goal-task-complete",
+		status: "completed",
+		stopReason: "end_turn",
+	});
+	assert.equal(
+		events.some(
+			(event) =>
+				event.type === "activity" &&
+				event.activity?.kind === "goal" &&
+				event.activity?.label === "Task completed" &&
+				event.activity?.task?.status === "completed",
+		),
+		true,
 	);
 });
 

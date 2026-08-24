@@ -65,6 +65,54 @@ const Schema = z
 
 type Schema = z.infer<typeof Schema>;
 
+const emptyProfileValues = (): Schema => ({
+	name: "",
+	provider: "codex",
+	authMode: "api_key",
+	homePath: "",
+	baseUrl: "https://api.openai.com/v1",
+	apiKey: "",
+	model: "gpt-5.4",
+	pricingProvider: "openai",
+	thinkingLevel: "medium",
+	thinkingLevelEnabled: true,
+	envs: "",
+	isEnabled: true,
+});
+
+const valuesFromProfile = (
+	source: Partial<Schema> & { name: string },
+	name: string,
+): Schema => ({
+	name,
+	provider: source.provider ?? "codex",
+	authMode: source.authMode ?? "api_key",
+	homePath: source.homePath ?? "",
+	baseUrl: source.baseUrl ?? "https://api.openai.com/v1",
+	apiKey: source.apiKey ?? "",
+	model: source.model ?? "gpt-5.4",
+	pricingProvider: source.pricingProvider ?? null,
+	thinkingLevel: source.thinkingLevel ?? "medium",
+	thinkingLevelEnabled: source.thinkingLevelEnabled ?? true,
+	envs: source.envs ?? "",
+	isEnabled: source.isEnabled ?? true,
+});
+
+const applyProviderDefaults = (
+	form: ReturnType<typeof useForm<Schema>>,
+	provider: Schema["provider"],
+) => {
+	if (provider === "claude_code") {
+		form.setValue("baseUrl", "https://api.anthropic.com");
+		form.setValue("model", "claude-sonnet-4-5");
+		form.setValue("pricingProvider", "anthropic");
+		return;
+	}
+	form.setValue("baseUrl", "https://api.openai.com/v1");
+	form.setValue("model", "gpt-5.4");
+	form.setValue("pricingProvider", "openai");
+};
+
 const renderEnvHighlight = (value: string) => {
 	const lines = value.length > 0 ? value.split("\n") : [""];
 
@@ -123,20 +171,9 @@ export const HandleAgentProfile = ({
 
 	const form = useForm<Schema>({
 		resolver: zodResolver(Schema),
-		defaultValues: {
-			name: "",
-			provider: "codex",
-			authMode: "api_key",
-			homePath: "",
-			baseUrl: "https://api.openai.com/v1",
-			apiKey: "",
-			model: "gpt-5.4",
-			pricingProvider: "openai",
-			thinkingLevel: "medium",
-			thinkingLevelEnabled: true,
-			envs: "",
-			isEnabled: true,
-		},
+		defaultValues: duplicateProfile
+			? valuesFromProfile(duplicateProfile, `${duplicateProfile.name} Copy`)
+			: emptyProfileValues(),
 	});
 
 	const provider = useWatch({
@@ -162,37 +199,15 @@ export const HandleAgentProfile = ({
 	const showEnvPlaceholder = !envsValue;
 
 	useEffect(() => {
-		const source = duplicateProfile || data;
-		form.reset({
-			name: duplicateProfile
-				? `${duplicateProfile.name} Copy`
-				: (data?.name ?? ""),
-			provider: source?.provider ?? "codex",
-			authMode: source?.authMode ?? "api_key",
-			homePath: source?.homePath ?? "",
-			baseUrl: source?.baseUrl ?? "https://api.openai.com/v1",
-			apiKey: source?.apiKey ?? "",
-			model: source?.model ?? "gpt-5.4",
-			pricingProvider: source?.pricingProvider ?? null,
-			thinkingLevel: source?.thinkingLevel ?? "medium",
-			thinkingLevelEnabled: source?.thinkingLevelEnabled ?? true,
-			envs: source?.envs ?? "",
-			isEnabled: source?.isEnabled ?? true,
-		});
+		if (duplicateProfile) {
+			form.reset(
+				valuesFromProfile(duplicateProfile, `${duplicateProfile.name} Copy`),
+			);
+			return;
+		}
+		if (!data) return;
+		form.reset(valuesFromProfile(data, data.name ?? ""));
 	}, [data, duplicateProfile, form]);
-
-	useEffect(() => {
-		if (provider === "claude_code" && !agentProfileId && !data?.baseUrl) {
-			form.setValue("baseUrl", "https://api.anthropic.com");
-			form.setValue("model", "claude-sonnet-4-5");
-			if (!data?.pricingProvider) form.setValue("pricingProvider", "anthropic");
-		}
-		if (provider === "codex" && !agentProfileId && !data?.baseUrl) {
-			form.setValue("baseUrl", "https://api.openai.com/v1");
-			form.setValue("model", "gpt-5.4");
-			if (!data?.pricingProvider) form.setValue("pricingProvider", "openai");
-		}
-	}, [agentProfileId, data?.baseUrl, data?.pricingProvider, form, provider]);
 
 	useEffect(() => {
 		const textarea = envTextareaRef.current;
@@ -296,7 +311,16 @@ export const HandleAgentProfile = ({
 							render={({ field }) => (
 								<FormItem>
 									<FormLabel>Agent</FormLabel>
-									<Select onValueChange={field.onChange} value={field.value}>
+									<Select
+										onValueChange={(value) => {
+											const next = value as Schema["provider"];
+											field.onChange(next);
+											if (!agentProfileId) {
+												applyProviderDefaults(form, next);
+											}
+										}}
+										value={field.value}
+									>
 										<FormControl>
 											<SelectTrigger>
 												<SelectValue placeholder="Select an agent" />

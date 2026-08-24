@@ -190,7 +190,7 @@ const ProfileDetailPage = () => {
 	useEffect(() => {
 		if (pipelineId || !pipelineOptions.data?.length) return;
 		const preferred =
-			pipelineOptions.data.find((pipeline) => pipeline.systemKey === "research") ??
+			pipelineOptions.data.find((pipeline) => pipeline.slug === "research") ??
 			pipelineOptions.data[0];
 		setPipelineId(preferred?.pipelineId ?? "");
 	}, [pipelineId, pipelineOptions.data]);

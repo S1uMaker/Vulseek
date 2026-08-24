@@ -213,8 +213,10 @@ export type AgentTaskRuntime = {
 	containerName: string | null;
 	sessionId: string | null;
 	provider: "codex" | "claude";
+	baseDir: string;
 	runtimeDir: string;
 	stdoutPath: string;
+	createdAt: string | null;
 	updatedAt: string | null;
 };
 
@@ -244,9 +246,9 @@ type AgentTaskRuntimeSource = Pick<
 	| "threadId"
 	| "agentProfile"
 	| "updatedAt"
->;
+> & { createdAt?: string | null };
 
-const buildAgentTaskRuntime = async (
+export const buildAgentTaskRuntime = async (
 	task: AgentTaskRuntimeSource,
 	baseDirOverride?: string,
 ): Promise<AgentTaskRuntime> => {
@@ -314,7 +316,9 @@ const buildAgentTaskRuntime = async (
 		containerName: task.containerName,
 		sessionId: task.threadId,
 		provider: resolveTaskAgentProvider(task.agentProfile),
+		baseDir,
 		...buildAgentRuntimeFiles(runtimeDir),
+		createdAt: task.createdAt || null,
 		updatedAt: task.updatedAt || null,
 	};
 };

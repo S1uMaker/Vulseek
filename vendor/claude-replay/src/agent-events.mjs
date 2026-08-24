@@ -149,6 +149,10 @@ export function createAgentEventNormalizer({ format }) {
         if (turn.status === "completed") {
           events.push({ kind: "turn", status: "completed" });
         }
+        const task = asRecord(meta.task);
+        if (task.status === "completed") {
+          events.push({ kind: "task", status: "completed" });
+        }
         return events;
       }
       if (type === "tool_call") {

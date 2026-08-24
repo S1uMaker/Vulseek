@@ -21,6 +21,9 @@ apps/vulseek/.docker
 apps/vulseek/.docker/**
 vulseek-data
 vulseek-data/**
+# Host scan-context mounts. Docker still walks these trees to apply ignore
+# rules; root-owned agent-home files can fail the context send even when
+# ignored. Prefer ./run.sh build / a filtered context for local release builds.
 vulseek-data-dev
 vulseek-data-dev/**
 **/vulseek-data-dev
@@ -30,7 +33,10 @@ vulseek-data-release/**
 **/vulseek-data-release
 **/vulseek-data-release/**
 **/.scan-runtime
+# Core dumps (apps/vulseek/core is a host leftover, not source).
+core
 **/core
+apps/vulseek/core
 *.log
 local_credentials.txt
 

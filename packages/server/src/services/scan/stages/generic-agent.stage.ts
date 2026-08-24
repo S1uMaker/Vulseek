@@ -19,7 +19,6 @@ import type { YamlPipelineStage } from "../pipeline/yaml-pipeline-runtime";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
 	readTaskJsonArtifact,
-	replaceTaskJsonArtifact,
 	taskArtifactHostPath,
 	writeTaskJsonArtifact,
 } from "../artifacts/task-artifact-paths";
@@ -100,16 +99,6 @@ export const resolveStageContainerNameParts = (
 		: isResearchStage(stageName) || goal
 		? [...(configured || []), taskId]
 		: configured;
-
-const buildResearchTaskContext = (
-	ctx: GenericStageContext,
-	stageInput: unknown,
-) => ({
-	taskId: ctx.taskId,
-	scanJobId: ctx.scanJobId,
-	stageName: ctx.stageName,
-	stageInput,
-});
 
 const toPromptValues = (value: unknown): Record<string, string | number> => {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -224,6 +213,7 @@ export function createGenericAgentStageDefinition<
 				scanJob,
 				containerNameParts,
 				reuseContainer,
+				skillNames: input.config.runtime.skills ?? [],
 			});
 			if (input.config.runtime.prepareRepository) {
 				const repositoryState = await prepareRepositoryForScanInContainer({
@@ -283,13 +273,6 @@ export function createGenericAgentStageDefinition<
 				relativePath: "inputs/task-input.json",
 				value: effectiveStageInput,
 			});
-			if (isResearchStage(stageCtx.stageName)) {
-				await replaceTaskJsonArtifact({
-					taskDir: await stageCtx.taskDir(),
-					containerPath: "/task/task-context.json",
-					value: buildResearchTaskContext(stageCtx, effectiveStageInput),
-				});
-			}
 			const promptTemplate = await resolveStageRuntimePromptTemplate(stageCtx);
 			const promptValues = await resolvePromptValues(
 				stageCtx,

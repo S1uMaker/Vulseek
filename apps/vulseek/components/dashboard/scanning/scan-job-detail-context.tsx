@@ -24,19 +24,20 @@ import {
 	parseCandidateListQueryState,
 	serializeCandidateListQueryState,
 } from "@/components/dashboard/scanning/candidate-list-query-state";
-import {
-	getResearchRegistryTabs,
-	isResearchRegistryTab,
-} from "@/components/dashboard/scanning/research-registry-tabs";
+import { jobTabsFromSnapshot } from "@vulseek/server/services/scan/pipeline/document-v3";
 import {
 	type DirectoryCacheEntry,
 	ROOT_DIRECTORY_KEY,
 } from "@/components/dashboard/scanning/scan-lazy-file-tree";
 import type { ScanNavigationContext } from "@/lib/ui-system/route-builders";
 import { api, type RouterOutputs } from "@/utils/api";
-import { isTerminalScanJobStatus, scanT } from "./scan-i18n";
+import {
+	isTerminalScanJobStatus,
+	scanT,
+} from "./scan-i18n";
 import {
 	buildCandidateReanalysisKey,
+	CORE_JOB_TABS,
 	resolveRequestedTab,
 	type ScanJobTab,
 } from "./scan-job-detail-format";
@@ -77,7 +78,8 @@ export type ScanJobDetailContextValue = {
 	// URL-backed tab state and the tab-change handler that syncs the URL.
 	activeTab: ScanJobTab;
 	handleTabChange: (value: string) => void;
-	researchRegistryTabs: ReturnType<typeof getResearchRegistryTabs>;
+	jobTabs: ReturnType<typeof jobTabsFromSnapshot>;
+	unknownTab: boolean;
 
 	// Job overview + shared polling.
 	scanJob: RouterOutputs["scan"]["jobOverview"] | undefined;
@@ -173,8 +175,8 @@ export const ScanJobDetailProvider = ({
 	const initialCandidateListQueryState = parseCandidateListQueryState(
 		router.query,
 	);
-	const [activeTab, setActiveTab] = useState<ScanJobTab>(() =>
-		resolveRequestedTab(router.query.tab),
+	const [activeTab, setActiveTab] = useState<ScanJobTab>(
+		() => resolveRequestedTab(router.query.tab).tab,
 	);
 	const [candidateQuery, setCandidateQuery] = useState(
 		() => initialCandidateListQueryState.candidateQuery,
@@ -230,6 +232,10 @@ export const ScanJobDetailProvider = ({
 				isTerminalScanJobStatus(data?.status) ? false : 10_000,
 		},
 	);
+	const jobTabs = useMemo(
+		() => jobTabsFromSnapshot(scanJob?.pipelineCompiledSnapshot),
+		[scanJob],
+	);
 	const shouldLoadJobRuntime =
 		activeTab === "overview" || activeTab === "tasks";
 	const {
@@ -249,9 +255,15 @@ export const ScanJobDetailProvider = ({
 			sortDirection: candidateSortDirection,
 		},
 		{
-			enabled: !!scanJobId && activeTab === "candidates",
+			enabled:
+				!!scanJobId &&
+				jobTabs.some(
+					(tab) => tab.id === activeTab && tab.renderer === "candidate-results",
+				),
 			refetchInterval:
-				activeTab === "candidates" && !isTerminalScanJobStatus(scanJob?.status)
+				jobTabs.some(
+					(tab) => tab.id === activeTab && tab.renderer === "candidate-results",
+				) && !isTerminalScanJobStatus(scanJob?.status)
 					? 20_000
 					: false,
 			// No keepPreviousData: show correct data only. Use isFetchingCandidates
@@ -331,38 +343,21 @@ export const ScanJobDetailProvider = ({
 		setDirectoryCache({});
 	}, [scanJobId]);
 
-	const requestedTab = useMemo(() => {
-		const tab = resolveRequestedTab(router.query.tab);
-		if (scanJob?.pipelineSystemKey === "research" && tab === "candidates")
-			return "findings";
-		// tob-goal uses dedicated tabs; legacy `findings` query maps to goal-findings.
-		if (scanJob?.pipelineSystemKey === "tob-goal" && tab === "findings") {
-			return "goal-findings";
+	const allowedTabIds = useMemo(() => {
+		const ids = [...CORE_JOB_TABS, ...jobTabs.map((tab) => tab.id)];
+		const pendingTab =
+			typeof router.query.tab === "string" ? router.query.tab : "";
+		if (!scanJob && pendingTab && !ids.includes(pendingTab)) {
+			ids.push(pendingTab);
 		}
-		if (
-			scanJob &&
-			scanJob.pipelineSystemKey !== "research" &&
-			scanJob.pipelineSystemKey !== "tob-goal" &&
-			(tab === "findings" ||
-				tab === "goal-candidates" ||
-				tab === "goal-findings")
-		) {
-			return "overview";
-		}
-		return tab;
-	}, [router.query.tab, scanJob]);
-
-	const researchRegistryTabs = getResearchRegistryTabs(scanJob?.pipelineSystemKey);
-
-	useEffect(() => {
-		if (
-			scanJob &&
-			scanJob.pipelineSystemKey !== "research" &&
-			isResearchRegistryTab(activeTab)
-		) {
-			setActiveTab("overview");
-		}
-	}, [activeTab, scanJob]);
+		return ids;
+	}, [jobTabs, router.query.tab, scanJob]);
+	const requested = useMemo(
+		() => resolveRequestedTab(router.query.tab, allowedTabIds),
+		[allowedTabIds, router.query.tab],
+	);
+	const requestedTab = requested.tab;
+	const unknownTab = Boolean(scanJob) && requested.unknown;
 
 	const refreshScanJobViews = async () => {
 		await Promise.all([
@@ -792,7 +787,8 @@ export const ScanJobDetailProvider = ({
 				{ shallow: true },
 			);
 		},
-		researchRegistryTabs,
+		jobTabs,
+		unknownTab,
 		scanJob,
 		isLoadingJob,
 		queuePendingCounts,

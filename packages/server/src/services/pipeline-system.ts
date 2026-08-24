@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, isNull, max } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@vulseek/server/db";
 import {
 	applications,
@@ -19,27 +19,20 @@ import {
 } from "../services/scan/pipeline/document-v3";
 
 /**
- * System pipeline seeding and template upgrade.
+ * Built-in pipeline seeding.
  *
- * - Every organization gets the four built-in pipelines (full / delta /
- *   research / tob-goal) as `systemKey` rows with a `source=system` v1.
- * - Profile defaults backfill to the org's Full pipeline.
- * - Ship-time template upgrades compare the built-in template hash against
- *   the org's current version; a new hash appends a system version and
- *   switches `current` — previous system versions and custom versions stay
- *   and can be switched back to.
- *
- * Everything is idempotent; audit happens via the version rows themselves
- * (source + publishedBy + publishedAt) and the pipeline `updatedBy`.
+ * YAML is used only when the org has no matching pipeline (slug or name).
+ * Existing rows stay on the published database version.
+ * Profile defaults backfill to the org's `full` pipeline by slug.
  */
 
-const SYSTEM_SLUG_SUFFIXES = ["", "-system-1", "-system-2", "-system-3"];
+const SLUG_SUFFIXES = ["", "-1", "-2", "-3"];
 
-const ensureUniqueSystemSlug = async (
+const ensureUniqueSlug = async (
 	organizationId: string,
 	baseSlug: string,
 ): Promise<string> => {
-	for (const suffix of SYSTEM_SLUG_SUFFIXES) {
+	for (const suffix of SLUG_SUFFIXES) {
 		const slug = `${baseSlug}${suffix}`;
 		const existing = await db
 			.select({ pipelineId: scanPipelines.pipelineId })
@@ -54,8 +47,27 @@ const ensureUniqueSystemSlug = async (
 			.then((rows) => rows[0]);
 		if (!existing) return slug;
 	}
-	throw new Error(`Cannot allocate a system slug for "${baseSlug}"`);
+	throw new Error(`Cannot allocate a slug for "${baseSlug}"`);
 };
+
+const findExistingSeededPipeline = async (input: {
+	organizationId: string;
+	template: BuiltinPipelineTemplate;
+}) =>
+	await db
+		.select()
+		.from(scanPipelines)
+		.where(
+			and(
+				eq(scanPipelines.organizationId, input.organizationId),
+				or(
+					eq(scanPipelines.slug, input.template.slug),
+					eq(scanPipelines.name, input.template.name),
+				),
+			),
+		)
+		.limit(1)
+		.then((rows) => rows[0] ?? null);
 
 const publishTemplateVersion = async (input: {
 	organizationId: string;
@@ -63,122 +75,68 @@ const publishTemplateVersion = async (input: {
 	template: BuiltinPipelineTemplate;
 }) => {
 	const { organizationId, userId, template } = input;
-	const pipeline = await db
-		.select()
-		.from(scanPipelines)
-		.where(
-			and(
-				eq(scanPipelines.organizationId, organizationId),
-				eq(scanPipelines.systemKey, template.systemKey),
-			),
-		)
-		.limit(1)
-		.then((rows) => rows[0]);
+	const existing = await findExistingSeededPipeline({
+		organizationId,
+		template,
+	});
+	if (existing) {
+		return { pipelineId: existing.pipelineId, unchanged: true };
+	}
 
-	let pipelineId = pipeline?.pipelineId ?? null;
-
-	if (!pipeline) {
-		const slug = await ensureUniqueSystemSlug(
+	const slug = await ensureUniqueSlug(organizationId, template.slug);
+	const created = await db
+		.insert(scanPipelines)
+		.values({
+			pipelineId: nanoid(),
 			organizationId,
-			template.systemKey,
-		);
-		const created = await db
-			.insert(scanPipelines)
-			.values({
-				pipelineId: nanoid(),
-				organizationId,
-				slug,
-				name: template.name,
-				systemKey: template.systemKey,
-				createdBy: userId,
-				updatedBy: userId,
-			})
-			.returning({ pipelineId: scanPipelines.pipelineId });
-		pipelineId = created[0]!.pipelineId;
-	}
-
-	// Idempotent: the exact template content is already the current version.
-	const current = pipelineId
-		? await db
-				.select({
-					contentHash: scanPipelineVersions.contentHash,
-					pipelineVersionId: scanPipelineVersions.pipelineVersionId,
-				})
-				.from(scanPipelineVersions)
-				.where(
-					eq(
-						scanPipelineVersions.pipelineVersionId,
-						pipeline?.currentPublishedVersionId ?? "",
-					),
-				)
-				.limit(1)
-				.then((rows) => rows[0])
-		: null;
-	if (current?.contentHash === template.contentHash) {
-		return { pipelineId: pipelineId!, unchanged: true };
-	}
-
-	const existingVersion = await db
-		.select({ pipelineVersionId: scanPipelineVersions.pipelineVersionId })
-		.from(scanPipelineVersions)
-		.where(
-			and(
-				eq(scanPipelineVersions.pipelineId, pipelineId!),
-				eq(scanPipelineVersions.contentHash, template.contentHash),
-			),
-		)
-		.limit(1)
-		.then((rows) => rows[0]);
-
-	let versionId: string;
-	if (existingVersion) {
-		versionId = existingVersion.pipelineVersionId;
-	} else {
-		const [latest] = await db
-			.select({ next: max(scanPipelineVersions.versionNumber) })
-			.from(scanPipelineVersions)
-			.where(eq(scanPipelineVersions.pipelineId, pipelineId!));
-		const versionNumber = (latest?.next ?? 0) + 1;
-		const inserted = await db
-			.insert(scanPipelineVersions)
-			.values({
-				pipelineVersionId: nanoid(),
-				pipelineId: pipelineId!,
-				versionNumber,
-				yaml: template.yaml,
-				contentHash: template.contentHash,
-				compiledDefinition: compilePipelineDocumentV3(
-					parsePipelineDocumentV3(template.yaml).document!,
-				) as unknown,
-				source: "system",
-				publishedBy: userId,
-			})
-			.returning({ pipelineVersionId: scanPipelineVersions.pipelineVersionId });
-		versionId = inserted[0]!.pipelineVersionId;
-	}
+			slug,
+			name: template.name,
+			createdBy: userId,
+			updatedBy: userId,
+		})
+		.returning({ pipelineId: scanPipelines.pipelineId });
+	const pipelineId = created[0]!.pipelineId;
+	const inserted = await db
+		.insert(scanPipelineVersions)
+		.values({
+			pipelineVersionId: nanoid(),
+			pipelineId,
+			versionNumber: 1,
+			yaml: template.yaml,
+			contentHash: template.contentHash,
+			compiledDefinition: compilePipelineDocumentV3(
+				parsePipelineDocumentV3(template.yaml).document!,
+			) as unknown,
+			publishedBy: userId,
+		})
+		.returning({ pipelineVersionId: scanPipelineVersions.pipelineVersionId });
 
 	await db
 		.update(scanPipelines)
 		.set({
-			currentPublishedVersionId: versionId,
+			currentPublishedVersionId: inserted[0]!.pipelineVersionId,
 			updatedAt: new Date().toISOString(),
 			updatedBy: userId,
 		})
-		.where(eq(scanPipelines.pipelineId, pipelineId!));
+		.where(eq(scanPipelines.pipelineId, pipelineId));
 
-	return { pipelineId: pipelineId!, unchanged: false };
+	return { pipelineId, unchanged: false };
 };
 
 /**
- * Seed the four system pipelines for one organization (v1). Idempotent —
- * safe to call on every organization create and on startup.
+ * Seed the four built-in pipelines for one organization (v1). Idempotent —
+ * existing same-named pipelines are left untouched.
  */
-export const seedSystemPipelinesForOrganization = async (
+export const seedBuiltinPipelinesForOrganization = async (
 	organizationId: string,
 	userId: string | null = null,
 ) => {
 	const templates = loadBuiltinPipelineTemplates();
-	const results: Array<{ systemKey: string; pipelineId: string }> = [];
+	const results: Array<{
+		slug: string;
+		pipelineId: string;
+		unchanged: boolean;
+	}> = [];
 	for (const template of templates) {
 		const result = await publishTemplateVersion({
 			organizationId,
@@ -186,41 +144,41 @@ export const seedSystemPipelinesForOrganization = async (
 			template,
 		});
 		results.push({
-			systemKey: template.systemKey,
+			slug: template.slug,
 			pipelineId: result.pipelineId,
+			unchanged: result.unchanged,
 		});
 	}
 	return results;
 };
 
-/** Ship-time template upgrade for a single organization. */
-export const syncSystemPipelineTemplatesForOrganization = async (
+/** Alias kept for callers; no longer publishes template hash upgrades. */
+export const syncBuiltinPipelinesForOrganization = async (
 	organizationId: string,
 	userId: string | null = null,
 ) => {
-	const templates = loadBuiltinPipelineTemplates();
-	const updates: Array<{ systemKey: string; unchanged: boolean }> = [];
-	for (const template of templates) {
-		const result = await publishTemplateVersion({
-			organizationId,
-			userId,
-			template,
-		});
-		updates.push({ systemKey: template.systemKey, unchanged: result.unchanged });
-	}
-	return updates;
+	const results = await seedBuiltinPipelinesForOrganization(
+		organizationId,
+		userId,
+	);
+	return results.map(({ slug, unchanged }) => ({
+		slug,
+		unchanged,
+	}));
 };
 
 /** Seed every existing organization (startup). */
-export const seedAllOrganizationsSystemPipelines = async () => {
+export const seedAllOrganizationsBuiltinPipelines = async () => {
 	const organizations = await db
 		.select({ id: organization.id })
 		.from(organization);
 	for (const org of organizations) {
-		await seedSystemPipelinesForOrganization(org.id);
+		await seedBuiltinPipelinesForOrganization(org.id);
 	}
 	return organizations.length;
 };
+
+
 
 /** Backfill profile defaults to the org Full pipeline. */
 export const backfillProfileDefaultPipelines = async () => {
@@ -232,7 +190,7 @@ export const backfillProfileDefaultPipelines = async () => {
 		.from(scanPipelines)
 		.where(
 			and(
-				eq(scanPipelines.systemKey, "full"),
+				eq(scanPipelines.slug, "full"),
 				isNull(scanPipelines.archivedAt),
 			),
 		);
@@ -272,9 +230,9 @@ export const backfillProfileDefaultPipelines = async () => {
 	return updated;
 };
 
-export const findSystemPipelineForOrganization = async (
+export const findPipelineBySlugForOrganization = async (
 	organizationId: string,
-	systemKey: string,
+	slug: string,
 ) => {
 	const pipeline = await db
 		.select()
@@ -282,7 +240,7 @@ export const findSystemPipelineForOrganization = async (
 		.where(
 			and(
 				eq(scanPipelines.organizationId, organizationId),
-				eq(scanPipelines.systemKey, systemKey),
+				eq(scanPipelines.slug, slug),
 			),
 		)
 		.limit(1)
@@ -290,7 +248,7 @@ export const findSystemPipelineForOrganization = async (
 	if (!pipeline) {
 		throw new TRPCError({
 			code: "NOT_FOUND",
-			message: `System pipeline "${systemKey}" not found for this organization`,
+			message: `Pipeline "${slug}" not found for this organization`,
 		});
 	}
 	return pipeline;

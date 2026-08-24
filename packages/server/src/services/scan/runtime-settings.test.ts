@@ -9,6 +9,7 @@ import {
 	DELTA_SCAN_STAGE_IDS,
 	FULL_SCAN_STAGE_IDS,
 	getRuntimeStageConcurrency,
+	getRuntimeStageSetting,
 	isRuntimeStageDisableable,
 	normalizeScanRuntimeSettings,
 	RESEARCH_SCAN_STAGE_IDS,
@@ -152,6 +153,28 @@ test("normalizeScanRuntimeSettings honors disableable=false from YAML", () => {
 			agentProfileId: null,
 		},
 	});
+});
+
+test("runtime stage lookup preserves custom pipeline stages", () => {
+	assert.deepEqual(
+		getRuntimeStageSetting(
+			{
+				stages: {
+					orchestrator: {
+						disabled: false,
+						concurrency: 1,
+						agentProfileId: "luna-profile",
+					},
+				},
+			},
+			"orchestrator",
+		),
+		{
+			disabled: false,
+			concurrency: 1,
+			agentProfileId: "luna-profile",
+		},
+	);
 });
 
 test("buildEffectiveDisabledStageSet uses YAML root and disableable settings", () => {
