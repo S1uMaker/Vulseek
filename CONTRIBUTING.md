@@ -55,7 +55,7 @@ Before you start, please make the clone based on the `canary` branch, since the 
 We use Node v20.16.0 and recommend this specific version. If you have nvm installed, you can run `nvm install 20.16.0 && nvm use` in the root directory.
 
 ```bash
-git clone https://github.com/fuzzing-peach/Vulseek.git
+git clone --recurse-submodules https://github.com/fuzzing-peach/Vulseek.git
 cd vulseek
 pnpm install
 cp apps/vulseek/.env.example apps/vulseek/.env

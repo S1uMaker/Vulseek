@@ -1,0 +1,4 @@
+[submodule "vendor/claude-replay"]
+	path = vendor/claude-replay
+	url = https://github.com/Kherrisan/claude-replay.git
+	branch = vulseek
