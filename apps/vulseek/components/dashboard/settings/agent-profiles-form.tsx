@@ -17,11 +17,13 @@ import { HandleAgentProfile } from "./handle-agent-profile";
 const PROVIDER_LABEL: Record<string, string> = {
 	codex: "Codex",
 	claude_code: "Claude Code",
+	grok_build: "Grok Build",
 };
 
 const HOME_LABEL: Record<string, string> = {
 	codex: "codex home",
 	claude_code: "claude home",
+	grok_build: "grok home",
 };
 
 export const AgentProfilesForm = () => {

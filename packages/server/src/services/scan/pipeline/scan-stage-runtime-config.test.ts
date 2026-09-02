@@ -31,6 +31,7 @@ const makeDefinitions = (concurrency: number): ScanPipelineDefinitions => ({
 				nullableOutput: true,
 				cwd: "/workspace/repo",
 				skills: ["scan-skill"],
+				mcp: null,
 				prompt: "Scan target now",
 				promptFile: null,
 				inputArtifacts: null,
@@ -108,6 +109,7 @@ test("stage runtime config getters read the latest job snapshot", async () => {
 	assert.equal(await runtimeConfig.getAgentProfile(), "agent-a");
 	assert.equal(await runtimeConfig.getPrompt(), "Scan target now");
 	assert.deepEqual(await runtimeConfig.getSkills(), ["scan-skill"]);
+	assert.deepEqual(await runtimeConfig.getMcp(), []);
 
 	definitions = makeDefinitions(7);
 	definitions.stages[0] = {

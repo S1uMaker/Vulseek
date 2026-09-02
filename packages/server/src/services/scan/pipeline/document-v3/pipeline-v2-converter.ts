@@ -173,7 +173,19 @@ const convertStage = (
 				...(runtimeConfig?.skills?.length
 					? { skills: runtimeConfig.skills }
 					: {}),
+				...(runtimeConfig?.mcp?.length ? { mcp: runtimeConfig.mcp } : {}),
 				prompt: runtimeConfig?.prompt ?? "",
+				...(runtimeConfig?.inputDelivery
+					? { inputDelivery: runtimeConfig.inputDelivery }
+					: {}),
+				...(runtimeConfig?.pollPrompt
+					? { pollPrompt: runtimeConfig.pollPrompt }
+					: {}),
+				...(runtimeConfig?.messageNotification
+					? { messageNotification: true }
+					: {}),
+				outputSuffix:
+					runtimeConfig?.outputSuffix === "omit" ? "omit" : "include",
 				prepareRepository:
 					stage.id === rootStageId && preparesRepository
 						? prepareModeForKind(kind)

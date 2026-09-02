@@ -68,6 +68,12 @@ RUN --mount=type=cache,id=pnpm-dev,target=/pnpm/store pnpm install
 # 全局安装 tsx 和其他开发工具
 RUN pnpm install -g tsx nodemon
 
+# Token usage reports read agent-home JSONL from the vulseek process.
+ARG CCUSAGE_VERSION=20.0.20
+RUN npm install -g "ccusage@${CCUSAGE_VERSION}" \
+    && command -v ccusage >/dev/null \
+    && ccusage --help >/dev/null
+
 # 暴露主应用端口
 EXPOSE 3000
 

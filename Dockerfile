@@ -52,7 +52,10 @@ ARG NIXPACKS_VERSION=1.39.0
 RUN curl -sSL https://nixpacks.com/install.sh -o install.sh \
     && chmod +x install.sh \
     && ./install.sh \
-    && pnpm install -g tsx
+    && pnpm install -g tsx \
+    && npm install -g ccusage@20.0.20 \
+    && command -v ccusage >/dev/null \
+    && ccusage --help >/dev/null
 
 # Install Railpack
 ARG RAILPACK_VERSION=0.2.2

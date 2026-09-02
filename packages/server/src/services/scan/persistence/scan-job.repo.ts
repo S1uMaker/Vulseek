@@ -4,7 +4,7 @@ import type {
 	ScanJobOutput,
 	ScanRuntimeSettings,
 } from "@vulseek/server/db/schema";
-import { scanJobs, tasks } from "@vulseek/server/db/schema";
+import { scanJobs, messages, tasks } from "@vulseek/server/db/schema";
 import {
 	and,
 	desc,
@@ -53,6 +53,10 @@ const selectScanJobWithRepositoryTaskStatus = {
 		select "slug" from "scan_pipelines"
 		where "pipelineId" = ${scanJobs.pipelineId}
 	)`,
+	pipelineName: sql<string | null>`(
+		select "name" from "scan_pipelines"
+		where "pipelineId" = ${scanJobs.pipelineId}
+	)`,
 	status: scanJobs.status,
 	triggerSource: scanJobs.triggerSource,
 	commitSha: scanJobs.commitSha,
@@ -67,12 +71,23 @@ const selectScanJobWithRepositoryTaskStatus = {
 	composeId: scanJobs.composeId,
 	datasetEvaluationTrialId: scanJobs.datasetEvaluationTrialId,
 	pipelineVersionId: scanJobs.pipelineVersionId,
+	pipelineVersionNumber: sql<number | null>`(
+		select "versionNumber" from "scan_pipeline_versions"
+		where "pipelineVersionId" = ${scanJobs.pipelineVersionId}
+	)`,
+	pipelineProfileId: scanJobs.pipelineProfileId,
+	pipelineProfileName: sql<string | null>`(
+		select "name" from "scan_pipeline_profiles"
+		where "pipelineProfileId" = ${scanJobs.pipelineProfileId}
+	)`,
 	pipelineYamlSnapshot: scanJobs.pipelineYamlSnapshot,
 	pipelineCompiledSnapshot: scanJobs.pipelineCompiledSnapshot,
 	maxTasks: scanJobs.maxTasks,
 	deadlineAt: scanJobs.deadlineAt,
 	taskCount: scanJobs.taskCount,
 	terminationReason: scanJobs.terminationReason,
+	tokenBudget: scanJobs.tokenBudget,
+	timeBudgetSeconds: scanJobs.timeBudgetSeconds,
 	createdAt: scanJobs.createdAt,
 	startedAt: scanJobs.startedAt,
 	finishedAt: scanJobs.finishedAt,
@@ -118,6 +133,11 @@ export const findScanJobRuntimeControlRepo = async (scanJobId: string) =>
 		.select({
 			status: scanJobs.status,
 			scanRuntimeSettings: scanJobs.scanRuntimeSettings,
+			tokenBudget: scanJobs.tokenBudget,
+			timeBudgetSeconds: scanJobs.timeBudgetSeconds,
+			totalTokens: scanJobs.totalTokens,
+			startedAt: scanJobs.startedAt,
+			createdAt: scanJobs.createdAt,
 		})
 		.from(scanJobs)
 		.where(eq(scanJobs.scanJobId, scanJobId))
@@ -195,23 +215,30 @@ export const cancelScanJobRepo = async (input: {
 			)
 			.returning();
 
-		const stoppedDispatches = await tx
-			.update(tasks)
-			.set({
-				downstreamDispatchStatus: "completed",
-				downstreamDispatchedAt: now,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(tasks.scanJobId, input.scanJobId),
-					inArray(tasks.downstreamDispatchStatus, [
-						"pending",
-						"dispatching",
-					]),
-				),
-			)
-			.returning({ taskId: tasks.taskId });
+		const producerIds = await tx
+			.select({ taskId: tasks.taskId })
+			.from(tasks)
+			.where(eq(tasks.scanJobId, input.scanJobId));
+		const stoppedDispatches =
+			producerIds.length === 0
+				? []
+				: await tx
+						.update(messages)
+						.set({
+							dispatchStatus: "failed",
+							errorMessage: "Scan job canceled",
+							updatedAt: now,
+						})
+						.where(
+							and(
+								inArray(
+									messages.sourceTaskId,
+									producerIds.map((row) => row.taskId),
+								),
+								inArray(messages.status, ["pending", "processing"]),
+							),
+						)
+						.returning({ taskId: messages.sourceTaskId });
 
 			await tx
 				.update(scanJobs)
@@ -309,7 +336,7 @@ export const appendScanJobOutputTx = async (
 					when exists (
 						select 1
 						from jsonb_array_elements(${currentOutputs}) as entry
-						where entry->>'taskId' = ${input.output.taskId}
+						where entry->>'messageId' = ${input.output.messageId}
 					) then ${currentOutputs}
 					else ${currentOutputs} || ${serializedOutput}::jsonb
 				end
@@ -317,17 +344,6 @@ export const appendScanJobOutputTx = async (
 		})
 		.where(eq(scanJobs.scanJobId, input.scanJobId));
 };
-
-export const sumClaudeCodeCachedReadTokensByScanJobIdRepo = async (
-	scanJobId: string,
-) =>
-	await db
-		.select({
-			cachedReadTokens: sql<number>`coalesce(sum(case when ${tasks.agentProfile}->>'provider' = 'claude_code' then coalesce(${tasks.cachedReadTokens}, 0) else 0 end), 0)`,
-		})
-		.from(tasks)
-		.where(eq(tasks.scanJobId, scanJobId))
-		.then((rows) => Number(rows[0]?.cachedReadTokens ?? 0));
 
 export type ScanJobListPageInput = {
 	page: number;
@@ -464,10 +480,13 @@ export const createScanJobRepo = async (input: {
 	// V3 snapshot linkage (frozen at run creation).
 	pipelineId: string;
 	pipelineVersionId?: string | null;
+	pipelineProfileId?: string | null;
 	pipelineYamlSnapshot?: string | null;
 	pipelineCompiledSnapshot?: Record<string, unknown> | null;
 	maxTasks?: number | null;
 	deadlineAt?: string | null;
+	tokenBudget?: number | null;
+	timeBudgetSeconds?: number | null;
 	runtimeStageIds?: readonly string[];
 }) => {
 	const created = await db
@@ -492,10 +511,13 @@ export const createScanJobRepo = async (input: {
 			commitWindow: input.commitWindow || input.defaultDeltaCommitWindow,
 			pipelineId: input.pipelineId,
 			pipelineVersionId: input.pipelineVersionId ?? null,
+			pipelineProfileId: input.pipelineProfileId ?? null,
 			pipelineYamlSnapshot: input.pipelineYamlSnapshot ?? null,
 			pipelineCompiledSnapshot: input.pipelineCompiledSnapshot ?? null,
 			maxTasks: input.maxTasks ?? null,
 			deadlineAt: input.deadlineAt ?? null,
+			tokenBudget: input.tokenBudget ?? null,
+			timeBudgetSeconds: input.timeBudgetSeconds ?? null,
 			status: "pending",
 		})
 		.returning();

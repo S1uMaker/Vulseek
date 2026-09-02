@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	formatAgentStreamProvider,
+	formatAgentStreamToolPreview,
 	isAgentStreamNearBottom,
 	mergeAgentStreamTurns,
 	reduceAgentStreamConnectionState,
@@ -135,6 +136,46 @@ describe("AgentStream incremental state", () => {
 
 	it("uses the actual provider label", () => {
 		expect(formatAgentStreamProvider("codex")).toBe("CODEX");
+		expect(formatAgentStreamProvider("grok")).toBe("GROK BUILD");
 		expect(formatAgentStreamProvider("claude-code")).toBe("CLAUDE CODE");
+	});
+});
+
+describe("formatAgentStreamToolPreview", () => {
+	it("prefers command and path fields", () => {
+		expect(
+			formatAgentStreamToolPreview({
+				name: "exec",
+				input: { command: "ls /workspace" },
+			}),
+		).toBe("ls /workspace");
+		expect(
+			formatAgentStreamToolPreview({
+				name: "edit",
+				input: { file_path: "/workspace/README.md" },
+			}),
+		).toBe("/workspace/README.md");
+	});
+
+	it("extracts cmd from grok/codex raw exec_command wrappers", () => {
+		expect(
+			formatAgentStreamToolPreview({
+				name: "exec",
+				input: {
+					raw: 'const r = await tools.exec_command({cmd:"python3 \\"$VULSEEK_AGENT_HOME/skills/orchestrator/orchestrator.py\\" list_hunters","workdir":"/workspace/repo"});',
+				},
+			}),
+		).toBe(
+			'python3 "$VULSEEK_AGENT_HOME/skills/orchestrator/orchestrator.py" list_hunters',
+		);
+	});
+
+	it("falls back to compacted raw text", () => {
+		expect(
+			formatAgentStreamToolPreview({
+				name: "exec",
+				input: { raw: "foo\nbar" },
+			}),
+		).toBe("foo bar");
 	});
 });

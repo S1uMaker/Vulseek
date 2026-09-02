@@ -8,7 +8,6 @@ import {
 	tasks,
 } from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
-import { candidateSchema } from "../artifacts/contracts/domain-object.contract";
 import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { resolveTaskRuntimeDirForTask } from "../stages/full-scan-stage.runtime";
 
@@ -30,7 +29,7 @@ const scanJobRuntimeContextCache = new Map<
 	Promise<{ projectName: string; serviceName: string }>
 >();
 
-const resolveScanJobRuntimeContext = async (scanJobId: string) => {
+export const resolveScanJobRuntimeContext = async (scanJobId: string) => {
 	const cached = scanJobRuntimeContextCache.get(scanJobId);
 	if (cached) {
 		return cached;
@@ -118,60 +117,37 @@ export const readTaskJsonArtifactForTask = async <T = unknown>(
 	});
 };
 
+export const CANDIDATE_INPUT_PATHS = [
+	"/task/inputs/candidate.json",
+	"/task/inputs/dispatch.json",
+	"/task/inputs/task-input.json",
+] as const;
+
+export const extractCandidateIdFromInputArtifact = (
+	containerPath: string,
+	value: unknown,
+) => {
+	const record = asRecord(value);
+	if (!record) {
+		return null;
+	}
+	if (containerPath.endsWith("/candidate.json")) {
+		return readString(record, "id");
+	}
+	return readString(asRecord(record.candidate), "id");
+};
+
 export const readCandidateIdFromTaskInputArtifact = async (
 	task: TaskRecord,
 ) => {
-	if (task.vulnerabilityCandidateId) {
-		return task.vulnerabilityCandidateId;
-	}
-
-	const input = asRecord(task.input);
-	const directCandidate = asRecord(input?.candidate);
-	const directCandidateId = readString(directCandidate, "id");
-	if (directCandidateId) {
-		return directCandidateId;
-	}
-
-	const legacyCandidate = asRecord(input?.legacyCandidate);
-	const legacyCandidateId = readString(legacyCandidate, "id");
-	if (legacyCandidateId) {
-		return legacyCandidateId;
-	}
-
-	const analysisResult = asRecord(input?.analysisResult);
-	const nestedCandidate = asRecord(analysisResult?.candidate);
-	const nestedCandidateId = readString(nestedCandidate, "id");
-	if (nestedCandidateId) {
-		return nestedCandidateId;
-	}
-
-	const candidatePath = readString(input, "candidatePath");
-	if (!candidatePath) {
-		return null;
-	}
-
-	try {
-		const candidate = await readTaskJsonArtifactForTask(task, candidatePath);
-		const parsed = candidateSchema.safeParse(candidate);
-		if (!parsed.success) {
-			console.warn("Candidate task input artifact failed schema validation", {
-			taskId: task.taskId,
-			scanJobId: task.scanJobId,
-			stageName: task.stageName,
-			candidatePath,
-			issues: parsed.error.issues,
-		});
-			return null;
+	for (const containerPath of CANDIDATE_INPUT_PATHS) {
+		const candidateId = extractCandidateIdFromInputArtifact(
+			containerPath,
+			await readTaskJsonArtifactForTask(task, containerPath).catch(() => null),
+		);
+		if (candidateId) {
+			return candidateId;
 		}
-		return parsed.data.id;
-	} catch (error) {
-		console.warn("Failed to resolve candidate ID from task input artifact", {
-			taskId: task.taskId,
-			scanJobId: task.scanJobId,
-			stageName: task.stageName,
-			candidatePath,
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return null;
 	}
+	return null;
 };

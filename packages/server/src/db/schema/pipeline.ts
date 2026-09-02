@@ -89,6 +89,14 @@ export const apiCreatePipelineRun = z.object({
 		.optional(),
 	title: z.string().max(200).optional(),
 	description: z.string().max(1000).optional(),
+	tokenBudget: z.number().int().positive().nullable().optional(),
+	timeBudgetSeconds: z
+		.number()
+		.int()
+		.positive()
+		.max(30 * 24 * 60 * 60)
+		.nullable()
+		.optional(),
 	stageOverrides: z
 		.record(
 			z.string(),

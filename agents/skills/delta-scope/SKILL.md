@@ -38,7 +38,7 @@ Write exactly the artifacts required by the stage prompt:
 
 - `/task/repository.json`
 - zero or more `/task/functions/<function-id>.json`
-- `/task/output.json`
+- submit-message JSON matching `/task/output.schema.json`
 
 The output manifest has only:
 

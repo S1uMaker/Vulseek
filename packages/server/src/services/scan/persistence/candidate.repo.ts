@@ -2,6 +2,7 @@ import { db } from "@vulseek/server/db";
 import {
 	candidateMetadata,
 	candidateTags,
+	messages,
 	tasks,
 	vulnerabilityCandidates,
 } from "@vulseek/server/db/schema";
@@ -16,7 +17,7 @@ import {
 import {
 	CANDIDATE_PRODUCER_STAGE_NAMES,
 	type PersistedVulnerabilityCandidateInput,
-	syncVulnerabilityCandidatesFromProducerTaskWithDeps,
+	syncVulnerabilityCandidatesFromMessageWithDeps,
 } from "./candidate-sync";
 
 export { CANDIDATE_PRODUCER_STAGE_NAMES } from "./candidate-sync";
@@ -88,6 +89,7 @@ export const toCandidateRecord = (
 	vulnerabilityCandidateId: row.vulnerabilityCandidateId,
 	scanJobId: row.scanJobId,
 	producerTaskId: row.producerTaskId,
+	messageId: row.messageId ?? null,
 	producerStageName: row.producerStageName,
 	functionId: row.functionId,
 	title: row.title,
@@ -164,6 +166,7 @@ export const upsertVulnerabilityCandidatesRepo = async (
 			],
 			set: {
 				producerTaskId: sql`excluded."producerTaskId"`,
+				messageId: sql`excluded."messageId"`,
 				producerStageName: sql`excluded."producerStageName"`,
 				functionId: sql`excluded."functionId"`,
 				title: sql`excluded."title"`,
@@ -189,15 +192,19 @@ export const upsertVulnerabilityCandidatesRepo = async (
 		});
 };
 
-export const deleteStaleVulnerabilityCandidatesForProducerTaskRepo = async (
+export const deleteStaleVulnerabilityCandidatesForMessageRepo = async (
 	input: {
 		producerTaskId: string;
+		messageId: string;
 		keepCandidateIds: string[];
 	},
 	executor: CandidateSyncTransaction = db,
 ) => {
 	const uniqueIds = [...new Set(input.keepCandidateIds)];
-	const conditions = [eq(vulnerabilityCandidates.producerTaskId, input.producerTaskId)];
+	const conditions = [
+		eq(vulnerabilityCandidates.producerTaskId, input.producerTaskId),
+		eq(vulnerabilityCandidates.messageId, input.messageId),
+	];
 	if (uniqueIds.length > 0) {
 		conditions.push(
 			notInArray(vulnerabilityCandidates.vulnerabilityCandidateId, uniqueIds),
@@ -206,37 +213,72 @@ export const deleteStaleVulnerabilityCandidatesForProducerTaskRepo = async (
 	await executor.delete(vulnerabilityCandidates).where(and(...conditions));
 };
 
+const candidateSyncDeps = (executor: CandidateSyncTransaction) => ({
+	findTaskById: async (id: string) =>
+		await executor
+			.select()
+			.from(tasks)
+			.where(eq(tasks.taskId, id))
+			.limit(1)
+			.then((rows) => {
+				const task = rows[0];
+				if (!task) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Task not found",
+					});
+				}
+				return task;
+			}),
+	readTaskJsonArtifact: readTaskJsonArtifactForTask,
+	upsertCandidates: async (candidates: PersistedVulnerabilityCandidateInput[]) =>
+		await upsertVulnerabilityCandidatesRepo(candidates, executor),
+	deleteStaleCandidatesForMessage: async (input: {
+		producerTaskId: string;
+		messageId: string;
+		keepCandidateIds: string[];
+	}) => await deleteStaleVulnerabilityCandidatesForMessageRepo(input, executor),
+});
+
+export const syncVulnerabilityCandidatesFromMessage = async (
+	input: {
+		taskId: string;
+		messageId: string;
+		output: unknown;
+	},
+	executor: CandidateSyncTransaction = db,
+) =>
+	await syncVulnerabilityCandidatesFromMessageWithDeps(
+		input,
+		candidateSyncDeps(executor),
+	);
+
 export const syncVulnerabilityCandidatesFromProducerTask = async (
 	taskId: string,
 	executor: CandidateSyncTransaction = db,
-) =>
-	await syncVulnerabilityCandidatesFromProducerTaskWithDeps(taskId, {
-		findTaskById: async (id) =>
-			await executor
-				.select()
-				.from(tasks)
-				.where(eq(tasks.taskId, id))
-				.limit(1)
-				.then((rows) => {
-					const task = rows[0];
-					if (!task) {
-						throw new TRPCError({
-							code: "NOT_FOUND",
-							message: "Task not found",
-						});
-					}
-					return task;
-				}),
-		readTaskJsonArtifact: readTaskJsonArtifactForTask,
-		upsertCandidates: async (candidates) =>
-			await upsertVulnerabilityCandidatesRepo(candidates, executor),
-		deleteStaleCandidatesForProducerTask:
-			async (input) =>
-				await deleteStaleVulnerabilityCandidatesForProducerTaskRepo(
-					input,
-					executor,
-				),
-	});
+) => {
+	const outputs = await executor
+		.select({
+			messageId: messages.messageId,
+			output: messages.payload,
+		})
+		.from(messages)
+		.where(eq(messages.sourceTaskId, taskId))
+		.orderBy(asc(messages.sequence));
+	let synced = 0;
+	for (const output of outputs) {
+		const result = await syncVulnerabilityCandidatesFromMessage(
+			{
+				taskId,
+				messageId: output.messageId,
+				output: output.output,
+			},
+			executor,
+		);
+		synced += result.synced;
+	}
+	return { synced };
+};
 
 export const backfillVulnerabilityCandidatesFromTasks = async (
 	input?: CandidateBackfillInput,

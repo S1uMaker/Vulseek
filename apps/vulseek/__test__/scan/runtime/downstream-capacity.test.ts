@@ -5,12 +5,14 @@ import {
 	computeAvailableSlots,
 	queryDownstreamCapacity,
 	queryDownstreamCapacityForRequest,
+	resolveRunningPipelineStageConcurrency,
 	ScanRuntimeApiError,
 } from "../../../../../packages/server/src/services/scan/runtime/downstream-capacity";
 import {
 	queryRunningTasks,
 	queryRunningTasksForRequest,
 } from "../../../../../packages/server/src/services/scan/runtime/running-tasks";
+import { queryStageOutputs } from "../../../../../packages/server/src/services/scan/runtime/stage-outputs";
 import {
 	issueScanRuntimeToken,
 	parseBearerToken,
@@ -55,6 +57,7 @@ const depsForOrch = (overrides?: {
 	findScanJobById: async () => ({
 		scanJobId: "job-1",
 		pipelineCompiledSnapshot: orchHuntSnapshot,
+		scanRuntimeSettings: {},
 	}),
 	resolveConcurrency: async (_job: string, stageName: string, fallback: number) =>
 		overrides?.concurrency?.[stageName] ?? fallback,
@@ -82,6 +85,29 @@ describe("downstream capacity math", () => {
 		expect(computeAvailableSlots(8, 3)).toBe(5);
 		expect(computeAvailableSlots(8, 8)).toBe(0);
 		expect(computeAvailableSlots(8, 11)).toBe(0);
+	});
+
+	it("uses frozen job runtime settings over YAML stage concurrency", () => {
+		expect(
+			resolveRunningPipelineStageConcurrency(
+				orchHuntSnapshot,
+				{ stages: { hunter: { concurrency: 4, disabled: false } } },
+				"hunter",
+			),
+		).toBe(4);
+		expect(
+			resolveRunningPipelineStageConcurrency(orchHuntSnapshot, {}, "hunter"),
+		).toBe(8);
+		expect(
+			resolveRunningPipelineStageConcurrency(
+				{
+					...orchHuntSnapshot,
+					stageOverrides: { hunter: { concurrency: 4 } },
+				},
+				{},
+				"hunter",
+			),
+		).toBe(4);
 	});
 });
 
@@ -140,6 +166,37 @@ describe("queryDownstreamCapacity", () => {
 					availableSlots: 1,
 				},
 			],
+		});
+	});
+
+	it("reports hunter slots from the running job concurrency, not YAML", async () => {
+		const result = await queryDownstreamCapacity({
+			scanJobId: "job-1",
+			taskId: "orch-task",
+			toStage: "hunter",
+			deps: {
+				...depsForOrch({ active: { hunter: 3 } }),
+				findScanJobById: async () => ({
+					scanJobId: "job-1",
+					pipelineCompiledSnapshot: orchHuntSnapshot,
+					scanRuntimeSettings: {
+						stages: {
+							hunter: {
+								disabled: false,
+								concurrency: 4,
+								agentProfileId: "profile-1",
+							},
+						},
+					},
+				}),
+				resolveConcurrency: async (_job, _stage, fallback) => fallback,
+			},
+		});
+		expect(result.stages[0]).toEqual({
+			stageName: "hunter",
+			concurrency: 4,
+			activeTasks: 3,
+			availableSlots: 1,
 		});
 	});
 
@@ -227,7 +284,8 @@ describe("queryRunningTasks", () => {
 		{
 			taskId: "hunter-1",
 			stageName: "hunter",
-			title: "Hunt REST routes",
+			name: "xmlrpc-unauth",
+			title: "xmlrpc-unauth",
 			status: "running" as const,
 			startedAt: "2026-08-23T00:00:00.000Z",
 			updatedAt: "2026-08-23T00:01:00.000Z",
@@ -321,5 +379,73 @@ describe("queryRunningTasks", () => {
 					verifyScanRuntimeToken({ ...input, secret }),
 			}),
 		).rejects.toBeInstanceOf(ScanRuntimeApiError);
+	});
+});
+
+describe("queryStageOutputs", () => {
+	const pollSnapshot = {
+		...orchHuntSnapshot,
+		edges: [
+			{ from: "orchestrator", to: "hunter" },
+			{ from: "orchestrator", to: "verify-finding" },
+			{ from: "verify-finding", to: "triage-finding" },
+		],
+	};
+
+	it("lists completed downstream outputs with name", async () => {
+		const result = await queryStageOutputs({
+			scanJobId: "job-1",
+			taskId: "orch-task",
+			stageName: "hunter",
+			deps: {
+				findTaskById: async () => ({
+					taskId: "orch-task",
+					scanJobId: "job-1",
+					stageName: "orchestrator",
+				}),
+				findScanJobById: async () => ({
+					scanJobId: "job-1",
+					pipelineCompiledSnapshot: pollSnapshot,
+				}),
+				listOutputs: async () => [
+					{
+						taskId: "hunter-1",
+						taskStatus: "completed",
+						name: "xmlrpc-unauth",
+						messageId: "to-1",
+						sequence: 1,
+						dispatchStatus: "completed",
+						output: { name: "xmlrpc-unauth", feedback: "no chain" },
+						createdAt: "2026-08-27T00:00:00.000Z",
+					},
+				],
+				now: () => "2026-08-27T00:02:00.000Z",
+			},
+		});
+		expect(result.outputs[0]?.name).toBe("xmlrpc-unauth");
+		expect(result.stageName).toBe("hunter");
+	});
+
+	it("rejects polling a stage that is not downstream", async () => {
+		await expect(
+			queryStageOutputs({
+				scanJobId: "job-1",
+				taskId: "hunter-1",
+				stageName: "orchestrator",
+				deps: {
+					findTaskById: async () => ({
+						taskId: "hunter-1",
+						scanJobId: "job-1",
+						stageName: "hunter",
+					}),
+					findScanJobById: async () => ({
+						scanJobId: "job-1",
+						pipelineCompiledSnapshot: pollSnapshot,
+					}),
+					listOutputs: async () => [],
+					now: () => "2026-08-27T00:02:00.000Z",
+				},
+			}),
+		).rejects.toMatchObject({ status: 403 });
 	});
 });

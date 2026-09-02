@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { findScanJobByIdRepo } from "../persistence/scan-job.repo";
 import { findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId } from "../api/candidate-records";
-import { findCandidateProjectionByIdRepo } from "../persistence/candidate-projection-list.repo";
+import { findCandidateByIdWithResultsRepo } from "../persistence/candidate-list.repo";
 import {
 	listExploitChainsPageRepo,
 	listExploitPrimitivesPageRepo,
@@ -384,7 +384,7 @@ export const queryJobTabDetail = async (input: {
 		});
 	}
 	if (tab.detail === "vulnerability-candidate") {
-		const item = await findCandidateProjectionByIdRepo({
+		const item = await findCandidateByIdWithResultsRepo({
 			vulnerabilityCandidateId: input.itemId,
 			scanJobId: input.scanJobId,
 		});

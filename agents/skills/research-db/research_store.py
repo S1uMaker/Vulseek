@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import os
 from contextlib import nullcontext
 
 from research_mutations import (
@@ -126,6 +127,11 @@ class ResearchStore:
                 )
             if producer_task_id:
                 values["producerTaskId"] = producer_task_id
+            message_id = values.get("messageId") or os.environ.get(
+                "VULSEEK_TASK_OUTPUT_ID"
+            )
+            if message_id:
+                values["messageId"] = message_id
 
             expected_track_id = self._expected_track_id()
             if expected_track_id and values.get("trackId") != expected_track_id:

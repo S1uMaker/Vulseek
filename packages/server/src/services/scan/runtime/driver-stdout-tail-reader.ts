@@ -24,6 +24,7 @@ const emptyParsed = (): ParsedDriverStdout => ({
 	activityRevision: 0,
 	activityEvents: [],
 	latestUsage: null,
+	latestTurnDone: null,
 	latestTask: null,
 	latestLog: null,
 	exitCode: null,
@@ -43,6 +44,9 @@ const applyEvent = (parsed: ParsedDriverStdout, event: DriverStdoutEvent) => {
 			break;
 		case "usage":
 			parsed.latestUsage = event.usage ?? null;
+			break;
+		case "turn_done":
+			parsed.latestTurnDone = event as ParsedDriverStdout["latestTurnDone"];
 			break;
 		case "task_start":
 		case "task_done":

@@ -1,4 +1,5 @@
 import { AlertCircle, Loader2, Pause, Play } from "lucide-react";
+import Link from "next/link";
 import { useTranslation } from "next-i18next";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -25,12 +26,15 @@ import {
 } from "./scan-i18n";
 import {
 	formatDurationSeconds,
+	formatPipelineVersionLabel,
+	formatTokenBudgetK,
 	formatTokenCount,
 	formatTokenUsage,
 	formatTokenUsageWithCache,
 	formatTriggerSourceLabel,
 	getScanJobStatusClassName,
 	getScanJobStatusLabel,
+	resolveScanJobPipelineLabel,
 } from "./scan-job-detail-format";
 
 type ScanJobOverviewTabProps = {
@@ -302,12 +306,44 @@ export const ScanJobOverviewTab = ({
 								{scanT(t, "scan.field.pipeline", "Pipeline")}
 							</div>
 							<div className="font-medium">
-								{scanJob.pipelineVersionId ? (
-									<span className="text-primary">V3 pipeline run</span>
+								<Link
+									href={`/dashboard/pipelines/${encodeURIComponent(scanJob.pipelineId)}`}
+									className="hover:underline"
+								>
+									{resolveScanJobPipelineLabel(scanJob) ||
+										formatPipelineKindLabel(
+											t,
+											resolveScanJobPipelineKind(scanJob),
+										)}
+								</Link>
+							</div>
+						</div>
+						<div className="border rounded-lg p-3">
+							<div className="text-sm text-muted-foreground">
+								{scanT(t, "scan.field.pipelineVersion", "Version")}
+							</div>
+							<div className="font-medium">
+								{formatPipelineVersionLabel(scanJob.pipelineVersionNumber)}
+							</div>
+						</div>
+						<div className="border rounded-lg p-3">
+							<div className="text-sm text-muted-foreground">
+								{scanT(t, "scan.field.pipelineProfile", "Profile")}
+							</div>
+							<div className="font-medium">
+								{scanJob.pipelineProfileId && scanJob.pipelineProfileName ? (
+									<Link
+										href={`/dashboard/pipelines/${encodeURIComponent(scanJob.pipelineId)}/profiles/${encodeURIComponent(scanJob.pipelineProfileId)}`}
+										className="hover:underline"
+									>
+										{scanJob.pipelineProfileName}
+									</Link>
 								) : (
-									formatPipelineKindLabel(
+									scanJob.pipelineProfileName?.trim() ||
+									scanT(
 										t,
-										resolveScanJobPipelineKind(scanJob),
+										"scan.pipeline.defaults",
+										"Pipeline defaults",
 									)
 								)}
 							</div>
@@ -325,9 +361,13 @@ export const ScanJobOverviewTab = ({
 								{scanT(t, "scan.field.duration", "Duration")}
 							</div>
 							<div className="font-medium tabular-nums">
-								{formatDurationSeconds(
-									resultSummary?.taskTimeline.coveredSeconds,
-								)}
+								{scanJob.timeBudgetSeconds != null
+									? `${formatDurationSeconds(
+											resultSummary?.taskTimeline.coveredSeconds,
+										)} / ${formatDurationSeconds(scanJob.timeBudgetSeconds)}`
+									: formatDurationSeconds(
+											resultSummary?.taskTimeline.coveredSeconds,
+										)}
 							</div>
 						</div>
 						<div className="border rounded-lg p-3 md:col-span-2">
@@ -364,7 +404,9 @@ export const ScanJobOverviewTab = ({
 										{scanT(t, "scan.field.totalTokens", "Total Tokens")}
 									</div>
 									<div className="font-medium">
-										{formatTokenCount(scanJob.totalTokens)}
+										{scanJob.tokenBudget != null
+											? `${formatTokenCount(scanJob.totalTokens)} / ${formatTokenBudgetK(scanJob.tokenBudget)}`
+											: formatTokenCount(scanJob.totalTokens)}
 									</div>
 								</div>
 								<div>

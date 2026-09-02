@@ -45,6 +45,7 @@ const toContainerJobOutputPath = (relativePath: string) =>
 export const materializeTaskJobOutput = async (input: {
 	taskDir: string;
 	taskId: string;
+	messageId: string;
 	stageName: string;
 	output: unknown;
 }): Promise<ScanJobOutput | null> => {
@@ -127,7 +128,7 @@ export const materializeTaskJobOutput = async (input: {
 	if (copiedRelativePaths.size === 0) return null;
 
 	return {
-		taskId: input.taskId,
+		messageId: input.messageId,
 		stageName: input.stageName,
 		artifacts: [...copiedRelativePaths]
 			.sort()

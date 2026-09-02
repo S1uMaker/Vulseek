@@ -19,6 +19,10 @@
     "./constants": {
       "import": "./src/constants/index.ts",
       "require": "./dist/constants.cjs.js"
+    },
+    "./templates": {
+      "import": "./src/templates/index.ts",
+      "require": "./dist/templates/index.cjs.js"
     }
   },
   "scripts": {
@@ -45,7 +49,6 @@
     "@octokit/rest": "^20.1.2",
     "@oslojs/crypto": "1.0.1",
     "@oslojs/encoding": "1.1.0",
-    "@pydantic/genai-prices": "^0.0.72",
     "@react-email/components": "^0.0.21",
     "@trpc/server": "^10.45.2",
     "adm-zip": "^0.5.16",

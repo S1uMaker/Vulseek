@@ -12,6 +12,7 @@ import {
 	type CompiledPipelineDefinition,
 	type PipelineDocumentV3,
 } from "../pipeline/document-v3";
+import { resolveScanJobDeadlineAt } from "../job-budget";
 import { createScanJobRepo } from "../persistence/scan-job.repo";
 import { findPipelineProfileForOrganization } from "../../pipeline-profiles";
 
@@ -46,6 +47,8 @@ export type CreatePipelineRunInput = {
 	title?: string;
 	description?: string;
 	pipelineProfileId?: string;
+	tokenBudget?: number | null;
+	timeBudgetSeconds?: number | null;
 	scanRuntimeSettings?: ScanRuntimeSettings;
 	stageOverrides?: Record<
 		string,
@@ -63,6 +66,62 @@ type PipelineStageOverride = NonNullable<
 
 const hasOwn = (value: object, key: string) =>
 	Object.prototype.hasOwnProperty.call(value, key);
+
+const scanStageSettingsToRuntime = (
+	settings: Record<
+		string,
+		{ agentProfileId?: string | null; concurrency?: number | null }
+	> | null
+	| undefined,
+): ScanRuntimeSettings => {
+	const stages: NonNullable<ScanRuntimeSettings["stages"]> = {};
+	for (const [stageId, setting] of Object.entries(settings ?? {})) {
+		if (!setting) continue;
+		stages[stageId] = {
+			disabled: false,
+			concurrency: setting.concurrency ?? undefined,
+			agentProfileId: setting.agentProfileId ?? null,
+		};
+	}
+	return { stages };
+};
+
+const mergeScanRuntimeSettings = (
+	base: ScanRuntimeSettings,
+	overlay: ScanRuntimeSettings,
+): ScanRuntimeSettings => ({
+	stages: {
+		...(base.stages ?? {}),
+		...Object.fromEntries(
+			Object.entries(overlay.stages ?? {}).map(([stageId, setting]) => [
+				stageId,
+				{
+					...(base.stages?.[stageId] ?? {}),
+					...setting,
+				},
+			]),
+		),
+	},
+	...(overlay.threatDirection
+		? { threatDirection: overlay.threatDirection }
+		: base.threatDirection
+			? { threatDirection: base.threatDirection }
+			: {}),
+});
+
+const loadTargetScanRuntimeSettings = async (
+	target: PipelineRunTarget,
+): Promise<ScanRuntimeSettings> => {
+	if (target.type === "application") {
+		const application = await findApplicationById(target.applicationId);
+		return scanStageSettingsToRuntime(application.scanStageSettings);
+	}
+	if (target.type === "compose") {
+		const compose = await findComposeById(target.composeId);
+		return scanStageSettingsToRuntime(compose.scanStageSettings);
+	}
+	return {};
+};
 
 /** Freeze a complete per-stage runtime configuration into every new Job. */
 export const buildPipelineRunRuntimeSettings = (input: {
@@ -306,11 +365,17 @@ export const createPipelineRun = async (
 	}
 
 	const now = new Date();
-	const deadlineAt = new Date(
-		now.getTime() + compiled.limits.maxDurationSeconds * 1000,
-	).toISOString();
+	const deadlineAt = resolveScanJobDeadlineAt({
+		nowMs: now.getTime(),
+		yamlMaxDurationSeconds: compiled.limits.maxDurationSeconds,
+		timeBudgetSeconds: input.timeBudgetSeconds,
+	});
 
-	let scanRuntimeSettings = input.scanRuntimeSettings ?? {};
+	const targetRuntimeSettings = await loadTargetScanRuntimeSettings(input.target);
+	let scanRuntimeSettings = mergeScanRuntimeSettings(
+		targetRuntimeSettings,
+		input.scanRuntimeSettings ?? {},
+	);
 	let stageOverrides = input.stageOverrides;
 	if (input.pipelineProfileId) {
 		const profile = await findPipelineProfileForOrganization(
@@ -323,7 +388,10 @@ export const createPipelineRun = async (
 				message: "Pipeline profile does not belong to this pipeline",
 			});
 		}
-		scanRuntimeSettings = profile.settings ?? {};
+		scanRuntimeSettings = mergeScanRuntimeSettings(
+			scanRuntimeSettings,
+			profile.settings ?? {},
+		);
 		stageOverrides = runtimeSettingsToStageOverrides(scanRuntimeSettings);
 	}
 	scanRuntimeSettings = buildPipelineRunRuntimeSettings({
@@ -351,6 +419,7 @@ export const createPipelineRun = async (
 		runtimeStageIds: compiled.stages.map((stage) => stage.id),
 		pipelineId: pipeline.pipelineId,
 		pipelineVersionId: version.pipelineVersionId,
+		pipelineProfileId: input.pipelineProfileId ?? null,
 		pipelineYamlSnapshot: version.yaml,
 		pipelineCompiledSnapshot: {
 			...compiled,
@@ -358,6 +427,8 @@ export const createPipelineRun = async (
 		} as unknown as Record<string, unknown>,
 		maxTasks: compiled.limits.maxTasks,
 		deadlineAt,
+		tokenBudget: input.tokenBudget ?? null,
+		timeBudgetSeconds: input.timeBudgetSeconds ?? null,
 		defaultDeltaCommitWindow: 3,
 	});
 

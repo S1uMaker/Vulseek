@@ -7,9 +7,8 @@ import { bitbucketRouter } from "./routers/bitbucket";
 import { certificateRouter } from "./routers/certificate";
 import { clusterRouter } from "./routers/cluster";
 import { composeRouter } from "./routers/compose";
-import { deploymentRouter } from "./routers/deployment";
 import { datasetRouter } from "./routers/dataset";
-import { pipelineRouter } from "./routers/pipeline";
+import { deploymentRouter } from "./routers/deployment";
 import { destinationRouter } from "./routers/destination";
 import { dockerRouter } from "./routers/docker";
 import { domainRouter } from "./routers/domain";
@@ -19,11 +18,14 @@ import { giteaRouter } from "./routers/gitea";
 import { githubRouter } from "./routers/github";
 import { gitlabRouter } from "./routers/gitlab";
 import { mariadbRouter } from "./routers/mariadb";
+import { mcpRouter } from "./routers/mcp";
+import { skillsRouter } from "./routers/skills";
 import { mongoRouter } from "./routers/mongo";
 import { mountRouter } from "./routers/mount";
 import { mysqlRouter } from "./routers/mysql";
 import { notificationRouter } from "./routers/notification";
 import { organizationRouter } from "./routers/organization";
+import { pipelineRouter } from "./routers/pipeline";
 import { portRouter } from "./routers/port";
 import { postgresRouter } from "./routers/postgres";
 import { previewDeploymentRouter } from "./routers/preview-deployment";
@@ -57,6 +59,8 @@ export const appRouter = createTRPCRouter({
 	postgres: postgresRouter,
 	redis: redisRouter,
 	mongo: mongoRouter,
+	mcp: mcpRouter,
+	skills: skillsRouter,
 	mariadb: mariadbRouter,
 	compose: composeRouter,
 	user: userRouter,

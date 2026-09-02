@@ -6,3 +6,14 @@ export const createShortTaskId = () =>
 
 export const createTaskIdForDispatchKey = (dispatchKey: string) =>
 	`d${crypto.createHash("sha256").update(dispatchKey).digest("hex").slice(0, 15)}`;
+
+export const createTaskIdForSource = (input: {
+	sourceMessageId: string;
+	sourceEdgeName: string;
+	sourceItemIndex: number;
+}) =>
+	createTaskIdForDispatchKey(
+		[input.sourceMessageId, input.sourceEdgeName, String(input.sourceItemIndex)].join(
+			":",
+		),
+	);

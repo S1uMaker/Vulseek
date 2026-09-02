@@ -1,5 +1,15 @@
 import { promises as fs } from "node:fs";
 
+/** Keep the latest window of a JSONL/text log, dropping a split first line. */
+export const clipLatestText = (content: string, maxChars: number) => {
+	if (maxChars <= 0) return "";
+	if (content.length <= maxChars) return content;
+	const sliced = content.slice(content.length - maxChars);
+	const newline = sliced.indexOf("\n");
+	if (newline === -1) return sliced;
+	return sliced.slice(newline + 1);
+};
+
 export type FileStreamBufferEvent =
 	| {
 			type: "snapshot";
@@ -23,6 +33,7 @@ type FileStreamBufferSnapshot = {
 class FileStreamBuffer {
 	private readonly filePath: string;
 	private readonly pollIntervalMs: number;
+	private readonly maxContentChars: number | null;
 	private content = "";
 	private offset = 0;
 	private tail = Buffer.alloc(0);
@@ -32,9 +43,19 @@ class FileStreamBuffer {
 	private pollTimer: NodeJS.Timeout | null = null;
 	private readonly subscribers = new Set<FileStreamBufferSubscriber>();
 
-	constructor(filePath: string, pollIntervalMs: number) {
+	constructor(
+		filePath: string,
+		pollIntervalMs: number,
+		maxContentChars: number | null = null,
+	) {
 		this.filePath = filePath;
 		this.pollIntervalMs = pollIntervalMs;
+		this.maxContentChars = maxContentChars;
+	}
+
+	private clipStoredContent() {
+		if (this.maxContentChars == null) return;
+		this.content = clipLatestText(this.content, this.maxContentChars);
 	}
 
 	private notify(event: FileStreamBufferEvent) {
@@ -46,11 +67,46 @@ class FileStreamBuffer {
 	}
 
 	private async loadEntireFile(reason: "init" | "reset" | "missing") {
-		const content = await fs.readFile(this.filePath, "utf-8").catch(() => "");
-		const bytes = Buffer.from(content, "utf-8");
-		this.content = content;
-		this.offset = bytes.length;
-		this.tail = bytes.subarray(Math.max(0, bytes.length - 4096));
+		const stat = await fs.stat(this.filePath).catch(() => null);
+		if (!stat) {
+			this.content = "";
+			this.offset = 0;
+			this.tail = Buffer.alloc(0);
+			this.initialized = true;
+			if (reason !== "init") {
+				this.notify({
+					type: "snapshot",
+					content: "",
+					offset: 0,
+					reason,
+				});
+			}
+			return;
+		}
+
+		const maxBytes = this.maxContentChars;
+		if (maxBytes != null && stat.size > maxBytes) {
+			const handle = await fs.open(this.filePath, "r");
+			try {
+				const buffer = Buffer.alloc(maxBytes);
+				await handle.read(buffer, 0, maxBytes, stat.size - maxBytes);
+				let text = buffer.toString("utf-8");
+				const newline = text.indexOf("\n");
+				if (newline >= 0) text = text.slice(newline + 1);
+				this.content = text;
+				this.offset = stat.size;
+				this.tail = buffer.subarray(Math.max(0, buffer.length - 4096));
+			} finally {
+				await handle.close();
+			}
+		} else {
+			const content = await fs.readFile(this.filePath, "utf-8");
+			const bytes = Buffer.from(content, "utf-8");
+			this.content = content;
+			this.offset = bytes.length;
+			this.tail = bytes.subarray(Math.max(0, bytes.length - 4096));
+			this.clipStoredContent();
+		}
 		this.initialized = true;
 		if (reason !== "init") {
 			this.notify({
@@ -202,6 +258,7 @@ class FileStreamBuffer {
 				this.content += delta;
 				this.offset = stat.size;
 				this.tail = Buffer.concat([this.tail, buffer]).subarray(-4096);
+				this.clipStoredContent();
 				this.notify({
 					type: "append",
 					content: delta,
@@ -222,6 +279,7 @@ export const getFileStreamBuffer = (
 	filePath: string,
 	options?: {
 		pollIntervalMs?: number;
+		maxContentChars?: number;
 	},
 ) => {
 	const existing = fileStreamBuffers.get(filePath);
@@ -232,6 +290,7 @@ export const getFileStreamBuffer = (
 	const created = new FileStreamBuffer(
 		filePath,
 		options?.pollIntervalMs ?? 1000,
+		options?.maxContentChars ?? null,
 	);
 	fileStreamBuffers.set(filePath, created);
 	return created;

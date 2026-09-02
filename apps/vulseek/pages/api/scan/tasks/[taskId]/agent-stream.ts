@@ -6,9 +6,19 @@ import {
 } from "@vulseek/server";
 import { existsSync } from "node:fs";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getFileStreamBuffer } from "@/server/utils/file-stream-buffer";
+import {
+	clipLatestText,
+	getFileStreamBuffer,
+} from "@/server/utils/file-stream-buffer";
 
 const SNAPSHOT_CHUNK_SIZE = 64 * 1024;
+const AGENT_STREAM_SNAPSHOT_MAX_CHARS = 512 * 1024;
+const AGENT_STREAM_SNAPSHOT_MAX_PROMPTS = 32;
+
+const agentStreamBuffer = (filePath: string) =>
+	getFileStreamBuffer(filePath, {
+		maxContentChars: AGENT_STREAM_SNAPSHOT_MAX_CHARS,
+	});
 
 const isLiveStatus = (status: string | null | undefined) =>
 	status === "launching" ||
@@ -130,18 +140,20 @@ export default async function handler(
 	const readPromptSnapshot = async (
 		source: (typeof streamRuntime.promptSources)[number],
 	) => {
-		const buffer = getFileStreamBuffer(source.stdoutPath);
+		const buffer = agentStreamBuffer(source.stdoutPath);
 		const snapshot = await buffer.getSnapshot();
 		const parser = new DriverPromptEventParser();
 		parser.reset(0);
-		const events = parser.push(snapshot.content);
+		const events = parser.push(
+			clipLatestText(snapshot.content, AGENT_STREAM_SNAPSHOT_MAX_CHARS),
+		);
 		return { buffer, parser, events };
 	};
 
 	const sendCombinedSnapshot = async (current: typeof streamRuntime) => {
 		if (closed) return;
 		const transcriptSnapshot = current.transcriptPath
-			? await getFileStreamBuffer(current.transcriptPath).getSnapshot()
+			? await agentStreamBuffer(current.transcriptPath).getSnapshot()
 			: { content: "", offset: 0 };
 		const promptSnapshots = await Promise.all(
 			current.promptSources.map(async (source) => ({
@@ -153,6 +165,10 @@ export default async function handler(
 		activeTranscriptPath = current.transcriptPath;
 		activePromptSourceKey = promptSourceKey(current);
 
+		const transcript = clipLatestText(
+			transcriptSnapshot.content,
+			AGENT_STREAM_SNAPSHOT_MAX_CHARS,
+		);
 		const prompts = promptSnapshots
 			.flatMap(({ source, events }, sourceIndex) =>
 				events.map((event) => ({
@@ -167,20 +183,18 @@ export default async function handler(
 					left.event.turnIndex - right.event.turnIndex ||
 					left.event.timestamp.localeCompare(right.event.timestamp) ||
 					left.sourceTaskId.localeCompare(right.sourceTaskId),
-			);
+			)
+			.slice(-AGENT_STREAM_SNAPSHOT_MAX_PROMPTS);
 		nextPromptTurnIndex = 0;
 
 		sendEvent(res, "snapshot_start", metadata(current));
 		for (
 			let offset = 0;
-			offset < transcriptSnapshot.content.length;
+			offset < transcript.length;
 			offset += SNAPSHOT_CHUNK_SIZE
 		) {
 			sendEvent(res, "chunk", {
-				text: transcriptSnapshot.content.slice(
-					offset,
-					offset + SNAPSHOT_CHUNK_SIZE,
-				),
+				text: transcript.slice(offset, offset + SNAPSHOT_CHUNK_SIZE),
 				offset,
 			});
 		}
@@ -191,7 +205,8 @@ export default async function handler(
 			});
 		}
 		sendEvent(res, "snapshot_end", {
-			length: transcriptSnapshot.content.length,
+			length: transcript.length,
+			truncated: transcript.length < transcriptSnapshot.content.length,
 		});
 	};
 
@@ -217,7 +232,7 @@ export default async function handler(
 		if (closed) return true;
 
 		if (current.transcriptPath) {
-			const transcriptBuffer = getFileStreamBuffer(current.transcriptPath);
+			const transcriptBuffer = agentStreamBuffer(current.transcriptPath);
 			transcriptUnsubscribe = transcriptBuffer.subscribe((event) => {
 				if (closed) return;
 				if (event.type === "append") {
@@ -232,11 +247,13 @@ export default async function handler(
 		}
 
 		for (const source of current.promptSources) {
-			const buffer = getFileStreamBuffer(source.stdoutPath);
+			const buffer = agentStreamBuffer(source.stdoutPath);
 			const parser = new DriverPromptEventParser();
 			const snapshot = await buffer.getSnapshot();
 			parser.reset(0);
-			parser.push(snapshot.content);
+			parser.push(
+				clipLatestText(snapshot.content, AGENT_STREAM_SNAPSHOT_MAX_CHARS),
+			);
 			const unsubscribe = buffer.subscribe((event) => {
 				if (closed) return;
 				if (event.type === "append") {

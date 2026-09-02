@@ -4,7 +4,6 @@ import {
 	type AnyPgColumn,
 	bigint,
 	boolean,
-	foreignKey,
 	index,
 	integer,
 	jsonb,
@@ -30,12 +29,11 @@ import {
 export type TaskAgentProfileSnapshot = {
 	agentProfileId: string | null;
 	name: string | null;
-	provider: "codex" | "claude_code" | null;
+	provider: "codex" | "claude_code" | "grok_build" | null;
 	authMode: "api_key" | "host_home" | null;
 	homePath: string | null;
 	baseUrl: string | null;
 	model: string | null;
-	pricingProvider: string | null;
 	thinkingLevel: string | null;
 	thinkingLevelEnabled?: boolean | null;
 };
@@ -45,7 +43,7 @@ export type ScanJobOutputArtifact = {
 };
 
 export type ScanJobOutput = {
-	taskId: string;
+	messageId: string;
 	stageName: string;
 	artifacts: ScanJobOutputArtifact[];
 };
@@ -76,6 +74,13 @@ export const taskStatusEnum = pgEnum("taskStatus", [
 	"failed",
 	"exited",
 	"canceled",
+]);
+export const taskLifecycleEnum = pgEnum("taskLifecycle", ["turn", "goal"]);
+export const messageStatusEnum = pgEnum("messageStatus", [
+	"pending",
+	"processing",
+	"completed",
+	"failed",
 ]);
 
 /**
@@ -169,7 +174,9 @@ export const scanPipelineProfiles = pgTable(
 			.references(() => scanPipelines.pipelineId, { onDelete: "cascade" }),
 		pipelineVersionId: text("pipelineVersionId")
 			.notNull()
-			.references(() => scanPipelineVersions.pipelineVersionId, { onDelete: "cascade" }),
+			.references(() => scanPipelineVersions.pipelineVersionId, {
+				onDelete: "cascade",
+			}),
 		organizationId: text("organizationId")
 			.notNull()
 			.references(() => organization.id, { onDelete: "cascade" }),
@@ -187,14 +194,12 @@ export const scanPipelineProfiles = pgTable(
 			.$defaultFn(() => new Date().toISOString()),
 	},
 	(table) => ({
-		pipelineNameUnique: uniqueIndex("scan_pipeline_profiles_pipeline_name_unique").on(
-			table.pipelineId,
-			table.name,
-		),
-		organizationPipelineIndex: index("scan_pipeline_profiles_org_pipeline_idx").on(
-			table.organizationId,
-			table.pipelineId,
-		),
+		pipelineNameUnique: uniqueIndex(
+			"scan_pipeline_profiles_pipeline_name_unique",
+		).on(table.pipelineId, table.name),
+		organizationPipelineIndex: index(
+			"scan_pipeline_profiles_org_pipeline_idx",
+		).on(table.organizationId, table.pipelineId),
 	}),
 );
 
@@ -222,10 +227,7 @@ export const scanJobs = pgTable(
 			.$type<Record<string, unknown>>()
 			.notNull()
 			.default({}),
-		outputs: jsonb("outputs")
-			.$type<ScanJobOutput[]>()
-			.notNull()
-			.default([]),
+		outputs: jsonb("outputs").$type<ScanJobOutput[]>().notNull().default([]),
 		commitWindow: integer("commitWindow").notNull().default(3),
 		inputTokens: bigint("input_tokens", { mode: "number" })
 			.notNull()
@@ -262,21 +264,27 @@ export const scanJobs = pgTable(
 		// snapshots make the job reproducible after version switches/archival.
 		pipelineId: text("pipelineId")
 			.notNull()
-			.references(
-			() => scanPipelines.pipelineId,
-			{ onDelete: "restrict" },
-			),
+			.references(() => scanPipelines.pipelineId, { onDelete: "restrict" }),
 		pipelineVersionId: text("pipelineVersionId").references(
 			() => scanPipelineVersions.pipelineVersionId,
 			{ onDelete: "set null" },
 		),
+		pipelineProfileId: text("pipelineProfileId").references(
+			() => scanPipelineProfiles.pipelineProfileId,
+			{ onDelete: "set null" },
+		),
 		pipelineYamlSnapshot: text("pipelineYamlSnapshot"),
-		pipelineCompiledSnapshot: jsonb("pipelineCompiledSnapshot").$type<unknown>(),
+		pipelineCompiledSnapshot: jsonb(
+			"pipelineCompiledSnapshot",
+		).$type<unknown>(),
 		// Loop-safety limits; persisted so worker restarts cannot reset them.
 		maxTasks: integer("maxTasks"),
 		deadlineAt: text("deadlineAt"),
 		taskCount: integer("taskCount").notNull().default(0),
 		terminationReason: text("terminationReason").$type<string | null>(),
+		// Optional per-run budgets set at start. Null means unlimited.
+		tokenBudget: bigint("tokenBudget", { mode: "number" }),
+		timeBudgetSeconds: integer("timeBudgetSeconds"),
 		createdAt: text("createdAt")
 			.notNull()
 			.$defaultFn(() => new Date().toISOString()),
@@ -304,23 +312,19 @@ export const tasks = pgTable(
 			.references(() => scanJobs.scanJobId, {
 				onDelete: "cascade",
 			}),
-		vulnerabilityCandidateId: text("vulnerabilityCandidateId"),
-		parentTaskId: text("parentTaskId").references(
+		name: text("name").notNull(),
+		stageName: text("stageName").notNull(),
+		lifecycle: taskLifecycleEnum("lifecycle").notNull().default("turn"),
+		status: taskStatusEnum("status").notNull().default("pending"),
+		sourceMessageId: text("sourceMessageId"),
+		sourceEdgeName: text("sourceEdgeName"),
+		sourceItemIndex: integer("sourceItemIndex"),
+		rerunOfTaskId: text("rerunOfTaskId").references(
 			(): AnyPgColumn => tasks.taskId,
 			{
 				onDelete: "set null",
 			},
 		),
-		name: text("name").notNull(),
-		stageName: text("stageName").notNull(),
-		status: taskStatusEnum("status").notNull().default("pending"),
-		downstreamDispatchStatus: text("downstreamDispatchStatus")
-			.$type<"pending" | "dispatching" | "completed">()
-			.notNull()
-			.default("pending"),
-		downstreamRouteKey: text("downstreamRouteKey"),
-		downstreamDispatchedAt: text("downstreamDispatchedAt"),
-		dispatchKey: text("dispatchKey"),
 		priority: integer("priority"),
 		attempt: integer("attempt").notNull().default(0),
 		agentProfile: jsonb(
@@ -338,10 +342,7 @@ export const tasks = pgTable(
 				onDelete: "set null",
 			},
 		),
-		forkedFromThreadId: text("forkedFromThreadId"),
 		stageGroupInstanceId: text("stageGroupInstanceId"),
-		input: jsonb("input").$type<unknown | null>(),
-		output: jsonb("output").$type<unknown | null>(),
 		inputTokens: bigint("input_tokens", { mode: "number" }),
 		outputTokens: bigint("output_tokens", { mode: "number" }),
 		thoughtTokens: bigint("thought_tokens", { mode: "number" }),
@@ -350,8 +351,6 @@ export const tasks = pgTable(
 		cachedWriteTokens: bigint("cached_write_tokens", { mode: "number" }),
 		estimatedCost: real("estimated_cost"),
 		errorMessage: text("errorMessage"),
-		exitReason: text("exitReason").$type<"agent_exit" | "leader_exit" | null>(),
-		exitNote: text("exitNote"),
 		startedAt: text("startedAt"),
 		completedAt: text("completedAt"),
 		createdAt: text("createdAt")
@@ -363,26 +362,21 @@ export const tasks = pgTable(
 	},
 	(table) => ({
 		scanJobIdx: index("tasks_scan_job_idx").on(table.scanJobId),
-		scanJobCandidateIdx: index("tasks_scan_job_candidate_idx").on(
-			table.scanJobId,
-			table.vulnerabilityCandidateId,
-			table.stageName,
-			table.createdAt,
+		sourceMessageIdx: index("tasks_source_message_idx").on(
+			table.sourceMessageId,
 		),
-		parentTaskIdx: index("tasks_parent_task_idx").on(table.parentTaskId),
+		sourceIdentityUnique: uniqueIndex("tasks_source_identity_unique")
+			.on(table.sourceMessageId, table.sourceEdgeName, table.sourceItemIndex)
+			.where(
+				sql`${table.sourceMessageId} is not null and ${table.rerunOfTaskId} is null`,
+			),
+		rerunOfTaskIdx: index("tasks_rerun_of_task_idx").on(table.rerunOfTaskId),
 		forkedFromTaskIdx: index("tasks_forked_from_task_idx").on(
 			table.forkedFromTaskId,
-		),
-		forkedFromThreadIdx: index("tasks_forked_from_thread_idx").on(
-			table.forkedFromThreadId,
 		),
 		scanJobStatusIdx: index("tasks_scan_job_status_idx").on(
 			table.scanJobId,
 			table.status,
-		),
-		dispatchStatusIdx: index("tasks_downstream_dispatch_status_idx").on(
-			table.scanJobId,
-			table.downstreamDispatchStatus,
 		),
 		scanJobCreatedAtIdx: index("tasks_scan_job_created_at_idx").on(
 			table.scanJobId,
@@ -404,6 +398,84 @@ export const tasks = pgTable(
 			table.stageName,
 			table.containerIndex,
 		),
+	}),
+);
+
+export const messages = pgTable(
+	"messages",
+	{
+		messageId: text("messageId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		sourceTaskId: text("sourceTaskId")
+			.notNull()
+			.references(() => tasks.taskId, {
+				onDelete: "cascade",
+			}),
+		sequence: integer("sequence").notNull(),
+		submissionKey: text("submissionKey").notNull(),
+		routeKey: text("routeKey"),
+		payload: jsonb("payload").$type<unknown>().notNull(),
+		status: messageStatusEnum("status").notNull().default("pending"),
+		dispatchAttempt: integer("dispatchAttempt").notNull().default(0),
+		claimedAt: text("claimedAt"),
+		dispatchedAt: text("dispatchedAt"),
+		errorMessage: text("errorMessage"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		sourceSequenceUnique: uniqueIndex("messages_source_sequence_unique").on(
+			table.sourceTaskId,
+			table.sequence,
+		),
+		sourceSubmissionUnique: uniqueIndex("messages_source_submission_unique").on(
+			table.sourceTaskId,
+			table.submissionKey,
+		),
+		sourceStatusIdx: index("messages_source_status_idx").on(
+			table.sourceTaskId,
+			table.status,
+			table.sequence,
+		),
+		jobStatusIdx: index("messages_job_status_idx").on(
+			table.scanJobId,
+			table.status,
+			table.createdAt,
+		),
+	}),
+);
+
+export const scanJobStageStats = pgTable(
+	"scan_job_stage_stats",
+	{
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		stageName: text("stageName").notNull(),
+		processedMessageCount: integer("processedMessageCount")
+			.notNull()
+			.default(0),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		pk: primaryKey({
+			columns: [table.scanJobId, table.stageName],
+		}),
 	}),
 );
 
@@ -575,6 +647,9 @@ export const vulnerabilityCandidates = pgTable(
 			.references(() => tasks.taskId, {
 				onDelete: "cascade",
 			}),
+		messageId: text("messageId").references(() => messages.messageId, {
+			onDelete: "set null",
+		}),
 		producerStageName: text("producerStageName").notNull(),
 		functionId: text("functionId"),
 		title: text("title").notNull(),
@@ -600,6 +675,25 @@ export const vulnerabilityCandidates = pgTable(
 		needsManualAnalysis: boolean("needsManualAnalysis")
 			.notNull()
 			.default(false),
+		analysisTaskId: text("analysisTaskId"),
+		analysisMessageId: text("analysisMessageId"),
+		analysisOutput: jsonb("analysisOutput").$type<unknown | null>(),
+		analysisResult: text("analysisResult"),
+		analysisRank: integer("analysisRank"),
+		analysisResultAt: text("analysisResultAt"),
+		verificationTaskId: text("verificationTaskId"),
+		verificationMessageId: text("verificationMessageId"),
+		verificationOutput: jsonb("verificationOutput").$type<unknown | null>(),
+		verificationResult: text("verificationResult"),
+		verificationRank: integer("verificationRank"),
+		verificationResultAt: text("verificationResultAt"),
+		triageTaskId: text("triageTaskId"),
+		triageMessageId: text("triageMessageId"),
+		triageOutput: jsonb("triageOutput").$type<unknown | null>(),
+		triageResult: text("triageResult"),
+		triageRank: integer("triageRank"),
+		triageResultAt: text("triageResultAt"),
+		latestResultAt: text("latestResultAt"),
 		createdAt: text("createdAt")
 			.notNull()
 			.$defaultFn(() => new Date().toISOString()),
@@ -617,99 +711,31 @@ export const vulnerabilityCandidates = pgTable(
 		producerTaskIdx: index("vulnerability_candidates_producer_task_idx").on(
 			table.producerTaskId,
 		),
+		messageIdx: index("vulnerability_candidates_message_idx").on(
+			table.messageId,
+		),
 		producerStageIdx: index("vulnerability_candidates_producer_stage_idx").on(
 			table.producerStageName,
 		),
 		createdAtIdx: index("vulnerability_candidates_created_at_idx").on(
 			table.createdAt,
 		),
-	}),
-);
-
-export const candidateResultProjections = pgTable(
-	"candidate_result_projections",
-	{
-		scanJobId: text("scanJobId")
-			.notNull()
-			.references(() => scanJobs.scanJobId, { onDelete: "cascade" }),
-		vulnerabilityCandidateId: text("vulnerabilityCandidateId").notNull(),
-		analysisTaskId: text("analysisTaskId"),
-		analysisOutput: jsonb("analysisOutput").$type<unknown | null>(),
-		analysisResult: text("analysisResult"),
-		analysisRank: integer("analysisRank"),
-		analysisResultAt: text("analysisResultAt"),
-		verificationTaskId: text("verificationTaskId"),
-		verificationOutput: jsonb("verificationOutput").$type<unknown | null>(),
-		verificationResult: text("verificationResult"),
-		verificationRank: integer("verificationRank"),
-		verificationResultAt: text("verificationResultAt"),
-		triageTaskId: text("triageTaskId"),
-		triageOutput: jsonb("triageOutput").$type<unknown | null>(),
-		triageResult: text("triageResult"),
-		triageRank: integer("triageRank"),
-		triageResultAt: text("triageResultAt"),
-		latestResultAt: text("latestResultAt"),
-		createdAt: text("createdAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-		updatedAt: text("updatedAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-	},
-	(table) => ({
-		pk: primaryKey({
-			columns: [table.scanJobId, table.vulnerabilityCandidateId],
-		}),
-		candidateFk: foreignKey({
-			columns: [table.scanJobId, table.vulnerabilityCandidateId],
-			foreignColumns: [
-				vulnerabilityCandidates.scanJobId,
-				vulnerabilityCandidates.vulnerabilityCandidateId,
-			],
-			name: "candidate_result_projection_candidate_fk",
-		}),
-		scanJobIdx: index("candidate_result_projection_scan_job_idx").on(
-			table.scanJobId,
-		),
-		analysisResultIdx: index("candidate_result_projection_analysis_idx").on(
+		analysisResultIdx: index("vulnerability_candidates_analysis_idx").on(
 			table.scanJobId,
 			table.analysisResult,
 		),
 		verificationResultIdx: index(
-			"candidate_result_projection_verification_idx",
+			"vulnerability_candidates_verification_idx",
 		).on(table.scanJobId, table.verificationResult),
-		triageResultIdx: index("candidate_result_projection_triage_idx").on(
+		triageResultIdx: index("vulnerability_candidates_triage_idx").on(
 			table.scanJobId,
 			table.triageResult,
 		),
-		latestResultIdx: index("candidate_result_projection_latest_idx").on(
+		latestResultIdx: index("vulnerability_candidates_latest_result_idx").on(
 			table.scanJobId,
 			table.latestResultAt,
 		),
 	}),
-);
-
-export const candidateResultProjectionBackfills = pgTable(
-	"candidate_result_projection_backfills",
-	{
-		backfillId: text("backfillId").primaryKey(),
-		status: text("status")
-			.$type<"pending" | "running" | "completed">()
-			.notNull()
-			.default("pending"),
-		processedCount: integer("processedCount").notNull().default(0),
-		skippedCount: integer("skippedCount").notNull().default(0),
-		skippedTasks: jsonb("skippedTasks")
-			.$type<Array<Record<string, string>>>()
-			.notNull()
-			.default([]),
-		errorMessage: text("errorMessage"),
-		startedAt: text("startedAt"),
-		completedAt: text("completedAt"),
-		updatedAt: text("updatedAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-	},
 );
 
 export const scanJobCostBackfills = pgTable("scan_job_cost_backfills", {
@@ -794,6 +820,10 @@ export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 		fields: [scanJobs.pipelineVersionId],
 		references: [scanPipelineVersions.pipelineVersionId],
 	}),
+	pipelineProfile: one(scanPipelineProfiles, {
+		fields: [scanJobs.pipelineProfileId],
+		references: [scanPipelineProfiles.pipelineProfileId],
+	}),
 	tasks: many(tasks),
 	candidateMetadata: many(candidateMetadata),
 	vulnerabilityCandidates: many(vulnerabilityCandidates),
@@ -826,14 +856,31 @@ export const tasksRelations = relations(tasks, ({ one, many }) => ({
 		fields: [tasks.scanJobId],
 		references: [scanJobs.scanJobId],
 	}),
-	parentTask: one(tasks, {
-		fields: [tasks.parentTaskId],
+	sourceMessage: one(messages, {
+		fields: [tasks.sourceMessageId],
+		references: [messages.messageId],
+	}),
+	rerunOfTask: one(tasks, {
+		fields: [tasks.rerunOfTaskId],
 		references: [tasks.taskId],
-		relationName: "task_parent",
+		relationName: "task_rerun",
 	}),
-	childTasks: many(tasks, {
-		relationName: "task_parent",
+	reruns: many(tasks, {
+		relationName: "task_rerun",
 	}),
+	messages: many(messages),
+}));
+
+export const messagesRelations = relations(messages, ({ one, many }) => ({
+	scanJob: one(scanJobs, {
+		fields: [messages.scanJobId],
+		references: [scanJobs.scanJobId],
+	}),
+	sourceTask: one(tasks, {
+		fields: [messages.sourceTaskId],
+		references: [tasks.taskId],
+	}),
+	childTasks: many(tasks),
 }));
 
 export const candidateMetadataRelations = relations(
@@ -856,6 +903,10 @@ export const vulnerabilityCandidatesRelations = relations(
 		producerTask: one(tasks, {
 			fields: [vulnerabilityCandidates.producerTaskId],
 			references: [tasks.taskId],
+		}),
+		message: one(messages, {
+			fields: [vulnerabilityCandidates.messageId],
+			references: [messages.messageId],
 		}),
 	}),
 );

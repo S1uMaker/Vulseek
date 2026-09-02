@@ -189,6 +189,17 @@ export const formatTokenCount = (value?: number | null) => {
 	return new Intl.NumberFormat().format(value);
 };
 
+export const formatTokenBudgetK = (tokenBudget?: number | null) => {
+	if (typeof tokenBudget !== "number" || !Number.isFinite(tokenBudget)) {
+		return "-";
+	}
+	const thousands = tokenBudget / 1000;
+	if (Number.isInteger(thousands)) {
+		return `${formatTokenCount(thousands)}K`;
+	}
+	return `${formatTokenCount(Number(thousands.toFixed(1)))}K`;
+};
+
 export const formatTokenUsageWithCache = (
 	t: ScanTranslation,
 	total?: number | null,
@@ -305,6 +316,27 @@ export const getScanJobStatusClassName = (status?: string) => {
 	return "text-muted-foreground";
 };
 
+export const formatPipelineVersionLabel = (
+	versionNumber?: number | string | null,
+) => {
+	const parsed =
+		typeof versionNumber === "number"
+			? versionNumber
+			: typeof versionNumber === "string" && versionNumber.trim()
+				? Number(versionNumber)
+				: Number.NaN;
+	if (!Number.isFinite(parsed)) {
+		return "-";
+	}
+	return `v${parsed}`;
+};
+
+export const resolveScanJobPipelineLabel = (job: {
+	pipelineName?: string | null;
+	pipelineSlug?: string | null;
+}) => job.pipelineName?.trim() || job.pipelineSlug?.trim() || "";
+
+
 export const formatTriggerSourceLabel = (
 	t: ScanTranslation,
 	triggerSource?: string,
@@ -418,6 +450,35 @@ export const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 		return formatScanStageLabel(t, "triage-finding");
 	}
 	return formatScanStageLabel(t, stage);
+};
+
+const STAGE_SHORT_DEFAULTS: Record<string, string> = {
+	orchestrator: "Orch",
+	hunter: "Hunt",
+	"verify-finding": "Verify",
+	"triage-finding": "Triage",
+	"analyze-finding": "Analyze",
+	"critique-finding": "Critique",
+	"repository-profile": "Repo",
+	"attack-surface-model": "Surface",
+	"identify-target": "Target",
+	"scan-target": "Scan",
+	"delta-scope": "Delta",
+};
+
+export const getTaskStageShortLabel = (
+	t: ScanTranslation,
+	stage?: string,
+) => {
+	if (!stage) {
+		return "-";
+	}
+	const canonical = stage.toLowerCase().replace(/_/g, "-");
+	return scanT(
+		t,
+		`scan.stageShort.${canonical}`,
+		STAGE_SHORT_DEFAULTS[canonical] || getTaskStageLabel(t, stage),
+	);
 };
 
 export const RERUNNABLE_TASK_STATUSES = new Set([

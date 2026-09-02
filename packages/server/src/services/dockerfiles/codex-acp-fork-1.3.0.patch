@@ -48,6 +48,45 @@
    async loadSession(request, onSubscribed) {
      const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
      await this.refreshSkills(request.cwd, additionalDirectories);
+@@ -27059,15 +27084,23 @@
+     return response?.goal ?? null;
+   }
+   async setGoal(sessionId, objective, onTurnStarted, onGoalSet) {
++    const fullObjective = objective.length > 4e3 ? objective : null;
+     const params = {
+       threadId: sessionId,
+-      objective,
++      objective: fullObjective === null ? objective : "A complete goal objective will be injected into this turn immediately. Wait for it, then execute it as the authoritative goal.",
+       status: "active"
+     };
++    const injectFullObjective = fullObjective === null ? void 0 : async (turnId) => {
++      await this.steerTurn({
++        threadId: sessionId,
++        turnId,
++        prompt: [{ type: "text", text: fullObjective }]
++      });
++    };
+     if (onGoalSet === void 0) {
+-      return await this.codexClient.runGoalSet(params, onTurnStarted);
++      return await this.codexClient.runGoalSet(params, onTurnStarted, void 0, void 0, injectFullObjective);
+     }
+-    return await this.codexClient.runGoalSet(params, onTurnStarted, void 0, onGoalSet);
++    return await this.codexClient.runGoalSet(params, onTurnStarted, void 0, onGoalSet, injectFullObjective);
+   }
+   async setGoalStatus(sessionId, status) {
+     let updatedGoal = null;
+@@ -27877,11 +27924,6 @@
+         await this.runWithProcessCheck(() => this.codexAcpClient.clearGoal(sessionId));
+         return { handled: true };
+     }
+-    if (argument.length > 4e3) {
+-      const session = new ACPSessionConnection(this.connection, sessionId);
+-      await session.update(createAgentTextMessageChunk('Command "/goal" requires goal text of at most 4000 characters.'));
+-      return { handled: true };
+-    }
+     options.onTurnStartPending?.();
+     return this.createGoalCommandResult(await this.runWithProcessCheck(() => this.codexAcpClient.setGoal(
+       sessionId,
 @@ -29240,6 +29257,7 @@
          },
          sessionCapabilities: {
@@ -84,7 +123,24 @@
    async listSessions(params) {
      logger.log("Listing sessions...", { cwd: params.cwd, cursor: params.cursor });
      await this.checkAuthorization();
-@@ -31590,6 +31629,9 @@
+@@ -31396,7 +31446,7 @@
+       releaseCapture();
+     }
+   }
+-  async runGoalSet(params, onTurnStarted, runtimeEffectsGraceMs = GOAL_RUNTIME_EFFECTS_GRACE_MS, onGoalSet) {
++  async runGoalSet(params, onTurnStarted, runtimeEffectsGraceMs = GOAL_RUNTIME_EFFECTS_GRACE_MS, onGoalSet, onGoalTurnStarted) {
+     let goalTurnId = null;
+     const capturedCompletions = [];
+     let resolveGoalTurnCompleted = () => {
+@@ -31467,6 +31517,7 @@
+       if (turnId === null) {
+         return null;
+       }
++      await onGoalTurnStarted?.(turnId);
+       const earlyCompletion = capturedCompletions.find((event) => event.turn.id === turnId);
+       if (earlyCompletion) {
+         return earlyCompletion;
+@@ -31590,6 +31641,9 @@
    async threadResume(params) {
      return await this.sendRequest({ method: "thread/resume", params });
    }
@@ -94,7 +150,7 @@
    getThreadSettings(threadId) {
      return this.threadSettings.get(threadId);
    }
-@@ -32239,5 +32281,5 @@
+@@ -32239,5 +32293,5 @@
          codexAcpServer = null;
        }
      });

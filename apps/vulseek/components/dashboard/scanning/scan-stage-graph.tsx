@@ -1735,7 +1735,9 @@ const asPreviewAgentProfile = (
 		return null;
 	}
 	const provider =
-		record.provider === "claude_code" || record.provider === "codex"
+		record.provider === "claude_code" ||
+		record.provider === "codex" ||
+		record.provider === "grok_build"
 			? record.provider
 			: "codex";
 	const authMode = record.authMode === "host_home" ? "host_home" : "api_key";
@@ -1747,10 +1749,6 @@ const asPreviewAgentProfile = (
 		homePath: typeof record.homePath === "string" ? record.homePath : "",
 		baseUrl: typeof record.baseUrl === "string" ? record.baseUrl : "",
 		model,
-		pricingProvider:
-			typeof record.pricingProvider === "string"
-				? record.pricingProvider
-				: null,
 		thinkingLevel:
 			typeof record.thinkingLevel === "string" ? record.thinkingLevel : "",
 		thinkingLevelEnabled:

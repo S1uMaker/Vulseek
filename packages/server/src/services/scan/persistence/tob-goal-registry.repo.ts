@@ -24,6 +24,7 @@ const readString = (value: unknown) =>
 export const applyTobGoalRegistryEffect = async (input: {
 	scanJobId: string;
 	taskId: string;
+	messageId?: string | null;
 	operation: TobGoalRegistryOperation;
 	stageOutput: unknown;
 	stageInput?: unknown;
@@ -44,6 +45,7 @@ export const applyTobGoalRegistryEffect = async (input: {
 			candidateId: resolved.candidateId,
 			huntGoalId: resolved.huntGoalId,
 			huntTaskId: input.taskId,
+			messageId: input.messageId ?? null,
 			status: "discovered",
 			title: resolved.title,
 			summary: resolved.summary,
@@ -112,6 +114,7 @@ export const applyTobGoalRegistryEffect = async (input: {
 			findingId,
 			sourceCandidateId: candidateId,
 			huntGoalId,
+			messageId: input.messageId ?? null,
 			status: "novel",
 			title,
 			summary: readString(output.summary) ?? title,

@@ -3,6 +3,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import styles from "./agent-stream.module.css";
 import {
 	formatAgentStreamProvider,
+	formatAgentStreamToolPreview,
 	isAgentStreamNearBottom,
 	mergeAgentStreamTurns,
 	reduceAgentStreamConnectionState,
@@ -61,13 +62,8 @@ const blockLabel = (kind: string) => {
 	return "Assistant";
 };
 
-const toolPreview = (tool: AgentStreamToolCall) => {
-	const input = tool.input;
-	if (tool.name.toLowerCase() === "edit") {
-		return String(input.file_path || input.path || "");
-	}
-	return String(input.command || input.cmd || input.input || "");
-};
+const toolPreview = (tool: AgentStreamToolCall) =>
+	formatAgentStreamToolPreview(tool);
 
 const TurnView = memo(function TurnView({
 	turn,
@@ -286,16 +282,19 @@ export const AgentStream = ({
 			{error ? <div className={styles.error}>{error}</div> : null}
 			<div className={styles.timeline} ref={scrollRef} onScroll={handleScroll}>
 				{turns.length ? (
-					turns.map((turn, index) => (
-						<TurnView
-							key={turn.index}
-							turn={turn}
-							status={status}
-							isLastTurn={index === turns.length - 1}
-							provider={metadata?.provider}
-							labels={labels}
-						/>
-					))
+					<>
+						{turns.map((turn, index) => (
+							<TurnView
+								key={turn.index}
+								turn={turn}
+								status={status}
+								isLastTurn={index === turns.length - 1}
+								provider={metadata?.provider}
+								labels={labels}
+							/>
+						))}
+						<div className={styles.endSpacer} aria-hidden="true" />
+					</>
 				) : (
 					<div className={styles.empty}>{labels.waiting}</div>
 				)}

@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 
-export type NativeAgentTranscriptProvider = "codex" | "claude-code";
+export type NativeAgentTranscriptProvider = "codex" | "claude-code" | "grok";
 
 type FindNativeAgentTranscriptInput = {
 	roots: string[];
@@ -43,6 +43,9 @@ const matchesTranscript = (
 	if (provider === "claude-code") {
 		return name === `${threadId}.jsonl`;
 	}
+	if (provider === "grok") {
+		return false;
+	}
 
 	return (
 		name.startsWith("rollout-") && name.slice(0, -6).endsWith(`-${threadId}`)
@@ -60,6 +63,22 @@ const findInDirectory = async (
 	for (const entry of entries) {
 		const entryPath = path.join(directory, entry.name);
 		if (entry.isDirectory()) {
+			if (provider === "grok" && entry.name === threadId) {
+				const eventsPath = path.join(entryPath, "events.jsonl");
+				const chatPath = path.join(entryPath, "chat_history.jsonl");
+				const events = await readdir(entryPath, { withFileTypes: true }).catch(
+					() => [],
+				);
+				const names = new Set(
+					events.filter((item) => item.isFile()).map((item) => item.name),
+				);
+				if (names.has("chat_history.jsonl")) {
+					return chatPath;
+				}
+				if (names.has("events.jsonl")) {
+					return eventsPath;
+				}
+			}
 			const match = await findInDirectory(entryPath, provider, threadId);
 			if (match) {
 				return match;
@@ -82,16 +101,29 @@ export const findNativeAgentTranscript = async ({
 		return null;
 	}
 
-	const directoryName = provider === "codex" ? "sessions" : "projects";
+	const directoryName = provider === "claude-code" ? "projects" : "sessions";
 	for (const root of roots) {
-		const match = await findInDirectory(
-			path.join(root, "agent-home", directoryName),
-			provider,
-			threadId,
-		);
-		if (match) {
-			return match;
+		const agentHomeRoot = path.join(root, "agent-home");
+		const homes = await listProfileAgentHomes(agentHomeRoot);
+		for (const home of homes) {
+			const match = await findInDirectory(
+				path.join(home, directoryName),
+				provider,
+				threadId,
+			);
+			if (match) {
+				return match;
+			}
 		}
 	}
 	return null;
+};
+
+const listProfileAgentHomes = async (agentHomeRoot: string) => {
+	const entries = await readdir(agentHomeRoot, { withFileTypes: true }).catch(
+		() => [],
+	);
+	return entries
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => path.join(agentHomeRoot, entry.name));
 };

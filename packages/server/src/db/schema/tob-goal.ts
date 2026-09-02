@@ -6,7 +6,7 @@ import {
 	text,
 } from "drizzle-orm/pg-core";
 import { nanoid } from "nanoid";
-import { scanJobs, tasks } from "./scan";
+import { messages, scanJobs, tasks } from "./scan";
 
 const timestamp = () => new Date().toISOString();
 
@@ -49,6 +49,9 @@ export const tobGoalCandidates = pgTable(
 		huntTaskId: text("huntTaskId").references(() => tasks.taskId, {
 			onDelete: "set null",
 		}),
+		messageId: text("messageId").references(() => messages.messageId, {
+			onDelete: "set null",
+		}),
 		status: text("status").notNull().default("discovered"),
 		title: text("title").notNull(),
 		summary: text("summary").notNull().default(""),
@@ -79,6 +82,9 @@ export const tobGoalFindings = pgTable(
 		findingId: text("findingId").notNull(),
 		sourceCandidateId: text("sourceCandidateId").notNull(),
 		huntGoalId: text("huntGoalId").notNull(),
+		messageId: text("messageId").references(() => messages.messageId, {
+			onDelete: "set null",
+		}),
 		status: text("status").notNull().default("novel"),
 		title: text("title").notNull(),
 		summary: text("summary").notNull().default(""),

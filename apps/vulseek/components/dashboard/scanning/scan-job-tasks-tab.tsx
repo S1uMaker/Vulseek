@@ -31,6 +31,7 @@ import {
 import {
 	formatTaskRuntime,
 	getTaskStageLabel,
+	getTaskStageShortLabel,
 	getTaskStatusBadgeClassName,
 	getTaskStatusLabel,
 	localizeTaskListText,
@@ -52,17 +53,15 @@ import {
 type RunningTask = RouterOutputs["scan"]["jobRunningTasks"]["tasks"][number];
 type TerminalTask = RouterOutputs["scan"]["terminalTasks"]["items"][number];
 
+const RUNNING_TASK_GRID_CLASS_NAME =
+	"grid grid-cols-[2.75rem_minmax(0,1.25fr)_2.5rem_minmax(5rem,0.9fr)_auto] items-center justify-start gap-x-1.5 overflow-hidden rounded-lg px-2 py-1.5 sm:grid-cols-[4.25rem_minmax(14rem,1.4fr)_4.5rem_minmax(8rem,1fr)_auto] sm:gap-x-4 sm:px-4 sm:py-2 sm:justify-start";
+
 export const TERMINAL_TASK_STATUS_OPTIONS = [
-	"pending",
-	"launching",
-	"launched",
-	"starting",
-	"running",
 	"completed",
 	"failed",
 	"exited",
 	"canceled",
-];
+] as const;
 
 const makeInitialState = (pageSize: number): ListQueryState => ({
 	query: "",
@@ -149,14 +148,13 @@ export const ScanJobTasksTab = ({
 	const cancelTaskMutation = api.scan.cancelTask.useMutation();
 
 	const queuePendingCounts = queueCountsData?.queues ?? [];
-	const jobRuntimeError = runningTasksError ?? queueCountsError;
-	const hasJobRuntime = Boolean(runningTasksData && queueCountsData);
+	const hasQueueRuntime = Boolean(queueCountsData);
 	const pipelineConcurrencyByStage = useMemo(
 		() =>
 			new Map(
 				(jobPipeline?.nodes ?? []).map((node) => [
 					node.stageName,
-					node.concurrencyLimit,
+					node.configuredConcurrency ?? node.concurrencyLimit,
 				]),
 			),
 		[jobPipeline?.nodes],
@@ -171,12 +169,13 @@ export const ScanJobTasksTab = ({
 			title: scanT(
 				t,
 				"scan.tasks.queueMetrics",
-				"排队 {{queued}}，运行 {{running}} / {{limit}}，完成 {{done}}",
+				"队列消息 {{queuedMessages}}，运行任务 {{runningTasks}} / {{limit}}，完成任务 {{completedTasks}}，已处理消息 {{processedMessages}}",
 				{
-					queued: metrics.queued,
-					running: metrics.running,
+					queuedMessages: metrics.queuedMessages,
+					runningTasks: metrics.runningTasks,
 					limit: metrics.concurrencyLimit,
-					done: metrics.done,
+					completedTasks: metrics.completedTasks,
+					processedMessages: metrics.processedMessages,
 				},
 			),
 		};
@@ -192,7 +191,7 @@ export const ScanJobTasksTab = ({
 			return right.updatedAt.localeCompare(left.updatedAt);
 		});
 	}, [runningTasksData?.tasks]);
-	const taskStageOptions = useMemo(() => {
+	const runningStageOptions = useMemo(() => {
 		const seen = new Set<string>();
 		const addStage = (stage?: string | null) => {
 			const option = normalizeTaskStageOption(stage);
@@ -207,16 +206,21 @@ export const ScanJobTasksTab = ({
 		for (const task of sortedInProgressTasks) {
 			addStage(task.stage);
 		}
-		for (const task of terminalTasks?.items ?? []) {
-			addStage(task.stage);
-		}
 
 		return [...seen].sort(
 			(left, right) =>
 				(RUNNING_TASK_STAGE_ORDER[left] ?? Number.MAX_SAFE_INTEGER) -
 				(RUNNING_TASK_STAGE_ORDER[right] ?? Number.MAX_SAFE_INTEGER),
 		);
-	}, [queuePendingCounts, sortedInProgressTasks, terminalTasks?.items]);
+	}, [queuePendingCounts, sortedInProgressTasks]);
+	const pipelineStageOptions = useMemo(
+		() =>
+			[...(jobPipeline?.nodes ?? [])]
+				.filter((node) => Boolean(node.stageName))
+				.sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
+				.map((node) => node.stageName),
+		[jobPipeline?.nodes],
+	);
 	const filteredInProgressTasks = useMemo(() => {
 		const query = searchInput.trim().toLowerCase();
 		return sortedInProgressTasks.filter((task) => {
@@ -343,24 +347,31 @@ export const ScanJobTasksTab = ({
 		});
 	}, [currentPageRerunnableFinishedTaskIds]);
 
-	// Drop stage filters whose options disappeared (e.g. after a filter
-	// narrowed the finished list).
+	// Drop a running stage chip if that stage left the in-progress set.
 	useEffect(() => {
-		if (runningStage !== "all" && !taskStageOptions.includes(runningStage)) {
+		if (runningStage !== "all" && !runningStageOptions.includes(runningStage)) {
 			setRunningState((previous) => ({
 				...previous,
 				filters: { ...previous.filters, stage: [] },
 				page: 1,
 			}));
 		}
-		if (finishedStage !== "all" && !taskStageOptions.includes(finishedStage)) {
+	}, [runningStage, runningStageOptions]);
+
+	// Finished stage chips come from the current pipeline, so only drop a
+	// selection that is no longer a pipeline stage.
+	useEffect(() => {
+		if (
+			finishedStage !== "all" &&
+			!pipelineStageOptions.includes(finishedStage)
+		) {
 			setFinishedState((previous) => ({
 				...previous,
 				filters: { ...previous.filters, stage: [] },
 				page: 1,
 			}));
 		}
-	}, [finishedStage, runningStage, taskStageOptions]);
+	}, [finishedStage, pipelineStageOptions]);
 
 	// Live runtime clock while tasks are running.
 	useEffect(() => {
@@ -526,7 +537,7 @@ export const ScanJobTasksTab = ({
 
 	// Shared between the desktop table's actions column and the mobile cards.
 	const renderRunningTaskActions = (task: RunningTask) => (
-		<div className="flex items-center gap-2">
+		<div className="flex items-center justify-end gap-1 sm:gap-1.5">
 			<LiveTaskActivityButton
 				taskId={task.taskId}
 				title={getRunningTaskTitle(task)}
@@ -535,11 +546,13 @@ export const ScanJobTasksTab = ({
 				variant="outline"
 				size="icon"
 				iconOnly
+				className="h-7 w-7 rounded-md sm:h-8 sm:w-8"
 			/>
 			<Button
 				type="button"
 				variant="destructive"
 				size="icon"
+				className="h-7 w-7 rounded-md sm:h-8 sm:w-8"
 				title={scanT(t, "scan.task.cancelTask", "Cancel running task")}
 				aria-label={scanT(t, "scan.task.cancelTask", "Cancel running task")}
 				disabled={
@@ -597,23 +610,29 @@ export const ScanJobTasksTab = ({
 		);
 	};
 
-	const stageFilterOptions = taskStageOptions.map((stage) => ({
-		value: stage,
-		label: getTaskStageLabel(t, stage),
-	}));
 	const runningFilters: CollectionFilter[] = [
 		{
 			key: "stage",
 			label: scanT(t, "scan.field.stage", "阶段"),
-			options: stageFilterOptions,
+			options: runningStageOptions.map((stage) => ({
+				value: stage,
+				label: getTaskStageLabel(t, stage),
+			})),
 		},
 	];
 	const finishedFilters: CollectionFilter[] = [
-		{
-			key: "stage",
-			label: scanT(t, "scan.field.stage", "阶段"),
-			options: stageFilterOptions,
-		},
+		...(pipelineStageOptions.length > 0
+			? [
+					{
+						key: "stage",
+						label: scanT(t, "scan.field.stage", "阶段"),
+						options: pipelineStageOptions.map((stage) => ({
+							value: stage,
+							label: getTaskStageLabel(t, stage),
+						})),
+					} satisfies CollectionFilter,
+				]
+			: []),
 		{
 			key: "status",
 			label: scanT(t, "scan.field.status", "状态"),
@@ -630,10 +649,10 @@ export const ScanJobTasksTab = ({
 			header: scanT(t, "scan.field.stage", "阶段"),
 			cell: ({ row }: { row: { original: RunningTask } }) => (
 				<span
-					className="whitespace-nowrap capitalize"
+					className="whitespace-nowrap"
 					title={getTaskStageLabel(t, row.original.stage)}
 				>
-					{getTaskStageLabel(t, row.original.stage)}
+					{getTaskStageShortLabel(t, row.original.stage)}
 				</span>
 			),
 		},
@@ -749,8 +768,9 @@ export const ScanJobTasksTab = ({
 		},
 	];
 
-	const runningEmptyTitle =
-		sortedInProgressTasks.length === 0
+	const runningEmptyTitle = runningTasksError
+		? scanT(t, "scan.tasks.runningLoadError", "加载运行中任务失败。")
+		: sortedInProgressTasks.length === 0
 			? scanT(t, "scan.tasks.noRunning", "暂无运行中阶段任务")
 			: scanT(t, "scan.tasks.noMatching", "没有匹配的阶段任务");
 	const finishedEmptyTitle =
@@ -765,15 +785,15 @@ export const ScanJobTasksTab = ({
 				description={scanT(
 					t,
 					"scan.tasks.queuesDescription",
-					"此任务中每个队列的阶段任务进度。",
+					"每个 stage 的收件箱消息、正在运行的任务、已完成的任务，以及已经处理过的消息。",
 				)}
 			>
 				<div className="overflow-x-auto">
-					{jobRuntimeError ? (
+					{queueCountsError ? (
 						<div className="px-4 py-6 text-sm text-destructive">
 							{scanT(t, "scan.tasks.queueLoadError", "加载队列状态失败。")}
 						</div>
-					) : !hasJobRuntime ? (
+					) : !hasQueueRuntime ? (
 						<div className="px-4 py-6 text-sm text-muted-foreground">
 							{scanT(t, "scan.tasks.queueLoading", "正在加载队列状态...")}
 						</div>
@@ -782,20 +802,27 @@ export const ScanJobTasksTab = ({
 							{scanT(t, "scan.tasks.noQueues", "暂无阶段任务队列")}
 						</div>
 					) : (
-						<table className="w-full min-w-[720px] table-fixed text-sm">
+						<table className="w-full min-w-[880px] table-fixed text-sm">
 							<thead className="border-b bg-muted/30 text-left">
 								<tr>
-									<th className="w-[30%] px-4 py-3 font-medium">
+									<th className="w-[22%] px-4 py-3 font-medium">
 										{scanT(t, "scan.tasks.queue", "队列")}
 									</th>
-									<th className="w-[20%] px-4 py-3 text-right font-medium">
-										{scanT(t, "scan.status.queued", "排队中")}
+									<th className="w-[18%] px-4 py-3 text-right font-medium">
+										{scanT(t, "scan.tasks.queuedMessages", "队列中的消息")}
 									</th>
-									<th className="w-[30%] px-4 py-3 text-right font-medium">
-										{scanT(t, "scan.status.running", "运行中")}
+									<th className="w-[24%] px-4 py-3 text-right font-medium">
+										{scanT(t, "scan.tasks.runningTasks", "运行中的任务")}
 									</th>
-									<th className="w-[20%] px-4 py-3 text-right font-medium">
-										{scanT(t, "scan.tasks.done", "完成")}
+									<th className="w-[18%] px-4 py-3 text-right font-medium">
+										{scanT(t, "scan.tasks.completedTasks", "完成的任务")}
+									</th>
+									<th className="w-[18%] px-4 py-3 text-right font-medium">
+										{scanT(
+											t,
+											"scan.tasks.processedMessages",
+											"已处理的消息",
+										)}
 									</th>
 								</tr>
 							</thead>
@@ -804,32 +831,44 @@ export const ScanJobTasksTab = ({
 									const metrics = getQueueTaskMetrics(queue);
 									return (
 										<tr key={queue.id} className="border-b last:border-b-0">
-											<td className="w-[30%] px-4 py-3 align-top font-medium">
+											<td className="w-[22%] px-4 py-3 align-top font-medium">
 												{formatScanStageLabel(
 													t,
 													queue.stageName || queue.title,
 												)}
 											</td>
 											<td
-												className="w-[20%] px-4 py-3 text-right align-top"
+												className="w-[18%] px-4 py-3 text-right align-top"
 												title={metrics.title}
 											>
-												<span className="tabular-nums">{metrics.queued}</span>
+												<span className="tabular-nums">
+													{metrics.queuedMessages}
+												</span>
 											</td>
 											<td
-												className="w-[30%] px-4 py-3 text-right align-top"
+												className="w-[24%] px-4 py-3 text-right align-top"
 												title={metrics.title}
 											>
 												<RunningCapacityBars
-													running={metrics.running}
+													running={metrics.runningTasks}
 													limit={metrics.concurrencyLimit}
 												/>
 											</td>
 											<td
-												className="w-[20%] px-4 py-3 text-right align-top"
+												className="w-[18%] px-4 py-3 text-right align-top"
 												title={metrics.title}
 											>
-												<span className="tabular-nums">{metrics.done}</span>
+												<span className="tabular-nums">
+													{metrics.completedTasks}
+												</span>
+											</td>
+											<td
+												className="w-[18%] px-4 py-3 text-right align-top"
+												title={metrics.title}
+											>
+												<span className="tabular-nums">
+													{metrics.processedMessages}
+												</span>
 											</td>
 										</tr>
 									);
@@ -855,43 +894,58 @@ export const ScanJobTasksTab = ({
 						items: runningPagination.items,
 						total: runningPagination.totalItems,
 					}}
-					isLoading={!hasJobRuntime}
+					isLoading={!runningTasksData && !runningTasksError}
 					searchValue={searchInput}
 					onSearchValueChange={handleSearchChange}
 					searchPlaceholder={scanT(t, "scan.tasks.search", "搜索阶段任务")}
 					filters={runningFilters}
 					columns={runningColumns}
+					rowHeader={
+						<div
+							className={`${RUNNING_TASK_GRID_CLASS_NAME} hidden rounded-none px-4 py-0 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground sm:grid`}
+							aria-hidden="true"
+						>
+							<span>{scanT(t, "scan.field.stage", "阶段")}</span>
+							<span>{scanT(t, "scan.monitoring.task", "阶段任务")}</span>
+							<span>{scanT(t, "scan.field.runtime", "运行时长")}</span>
+							<span>
+								{scanT(t, "scan.tasks.currentActivity", "当前活动")}
+							</span>
+							<span className="w-[4.375rem]" aria-hidden="true" />
+						</div>
+					}
 					getRowId={(task) => task.id}
 					getRowLabel={getRunningTaskTitle}
 					emptyTitle={runningEmptyTitle}
 					renderRow={(task) => (
-						<RowListItem className="items-start sm:items-center">
-							<div className="flex min-w-0 flex-1 items-start gap-3">
-								<div className="min-w-0 flex-1 space-y-1.5">
-									<Link
-										href={taskHref(task.taskId)}
-										className="line-clamp-2 font-medium hover:underline"
-									>
-										{getRunningTaskTitle(task)}
-									</Link>
-									<div className="text-xs text-muted-foreground">
-										<span className="capitalize">
-											{getTaskStageLabel(t, task.stage)}
-										</span>
-										{" · "}
-										<span className="tabular-nums">
-											{formatTaskRuntime(task.startedAt, runtimeNowMs)}
-										</span>
-									</div>
-									<LiveTaskActivityBadge
-										activity={
-											activitiesByTaskId[task.taskId] || idleAgentActivity
-										}
-										isConnected={connectedTaskIds.has(task.taskId)}
-										noWrap
-									/>
-								</div>
-								<div className="shrink-0">{renderRunningTaskActions(task)}</div>
+						<RowListItem className={RUNNING_TASK_GRID_CLASS_NAME}>
+							<span
+								className="min-w-0 truncate text-xs text-muted-foreground"
+								title={getTaskStageLabel(t, task.stage)}
+							>
+								{getTaskStageShortLabel(t, task.stage)}
+							</span>
+							<Link
+								href={taskHref(task.taskId)}
+								className="min-w-0 truncate font-medium hover:underline"
+								title={getRunningTaskTitle(task)}
+							>
+								{getRunningTaskTitle(task)}
+							</Link>
+							<span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+								{formatTaskRuntime(task.startedAt, runtimeNowMs)}
+							</span>
+							<div className="min-w-0">
+								<LiveTaskActivityBadge
+									activity={
+										activitiesByTaskId[task.taskId] || idleAgentActivity
+									}
+									isConnected={connectedTaskIds.has(task.taskId)}
+									noWrap
+								/>
+							</div>
+							<div className="min-w-0 justify-self-end">
+								{renderRunningTaskActions(task)}
 							</div>
 						</RowListItem>
 					)}
@@ -946,6 +1000,7 @@ export const ScanJobTasksTab = ({
 					}
 					filters={finishedFilters}
 					columns={finishedColumns}
+					tableCellClassName="!py-3"
 					bulkActions={
 						<Button
 							type="button"

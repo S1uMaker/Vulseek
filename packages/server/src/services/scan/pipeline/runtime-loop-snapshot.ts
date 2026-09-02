@@ -19,25 +19,49 @@ export type RuntimeLoopSnapshot<
 	activeTasksByStage: Map<string, TActiveTask[]>;
 	pendingTargets: PendingQueueTarget[];
 	pendingTaskMetadata: TPendingTask[];
+	pendingMessageCountBySourceStage: Map<string, number>;
 	stagePolicies: Map<string, StageRuntimePolicy>;
 	statusCounts: Array<{ stageName: string; status: string; count: number }>;
 };
 
-export const getPollableStageNames = (snapshot: RuntimeLoopSnapshot) => {
-	const pendingStageNames = new Set(
-		snapshot.pendingTargets.map((target) => target.stageName),
-	);
-	return [...snapshot.stagePolicies.values()]
+const stageHasLaunchCapacity = (
+	snapshot: RuntimeLoopSnapshot,
+	policy: StageRuntimePolicy,
+) =>
+	(snapshot.activeCountByStage.get(policy.stageName) ?? 0) < policy.concurrency;
+
+export const getPollableStageNames = (snapshot: RuntimeLoopSnapshot) =>
+	[...snapshot.stagePolicies.values()]
 		.filter((policy) => {
-			if (policy.disabled || !pendingStageNames.has(policy.stageName)) {
+			if (policy.disabled) {
 				return false;
 			}
-			return (
-				snapshot.activeCountByStage.get(policy.stageName) ?? 0
-			) < policy.concurrency;
+			if (
+				(snapshot.pendingMessageCountBySourceStage.get(policy.stageName) ?? 0) <=
+				0
+			) {
+				return false;
+			}
+			return stageHasLaunchCapacity(snapshot, policy);
 		})
 		.map((policy) => policy.stageName);
-};
+
+export const getLaunchablePendingStageNames = (snapshot: RuntimeLoopSnapshot) =>
+	[...snapshot.stagePolicies.values()]
+		.filter((policy) => {
+			if (policy.disabled) {
+				return false;
+			}
+			if (
+				!snapshot.pendingTargets.some(
+					(task) => task.stageName === policy.stageName,
+				)
+			) {
+				return false;
+			}
+			return stageHasLaunchCapacity(snapshot, policy);
+		})
+		.map((policy) => policy.stageName);
 
 export const groupActiveTasksByStage = <T extends { stageName: string }>(
 	tasks: T[],

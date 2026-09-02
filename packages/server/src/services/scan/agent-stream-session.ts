@@ -34,7 +34,11 @@ export const findAgentStreamRuntimeByTaskId = async (
 	});
 
 	const provider: NativeAgentTranscriptProvider =
-		runtime.provider === "claude" ? "claude-code" : "codex";
+		runtime.provider === "claude"
+			? "claude-code"
+			: runtime.provider === "grok"
+				? "grok"
+				: "codex";
 	const transcriptPath = await findNativeAgentTranscript({
 		roots,
 		provider,

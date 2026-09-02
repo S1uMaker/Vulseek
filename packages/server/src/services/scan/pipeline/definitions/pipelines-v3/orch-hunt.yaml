@@ -334,10 +334,40 @@ schemas:
         type: array
         items:
           type: string
+  hunt-task:
+    type: object
+    additionalProperties: false
+    required:
+      - name
+      - goalPrompt
+    properties:
+      name:
+        type: string
+        minLength: 1
+        pattern: "^#[1-9][0-9]* .+"
+        description: >-
+          Job-global hunt id assigned by the Orchestrator. Must start with a
+          monotonically increasing #<n> prefix and a space, then a short slug
+          (example: "#1 rest-authz-boundary"). n starts at 1 for the first hunt
+          in the job and increases by 1 for every later huntTasks item across
+          all turns. Never skip, reuse, or renumber. Hunter must echo this
+          string exactly.
+      goalPrompt:
+        type: string
+        minLength: 1
+        description: >-
+          Lock one falsifiable primitive. Outcome-heavy and path-light: what
+          must be proved, what is excluded, and that this hunt stops after the
+          primitive (a missing unauthenticated entry may be the gap). Do not
+          prefix with /goal, do not write the hunter submit footer, do not say
+          "audit all", and do not ask the hunter to find a full RCE.
 stages:
   orchestrator:
     name: Orchestrator
-    description: Manage research coverage, dispatch huntTasks, and accept candidates for verification.
+    description: >-
+      Slice the repository by primitive, keep a ledger, dispatch huntTasks,
+      compose chains, and submit candidates only when entry → primitive(s) →
+      sink → impact is complete.
     role: scan
     group: orch-hunt
     concurrency: 1
@@ -352,39 +382,28 @@ stages:
       reuseContainer: true
       nullableOutput: false
       cwd: /workspace/repo
+      inputDelivery: poll
+      messageNotification: true
       skills:
         - scan-runtime
+        - orchestrator
+      mcp:
+        - securitycontext
+      outputSuffix: omit
+      pollPrompt: |
+        Inbound hunter notify means take get_hunter_feedback now. If availableSlots > 0, spawn_hunters. An empty result is not a hang.
       prompt: |
-        You are the Orchestrator for a high-severity vulnerability research scan. Coordinate Hunters by dispatching huntTasks. Do not perform the detailed hunt yourself and do not write exploit PoCs.
+        You are the Orchestrator for a high-severity vulnerability research scan. You dispatch Hunters; you are not a Hunter. Do not chase a single sink file yourself. Follow $VULSEEK_AGENT_HOME/skills/orchestrator/SKILL.md.
 
-        Discover high-impact vulnerabilities from first principles in a typical production deployment of this repository. Prefer realistic low-privilege or unauthenticated entry points and high-impact outcomes, but keep searching after any one finding. Choose the relevant security properties, impact classes, attack surfaces, and research strategy yourself. Combine findings when a chain is required, including intermediate bugs such as authentication or authorization bypasses, but do not promote a chain without independently establishing every link and its attacker-controlled data flow. Finding one chain is not a stopping condition.
+        Slice work by primitive (sink, gate, smuggle/desync, privilege upgrade). The first wave must not send every hunter after unauthenticated RCE. Each hunter goalPrompt locks one falsifiable primitive: outcome-heavy and path-light. Do not prefix goalPrompt with /goal and do not write the hunter submit footer.
 
-        Work from first principles using the repository and available third_party source. Do not use changelogs, git history, release notes, internet searches, or patched-version diffs to infer a result. Dependency source may be inspected locally when needed. Do not claim a vulnerability from a suspicious line alone: establish the entry point, trust-boundary crossing, attacker control, relevant sink, required preconditions, impact, and a concrete disproof attempt.
+        Use Security Context MCP to slice primitives from past fixes and current-tree variant leads. A known CVE is a map, not a candidate, unless the chain is still live in this tree. Do not idle-wait for context builds while hunter slots are open.
 
-        The only way to parallelize investigation is to dispatch huntTasks.
+        When inbound hunter feedback or a notify arrives, take it with get_hunter_feedback, record the primitive in the /lane ledger, open a connector hunt for any remaining gap, and call submit_candidate only when entry → primitive(s) → sink → impact is evidenced at file:line. A sink that exists but is gated is an asset, not a candidate.
 
-        Read /task/inputs/repository.json when present. Keep any Orchestrator working files you create under /lane/ and read them only when needed for the current task. Do not scan /lane/ as a source of Hunter task results. /lane is stable across orchestrator turns; /task is not. Write /task/output.json once per turn, validate it, then mark the thread goal complete.
+        If availableSlots > 0, spawn_hunters immediately to fill slots, then read locally. Local reads are only to write the next primitive briefs or to check a submitted chain. Do not idle-wait and do not deep-dive while slots are open.
 
-        Read $VULSEEK_AGENT_HOME/skills/scan-runtime/SKILL.md before using runtime queries. Immediately before writing /task/output.json, query both the remaining hunter slots and the active hunter tasks with the scan-runtime skill. Use the returned availableSlots together with each hunter task's title and status to avoid redundant dispatch and decide what to launch next.
-
-        huntTasks is an array of goalPrompt strings. Its length must be exactly the number of hunts you dispatch this turn and must not exceed availableSlots. If availableSlots is 0, set huntTasks to []. You may still emit candidates.
-
-        Begin with a genuinely diverse portfolio. Explore input parsing, charsets, file uploads, error handling, builtin routes, serialization and deserialization, caching, race conditions, encryption sanity checking, typing, mass assignment, and any other meaningfully attacker-facing surface you identify.
-
-        Maintain an explicit registry of approach families under /lane/. Group work by the research idea, not by superficial wording. Keep several incompatible families active at the same time. If many hunts converge on one family, redirect toward underexplored areas. Do not let one approach dominate merely because it seems the most promising or suspicious. When an approach stalls, mark that route blocked with a concrete reason. Reopen it only when someone proposes a materially new mechanism, idea, or construction.
-
-        Keep several incompatible research routes alive through multiple rounds. Cross-pollinate ideas only after independent hunts have developed them far enough to expose their real strengths and gaps.
-
-        Each huntTask string is the Hunter's entire goalPrompt for that slice: the question, scope, evidence standard, and what would count as a useful feedback string. Do not stop at the first grep hit.
-
-        Put the feedback requirements directly into every emitted huntTask goalPrompt so the Hunter knows exactly what to return. Tell the Hunter to return one self-contained feedback string when the assigned slice is complete. Require the feedback to state the slice and methods examined, then give either a confirmed high-impact path, a reason the suspected path is not a vulnerability, or a concrete blocker. For a possible vulnerability, require the entry point, attacker-controlled input, trust-boundary crossing, sink, preconditions, impact, exact file/line/symbol evidence, disproof attempt, and remaining uncertainty. For a negative result, require the relevant paths and sinks checked, the defenses or disproofs that stopped the chain, and meaningful coverage gaps. Feedback is research evidence for the Orchestrator, not a Candidate object or an exploit PoC; do not ask the Hunter to declare the whole repository exhausted.
-
-        Keep Orchestrator notes, coverage decisions, and evidence produced during this task under /lane/. Evaluate the current task input and repository evidence directly; do not collect or merge feedback from other Hunter tasks:
-
-        - A candidate is a complete vulnerability: entry point, trust-boundary crossing, attacker control, sink, preconditions, impact, and a disproof attempt that did not refute it. When the current evidence meets that bar, write one or more Candidate objects that match the candidate schema into candidates and send them to verification.
-        - If the current feedback is only a fragment (one primitive, one bypass, one sink, a negative result, or an open question), write the relevant Orchestrator notes under /lane/, set candidates to [], and dispatch huntTasks that fill the missing links. Do not promote a single Hunter string to a candidate just because it sounds severe. Do not emit a speculative candidate.
-
-        These branches are not exclusive across the job. After you return a candidate, keep dispatching huntTasks in the same turn and later turns while hunter slots remain. Sending a candidate to verification is not a reason to stop. Do not mark the research complete because one hunt, one family, one chain, or one accepted candidate finished. Continue launching new rounds, reopening blocked approaches only when there is a genuinely new mechanism, and searching for fresh ideas. You may need to chain intermediate bugs. Stop dispatching and finish the goal only when every high-value slice and credible chain hypothesis is closed. Do not declare global exhaustion only in prose.
+        Job success is an original unauthenticated high-CVSS chain (remote RCE or equivalent). Not finding a complete RCE is not a stop condition and is not a Hunter success condition. Do not write exploit PoCs. Do not run a full admin-create / write-file exploit chain.
       prepareRepository: target
       includePolicy: true
       plugins: []
@@ -395,8 +414,7 @@ stages:
         huntTasks:
           type: array
           items:
-            type: string
-            minLength: 1
+            $ref: "#/schemas/hunt-task"
         candidates:
           type: array
           items:
@@ -414,7 +432,9 @@ stages:
     promptValues: {}
   hunter:
     name: Hunter
-    description: One hunt slice. Returns a feedback string. Hunter does not declare exhaustion.
+    description: >-
+      Nail one falsifiable primitive and report the gap. Returns name +
+      feedback. Hunter does not submit candidates or declare exhaustion.
     role: scan
     group: orch-hunt
     concurrency: 8
@@ -427,12 +447,24 @@ stages:
       persistent: false
       reuseContainer: true
       cwd: /workspace/repo
+      inputDelivery: prompt
       skills:
         - codeql
         - semgrep
         - tree-sitter
+      mcp:
+        - securitycontext
       prompt: |
         {{goalPrompt}}
+
+        Assigned hunt name: {{name}}
+        When submitting Message, set name to this exact assigned hunt name (including the #<n> prefix) and put the research result in feedback.
+
+        Standing Hunt rules:
+        - This /goal stays active until this assigned primitive has evidence, including negative evidence such as a blocking gate at file:line. Do not prove a full unauthenticated RCE.
+        - Stay on the same primitive and change method at least once (for example manual source-to-sink plus Semgrep or CodeQL, or a sibling API).
+        - Do not emit a speculative RCE just to finish. Do not submit_candidate. Do not declare exhaustion. Do not write a PoC. Do not run a full admin-create / write-file exploit chain.
+        - feedback must be short markdown with these blocks: primitive type (sink / gate / smuggle-or-desync / privilege-upgrade), location (file:line + symbol), proved (one or more facts), gap (which primitive is still needed to reach an unauthenticated entry or the impact).
       prepareRepository: target
       includePolicy: false
       plugins: []
@@ -440,18 +472,33 @@ stages:
       type: object
       additionalProperties: false
       properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: "^#[1-9][0-9]* .+"
+          description: >-
+            Exact hunt id assigned by the Orchestrator, including the job-global
+            #<n> prefix (example: "#1 rest-authz-boundary"). Do not invent or
+            rewrite this string.
         feedback:
           type: string
           minLength: 1
+          description: >-
+            Short markdown research result. Must include primitive type
+            (sink / gate / smuggle-or-desync / privilege-upgrade), location
+            (file:line + symbol), proved facts, and the remaining gap. Do not
+            declare exhaustion.
       required:
+        - name
         - feedback
     inputArtifacts: []
     outputArtifacts: []
     effects: []
-    taskName: Hunt
+    taskName: $input.name
     containerNameParts: []
     allowAgentExit: false
     promptValues:
+      name: $input.name
       goalPrompt: $input.goalPrompt
   verify-finding:
     name: Verify Finding
@@ -514,18 +561,18 @@ stages:
     report:
       path: /task/01_verify_report.md
       required: true
-    taskName: "Candidate Verification: $file($input.candidatePath).title"
+    taskName: "Candidate Verification: $input.candidate.title"
     containerNameParts: []
     allowAgentExit: false
     promptValues:
       scanJobId: $ctx.scanJobId
-      candidateId: $file($input.candidatePath).id
-      candidateTitle: $file($input.candidatePath).title
-      candidateDescription: $file($input.candidatePath).description
-      candidateFile: $file($input.candidatePath).filePath
-      candidateLine: $file($input.candidatePath).line
-      repositoryJsonPath: $input.repositoryPath
-      candidateJsonPath: $input.candidatePath
+      candidateId: $input.candidate.id
+      candidateTitle: $input.candidate.title
+      candidateDescription: $input.candidate.description
+      candidateFile: $input.candidate.filePath
+      candidateLine: $input.candidate.line
+      repositoryJsonPath: /task/inputs/repository.json
+      candidateJsonPath: /task/inputs/candidate.json
       taskDir: $ctx.taskDir
       reportPath: /task/01_verify_report.md
       taskId: $ctx.taskId
@@ -597,20 +644,20 @@ stages:
     report:
       path: /task/01_triage_report.md
       required: true
-    taskName: "Candidate Triage: $file($input.candidatePath).title"
+    taskName: "Candidate Triage: $input.candidate.title"
     containerNameParts: []
     allowAgentExit: false
     promptValues:
       scanJobId: $ctx.scanJobId
-      candidateId: $file($input.candidatePath).id
-      candidateTitle: $file($input.candidatePath).title
-      candidateDescription: $file($input.candidatePath).description
-      candidateFile: $file($input.candidatePath).filePath
-      candidateLine: $file($input.candidatePath).line
+      candidateId: $input.candidate.id
+      candidateTitle: $input.candidate.title
+      candidateDescription: $input.candidate.description
+      candidateFile: $input.candidate.filePath
+      candidateLine: $input.candidate.line
       verifyResult: $file($input.verifyResultPath).result
       verifySummary: $file($input.verifyResultPath).summary
-      repositoryJsonPath: $input.repositoryPath
-      candidateJsonPath: $input.candidatePath
+      repositoryJsonPath: /task/inputs/repository.json
+      candidateJsonPath: /task/inputs/candidate.json
       verifyResultJsonPath: $input.verifyResultPath
       taskDir: $ctx.taskDir
       reportPath: /task/01_triage_report.md
@@ -624,12 +671,17 @@ edges:
     mode: fanOut
     foreach: $.huntTasks[*]
     input:
-      goalPrompt: $item
-    artifacts:
-      - from: $input.repositoryPath
-        to: inputs/repository.json
-        inputField: repositoryPath
-        required: true
+      name: $item.name
+      goalPrompt: $item.goalPrompt
+  - id: hunter-to-orchestrator
+    name: hunter-to-orchestrator
+    from: hunter
+    to: orchestrator
+    fork: false
+    mode: map
+    input:
+      name: $output.name
+      feedback: $output.feedback
   - id: orchestrator-to-verify-finding
     name: orchestrator-to-verify-finding
     from: orchestrator
@@ -639,28 +691,13 @@ edges:
     foreach: $.candidates[*]
     input:
       candidate: $item
-      candidatePath: ""
+      repositoryPath: $input.repositoryPath
     artifacts:
       - from: $input.repositoryPath
         to: inputs/repository.json
-        inputField: repositoryPath
         required: true
       - from: $input.candidate
         to: inputs/candidate.json
-        inputField: candidatePath
-        required: true
-  - id: hunter-to-orchestrator
-    name: hunter-to-orchestrator
-    from: hunter
-    to: orchestrator
-    fork: false
-    mode: map
-    input:
-      feedback: $output.feedback
-    artifacts:
-      - from: $input.repositoryPath
-        to: inputs/repository.json
-        inputField: repositoryPath
         required: true
   - id: verify-finding-to-triage-finding
     name: verify-finding-to-triage-finding
@@ -669,20 +706,18 @@ edges:
     fork: false
     mode: map
     input:
-      candidatePath: $input.candidatePath
-      verifyResultPath: ""
+      candidate: $input.candidate
+      repositoryPath: $input.repositoryPath
+      verifyResultPath: /task/inputs/verification.json
     artifacts:
       - from: $input.repositoryPath
         to: inputs/repository.json
-        inputField: repositoryPath
         required: true
-      - from: $input.candidatePath
+      - from: $input.candidate
         to: inputs/candidate.json
-        inputField: candidatePath
         required: true
       - from: $output
         to: inputs/verification.json
-        inputField: verifyResultPath
         required: true
     outputSchema:
       $ref: "#/schemas/verification"

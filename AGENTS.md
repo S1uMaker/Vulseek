@@ -1,5 +1,16 @@
 # Repository Guidelines
 
+## Engineering Principles
+
+- Do not optimize for backward compatibility. Remove deprecated code paths directly instead of adding compatibility layers or fallback mechanisms; migrate database data when necessary.
+- Once the current requirements are fully satisfied, prefer the simplest implementation possible. Avoid abstractions, configuration options, and indirection that are not justified by an actual need.
+- Build the system incrementally and in layers. First deliver the smallest end-to-end version that works, then add capabilities step by step on top of a stable product. Do not replace a usable product with immature complexity.
+- Keep components modular and define responsibilities and boundaries clearly.
+- Prefer mature, well-maintained libraries when they reduce overall complexity or improve reliability. Do not reimplement general-purpose functionality without a clear reason.
+- Before implementing functionality or adding dependencies, evaluate the capabilities of the project's existing dependencies first. Consult relevant documentation and type definitions rather than assuming a library lacks the required capability.
+- Make architectural decisions with long-term evolution in mind. Avoid temporary solutions that solve only the current problem and are expected to be replaced later.
+- Before designing a solution, study how mature products solve similar problems. Prefer proven patterns and conventions instead of designing an entirely new approach from scratch.
+
 ## Project Structure & Module Organization
 
 Dokploy is a `pnpm` workspace with app entrypoints in `apps/*` and shared code in `packages/*`. The main web product lives in `apps/dokploy` (Next.js UI, server bootstrap, Drizzle migrations, tests, and Docker scripts). Supporting services live in `apps/api`, `apps/schedules`, and `apps/monitoring`. Shared backend logic is in `packages/server/src`. Treat `third_party/` as vendored code: avoid changing it unless the task explicitly targets that subtree.

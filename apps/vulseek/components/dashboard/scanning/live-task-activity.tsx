@@ -139,6 +139,7 @@ export const LiveTaskActivityButton = ({
 	variant = "secondary",
 	size = "sm",
 	iconOnly = false,
+	className,
 }: {
 	taskId: string;
 	title: string;
@@ -147,6 +148,7 @@ export const LiveTaskActivityButton = ({
 	variant?: "default" | "secondary" | "outline" | "ghost";
 	size?: "default" | "sm" | "lg" | "icon";
 	iconOnly?: boolean;
+	className?: string;
 }) => {
 	const { t } = useTranslation("scan");
 	const [isOpen, setIsOpen] = useState(false);
@@ -168,6 +170,7 @@ export const LiveTaskActivityButton = ({
 				type="button"
 				variant={variant}
 				size={size}
+				className={className}
 				disabled={!taskId}
 				title={scanT(t, "scan.activity.viewOutput", "View agent output")}
 				aria-label={scanT(t, "scan.activity.viewOutput", "View agent output")}

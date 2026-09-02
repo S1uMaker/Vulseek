@@ -7,8 +7,10 @@ import {
 	computeCheckoutToolsVersion,
 	createCheckoutToolsBuildManager,
 	inspectRequiredToolsImageReference,
+	checkoutImageMatchesCurrentTools,
 	matchesCheckoutToolsImageLabels,
 	resolveCheckoutToolsImageVariant,
+	SCAN_TOOLS_VERSION_LABEL,
 } from "@vulseek/server/services/scan/checkout-tools";
 import { describe, expect, it, vi } from "vitest";
 
@@ -108,15 +110,35 @@ describe("checkout tools definition", () => {
 		).toBe(false);
 	});
 
+	it("treats a checkout image as current only when it was built from this tools version", () => {
+		expect(
+			checkoutImageMatchesCurrentTools(
+				{ [SCAN_TOOLS_VERSION_LABEL]: "abc" },
+				"abc",
+			),
+		).toBe(true);
+		expect(
+			checkoutImageMatchesCurrentTools(
+				{ [SCAN_TOOLS_VERSION_LABEL]: "old" },
+				"abc",
+			),
+		).toBe(false);
+		expect(checkoutImageMatchesCurrentTools(null, "abc")).toBe(false);
+	});
+
 	it("keeps tools and repository checkout in separate Dockerfiles", async () => {
 		const dockerfilesDir = path.resolve(
 			process.cwd(),
 			"../../packages/server/src/services/dockerfiles",
 		);
-		const [toolsDockerfile, checkoutDockerfile] = await Promise.all([
+		const [toolsDockerfile, checkoutDockerfile, codexAcpPatch] = await Promise.all([
 			readFile(path.join(dockerfilesDir, "Dockerfile.scan-tools"), "utf8"),
 			readFile(
 				path.join(dockerfilesDir, "Dockerfile.scan-checkout.template"),
+				"utf8",
+			),
+			readFile(
+				path.join(dockerfilesDir, "codex-acp-fork-1.3.0.patch"),
 				"utf8",
 			),
 		]);
@@ -133,6 +155,25 @@ describe("checkout tools definition", () => {
 		expect(toolsDockerfile).not.toContain("codex-acp-builder");
 		expect(toolsDockerfile).not.toContain("sandbox-agent");
 		expect(toolsDockerfile).toContain("@agentclientprotocol/sdk@1.3.0");
+		expect(toolsDockerfile).toContain(
+			"! grep -F 'requires goal text of at most 4000 characters'",
+		);
+		expect(codexAcpPatch).toContain("if (argument.length > 4e3)");
+		expect(codexAcpPatch).toContain(
+			'Command "/goal" requires goal text of at most 4000 characters.',
+		);
+		expect(codexAcpPatch).toContain(
+			"const fullObjective = objective.length > 4e3 ? objective : null",
+		);
+		expect(codexAcpPatch).toContain("await this.steerTurn({");
+		expect(codexAcpPatch).toContain("await onGoalTurnStarted?.(turnId)");
+		expect(toolsDockerfile).toContain(
+			"const fullObjective = objective.length > 4e3 ? objective : null",
+		);
+		expect(codexAcpPatch).not.toMatch(/^ @@/m);
+		expect(toolsDockerfile).toContain("https://x.ai/cli/install.sh");
+		expect(toolsDockerfile).not.toContain("COPY grok /usr/local/bin/grok");
+		expect(toolsDockerfile).toContain("grok --version");
 		expect(checkoutDockerfile).toContain("ARG VULSEEK_TOOLS_IMAGE");
 		expect(checkoutDockerfile).not.toContain("# syntax=docker/dockerfile:1");
 		expect(checkoutDockerfile).toContain(

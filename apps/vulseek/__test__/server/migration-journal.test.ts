@@ -26,10 +26,8 @@ describe("migration journal", () => {
 			.filter((tag) => !journalTags.has(tag))
 			.sort();
 
-		expect(journal.entries).toHaveLength(233);
-		expect(journal.entries.at(-1)?.tag).toBe(
-			"0232_dataset_profile_tools_image",
-		);
+		expect(journal.entries).toHaveLength(244);
+		expect(journal.entries.at(-1)?.tag).toBe("0243_scan_job_budgets");
 		expect(unregisteredTags).toEqual(["0057_damp_prism"]);
 		expect(journal.entries.map((entry) => entry.idx)).toEqual(
 			journal.entries.map((_, index) => index),
@@ -68,6 +66,42 @@ describe("migration journal", () => {
 		}
 		expect(schema).not.toContain("currentTaskId");
 		expect(schema).toContain('revision: integer("revision")');
+	});
+
+	it("creates messages and drops old Task protocol columns", () => {
+		const drizzleDirectory = join(
+			dirname(fileURLToPath(import.meta.url)),
+			"../../drizzle",
+		);
+		const migration = readFileSync(
+			join(drizzleDirectory, "0238_task_outputs.sql"),
+			"utf8",
+		);
+		expect(migration).toContain("pending', 'running', 'paused', 'finalizing");
+		expect(migration).toContain('CREATE TABLE IF NOT EXISTS "task_outputs"');
+		expect(migration).toContain("'legacy:' || t.\"taskId\"");
+		expect(migration).toContain('DROP COLUMN IF EXISTS "input"');
+		expect(migration).toContain('DROP COLUMN IF EXISTS "output"');
+		expect(migration).toContain('DROP COLUMN IF EXISTS "parentTaskId"');
+		expect(migration).toContain('DROP COLUMN IF EXISTS "dispatchKey"');
+		expect(migration).toContain("taskLifecycle");
+		expect(migration).not.toContain("/task/output.json");
+	});
+
+	it("creates messages and migrates task_outputs", () => {
+		const drizzleDirectory = join(
+			dirname(fileURLToPath(import.meta.url)),
+			"../../drizzle",
+		);
+		const migration = readFileSync(
+			join(drizzleDirectory, "0239_messages.sql"),
+			"utf8",
+		);
+		expect(migration).toContain('CREATE TABLE IF NOT EXISTS "messages"');
+		expect(migration).toContain('"sourceTaskId"');
+		expect(migration).toContain('"payload" jsonb');
+		expect(migration).toContain("scan_job_stage_stats");
+		expect(migration).toContain("DROP TABLE IF EXISTS \"task_outputs\"");
 	});
 
 	it("adds a JSONB output list to scan jobs", () => {

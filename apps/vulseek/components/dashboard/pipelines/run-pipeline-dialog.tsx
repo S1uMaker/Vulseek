@@ -1,7 +1,10 @@
-import * as React from "react";
-import { Play } from "lucide-react";
+import { AlertTriangle, Play } from "lucide-react";
 import { useRouter } from "next/router";
+import { useTranslation } from "next-i18next";
+import * as React from "react";
 import { toast } from "sonner";
+import { scanT } from "@/components/dashboard/scanning/scan-i18n";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -22,6 +25,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/utils/api";
+import { buildRunPipelineImageWarnings } from "./run-pipeline-image-warnings";
 
 /**
  * Unified "Run Pipeline" entry (Phase 6): replaces the four hardcoded
@@ -32,7 +36,14 @@ import { api } from "@/utils/api";
  * default never changes.
  */
 
-const NONE_PROFILE = "__none__";
+const stripGroupedDigits = (value: string) => value.replace(/,/g, "");
+
+const formatUsGroupedInteger = (value: string) => {
+	const digits = stripGroupedDigits(value).replace(/\D/g, "");
+	if (!digits) return "";
+	const normalized = digits.replace(/^0+(?=\d)/, "");
+	return new Intl.NumberFormat("en-US").format(Number(normalized));
+};
 
 export type RunPipelineDialogProps = {
 	target:
@@ -47,16 +58,25 @@ export const RunPipelineDialog = ({
 	defaultPipelineId,
 	triggerClassName,
 }: RunPipelineDialogProps) => {
+	const { t } = useTranslation("scan");
 	const router = useRouter();
-	const options = api.pipeline.publishedOptions.useQuery({ targetType: "project" });
+	const options = api.pipeline.publishedOptions.useQuery({
+		targetType: "project",
+	});
 	const run = api.pipeline.run.useMutation();
+	const checkoutTarget =
+		target.type === "application"
+			? { applicationId: target.applicationId }
+			: { composeId: target.composeId };
 
 	const [open, setOpen] = React.useState(false);
 	const [pipelineId, setPipelineId] = React.useState<string>("");
 	const [versionId, setVersionId] = React.useState<string>("");
-	const [profileId, setProfileId] = React.useState<string>(NONE_PROFILE);
+	const [profileId, setProfileId] = React.useState<string>("");
 	const [targetRef, setTargetRef] = React.useState("");
 	const [targetTag, setTargetTag] = React.useState("");
+	const [tokenBudget, setTokenBudget] = React.useState("");
+	const [timeBudgetSeconds, setTimeBudgetSeconds] = React.useState("");
 	const versions = api.pipeline.listVersions.useQuery(
 		{ pipelineId: pipelineId || "__none__" },
 		{ enabled: Boolean(pipelineId) },
@@ -65,13 +85,22 @@ export const RunPipelineDialog = ({
 		{ pipelineId: pipelineId || "__none__" },
 		{ enabled: Boolean(pipelineId) },
 	);
+	const toolsStatus = api.scan.checkoutToolsStatus.useQuery(undefined, {
+		enabled: open,
+		refetchInterval: (data) => (data?.state === "building" ? 1800 : false),
+	});
+	const checkoutImageStatus = api.scan.checkoutImageStatus.useQuery(
+		checkoutTarget,
+		{ enabled: open },
+	);
 
-	// Default to the profile pipeline's current version when the dialog opens.
+	// Default to the preferred pipeline's current version when the dialog opens.
 	React.useEffect(() => {
 		if (!open) return;
 		const preferred =
 			pipelineId ||
-			(defaultPipelineId && options.data?.some((o) => o.pipelineId === defaultPipelineId)
+			(defaultPipelineId &&
+			options.data?.some((o) => o.pipelineId === defaultPipelineId)
 				? defaultPipelineId
 				: (options.data?.[0]?.pipelineId ?? ""));
 		if (preferred) {
@@ -86,11 +115,12 @@ export const RunPipelineDialog = ({
 
 	React.useEffect(() => {
 		if (!profiles.data) return;
-		if (
-			profileId !== NONE_PROFILE &&
-			!profiles.data.some((item) => item.pipelineProfileId === profileId)
-		) {
-			setProfileId(NONE_PROFILE);
+		if (profiles.data.length === 0) {
+			setProfileId("");
+			return;
+		}
+		if (!profiles.data.some((item) => item.pipelineProfileId === profileId)) {
+			setProfileId(profiles.data[0]!.pipelineProfileId);
 		}
 	}, [profileId, profiles.data]);
 
@@ -98,27 +128,88 @@ export const RunPipelineDialog = ({
 		(v) => v.pipelineVersionId === versionId,
 	);
 	const canRun = Boolean(pipelineId && versionId && !run.isLoading);
+	const imageWarnings = buildRunPipelineImageWarnings({
+		tools: toolsStatus.data,
+		checkout: checkoutImageStatus.data,
+		loading: toolsStatus.isLoading || checkoutImageStatus.isLoading,
+	});
+
+	const parseOptionalPositiveInt = (value: string) => {
+		const trimmed = stripGroupedDigits(value).trim();
+		if (!trimmed) return undefined;
+		if (!/^[1-9][0-9]*$/.test(trimmed)) return null;
+		const parsed = Number(trimmed);
+		return Number.isSafeInteger(parsed) ? parsed : null;
+	};
 
 	const submit = async () => {
 		if (!canRun) return;
+		const parsedTokenBudgetK = parseOptionalPositiveInt(tokenBudget);
+		const parsedTimeBudget = parseOptionalPositiveInt(timeBudgetSeconds);
+		const parsedTokenBudget =
+			parsedTokenBudgetK == null ? parsedTokenBudgetK : parsedTokenBudgetK * 1000;
+		if (
+			tokenBudget.trim() &&
+			(parsedTokenBudgetK == null ||
+				parsedTokenBudget == null ||
+				!Number.isSafeInteger(parsedTokenBudget))
+		) {
+			toast.error(
+				scanT(
+					t,
+					"scan.dialog.invalidTokenBudget",
+					"Token budget must be a positive integer in K",
+				),
+			);
+			return;
+		}
+		if (timeBudgetSeconds.trim() && parsedTimeBudget == null) {
+			toast.error(
+				scanT(
+					t,
+					"scan.dialog.invalidTimeBudget",
+					"Time budget must be a positive number of seconds",
+				),
+			);
+			return;
+		}
+		if (parsedTimeBudget != null && parsedTimeBudget > 30 * 24 * 60 * 60) {
+			toast.error(
+				scanT(
+					t,
+					"scan.dialog.invalidTimeBudget",
+					"Time budget must be a positive number of seconds",
+				),
+			);
+			return;
+		}
 		try {
 			const scanJob = await run.mutateAsync({
 				target,
 				pipelineId,
 				pipelineVersionId: versionId || undefined,
-				pipelineProfileId:
-					profileId === NONE_PROFILE ? undefined : profileId,
+				pipelineProfileId: profileId || undefined,
 				repository: {
 					targetRef: targetRef || undefined,
 					targetTag: targetTag || undefined,
 				},
+				tokenBudget: parsedTokenBudget,
+				timeBudgetSeconds: parsedTimeBudget,
 			});
 			toast.success("Scan started");
+			setTokenBudget("");
+			setTimeBudgetSeconds("");
 			setOpen(false);
-			const currentPath = router.asPath.split(/[?#]/, 1)[0].replace(/\/$/, "");
-			await router.push(`${currentPath}/jobs/${encodeURIComponent(scanJob.scanJobId)}`);
+			const currentPath = (
+				router.asPath.split(/[?#]/, 1)[0] ?? router.asPath
+			).replace(/\/$/, "");
+			await router.push(
+				`${currentPath}/jobs/${encodeURIComponent(scanJob!.scanJobId)}`,
+			);
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : "Unable to start scan");
+			toast.error(
+				error instanceof Error ? error.message : "Unable to start scan",
+			);
 		}
 	};
 
@@ -130,7 +221,7 @@ export const RunPipelineDialog = ({
 					Run Pipeline
 				</Button>
 			</DialogTrigger>
-			<DialogContent className="sm:max-w-md">
+			<DialogContent className="sm:max-w-lg">
 				<DialogHeader>
 					<DialogTitle>Run pipeline</DialogTitle>
 					<DialogDescription>
@@ -140,15 +231,45 @@ export const RunPipelineDialog = ({
 				</DialogHeader>
 
 				<div className="space-y-4">
+					{imageWarnings.length > 0 ? (
+						<Alert className="border-amber-500/50 text-amber-950 dark:text-amber-100 [&>svg]:text-amber-600">
+							<AlertTriangle className="size-4" />
+							<AlertTitle>
+								{scanT(
+									t,
+									"scan.dialog.imageWarningTitle",
+									"Scan images need attention",
+								)}
+							</AlertTitle>
+							<AlertDescription>
+								<ul className="mt-2 list-disc space-y-1 pl-4">
+									{imageWarnings.map((warning) => (
+										<li key={warning.id}>
+											{scanT(
+												t,
+												warning.key,
+												warning.defaultValue,
+												warning.values,
+											)}
+										</li>
+									))}
+								</ul>
+							</AlertDescription>
+						</Alert>
+					) : null}
 					<div className="space-y-1">
 						<Label>Pipeline</Label>
-						<Select value={pipelineId} onValueChange={(value) => {
-							setPipelineId(value);
-							const current = options.data?.find((o) => o.pipelineId === value)
-								?.currentVersionId;
-							setVersionId(current ?? "");
-							setProfileId(NONE_PROFILE);
-						}}>
+						<Select
+							value={pipelineId}
+							onValueChange={(value) => {
+								setPipelineId(value);
+								const current = options.data?.find(
+									(o) => o.pipelineId === value,
+								)?.currentVersionId;
+								setVersionId(current ?? "");
+								setProfileId("");
+							}}
+						>
 							<SelectTrigger className="h-9">
 								<SelectValue placeholder="Choose a pipeline…" />
 							</SelectTrigger>
@@ -170,12 +291,9 @@ export const RunPipelineDialog = ({
 							disabled={!pipelineId}
 						>
 							<SelectTrigger className="h-9">
-								<SelectValue placeholder="Pipeline defaults" />
+								<SelectValue placeholder="Select a profile" />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value={NONE_PROFILE}>
-									Pipeline defaults
-								</SelectItem>
 								{profiles.data?.map((profile) => (
 									<SelectItem
 										key={profile.pipelineProfileId}
@@ -213,7 +331,7 @@ export const RunPipelineDialog = ({
 										key={version.pipelineVersionId}
 										value={version.pipelineVersionId}
 									>
-										v{version.versionNumber} · {version.source}
+										v{version.versionNumber}
 										{version.pipelineVersionId ===
 										options.data?.find((o) => o.pipelineId === pipelineId)
 											?.currentVersionId
@@ -243,6 +361,65 @@ export const RunPipelineDialog = ({
 							/>
 						</div>
 					</div>
+
+					<div className="grid grid-cols-2 gap-3">
+						<div className="space-y-1">
+							<Label htmlFor="run-pipeline-token-budget">
+								{scanT(
+									t,
+									"scan.dialog.tokenBudget",
+									"Token usage budget (K)",
+								)}
+							</Label>
+							<div className="relative">
+								<Input
+									id="run-pipeline-token-budget"
+									type="text"
+									inputMode="numeric"
+									autoComplete="off"
+									className="pr-8"
+									value={tokenBudget}
+									onChange={(event) =>
+										setTokenBudget(formatUsGroupedInteger(event.target.value))
+									}
+									placeholder={scanT(
+										t,
+										"scan.dialog.budgetUnlimited",
+										"Unlimited",
+									)}
+								/>
+								<span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
+									K
+								</span>
+							</div>
+						</div>
+						<div className="space-y-1">
+							<Label htmlFor="run-pipeline-time-budget">
+								{scanT(t, "scan.dialog.timeBudget", "Time budget (seconds)")}
+							</Label>
+							<Input
+								id="run-pipeline-time-budget"
+								type="number"
+								min={1}
+								max={30 * 24 * 60 * 60}
+								step={1}
+								value={timeBudgetSeconds}
+								onChange={(event) => setTimeBudgetSeconds(event.target.value)}
+								placeholder={scanT(
+									t,
+									"scan.dialog.budgetUnlimited",
+									"Unlimited",
+								)}
+							/>
+						</div>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						{scanT(
+							t,
+							"scan.dialog.budgetHint",
+							"Leave empty for no limit. Token budget is in K (thousands). Exceeding either budget cancels the job.",
+						)}
+					</p>
 				</div>
 
 				<DialogFooter>

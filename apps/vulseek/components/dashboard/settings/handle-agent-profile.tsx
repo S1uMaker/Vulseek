@@ -39,16 +39,13 @@ import { api } from "@/utils/api";
 const Schema = z
 	.object({
 		name: z.string().min(1, { message: "Name is required" }),
-		provider: z.enum(["codex", "claude_code"]),
+		provider: z.enum(["codex", "claude_code", "grok_build"]),
 		authMode: z.enum(["api_key", "host_home"]),
 		homePath: z.string(),
 		baseUrl: z.string().url({ message: "Please enter a valid URL" }),
 		apiKey: z.string(),
 		model: z.string().min(1, { message: "Model is required" }),
-		pricingProvider: z.string().nullable().optional(),
-		thinkingLevel: z
-			.string()
-			.min(1, { message: "Thinking level is required" }),
+		thinkingLevel: z.string().min(1, { message: "Thinking level is required" }),
 		thinkingLevelEnabled: z.boolean(),
 		envs: z.string(),
 		isEnabled: z.boolean(),
@@ -73,7 +70,6 @@ const emptyProfileValues = (): Schema => ({
 	baseUrl: "https://api.openai.com/v1",
 	apiKey: "",
 	model: "gpt-5.4",
-	pricingProvider: "openai",
 	thinkingLevel: "medium",
 	thinkingLevelEnabled: true,
 	envs: "",
@@ -91,7 +87,6 @@ const valuesFromProfile = (
 	baseUrl: source.baseUrl ?? "https://api.openai.com/v1",
 	apiKey: source.apiKey ?? "",
 	model: source.model ?? "gpt-5.4",
-	pricingProvider: source.pricingProvider ?? null,
 	thinkingLevel: source.thinkingLevel ?? "medium",
 	thinkingLevelEnabled: source.thinkingLevelEnabled ?? true,
 	envs: source.envs ?? "",
@@ -105,12 +100,16 @@ const applyProviderDefaults = (
 	if (provider === "claude_code") {
 		form.setValue("baseUrl", "https://api.anthropic.com");
 		form.setValue("model", "claude-sonnet-4-5");
-		form.setValue("pricingProvider", "anthropic");
+		return;
+	}
+	if (provider === "grok_build") {
+		form.setValue("baseUrl", "https://api.x.ai/v1");
+		form.setValue("model", "grok-4.6");
+		form.setValue("thinkingLevel", "high");
 		return;
 	}
 	form.setValue("baseUrl", "https://api.openai.com/v1");
 	form.setValue("model", "gpt-5.4");
-	form.setValue("pricingProvider", "openai");
 };
 
 const renderEnvHighlight = (value: string) => {
@@ -226,13 +225,11 @@ export const HandleAgentProfile = ({
 
 	const onSubmit = async (values: Schema) => {
 		try {
-				await mutateAsync({
-					...values,
-					homePath:
-						values.authMode === "host_home" ? values.homePath.trim() : "",
-					pricingProvider: values.pricingProvider ?? null,
-					agentProfileId: agentProfileId || "",
-				});
+			await mutateAsync({
+				...values,
+				homePath: values.authMode === "host_home" ? values.homePath.trim() : "",
+				agentProfileId: agentProfileId || "",
+			});
 			await utils.ai.getAgentProfiles.invalidate();
 			toast.success("Agent profile saved successfully");
 			refetch();
@@ -329,6 +326,7 @@ export const HandleAgentProfile = ({
 										<SelectContent>
 											<SelectItem value="codex">Codex</SelectItem>
 											<SelectItem value="claude_code">Claude Code</SelectItem>
+											<SelectItem value="grok_build">Grok Build</SelectItem>
 										</SelectContent>
 									</Select>
 									<FormMessage />
@@ -342,7 +340,11 @@ export const HandleAgentProfile = ({
 							render={({ field }) => (
 								<FormItem>
 									<FormLabel>
-										{provider === "claude_code" ? "Claude Auth" : "Codex Auth"}
+										{provider === "claude_code"
+											? "Claude Auth"
+											: provider === "grok_build"
+												? "Grok Auth"
+												: "Codex Auth"}
 									</FormLabel>
 									<Select onValueChange={field.onChange} value={field.value}>
 										<FormControl>
@@ -373,14 +375,18 @@ export const HandleAgentProfile = ({
 										<FormLabel>
 											{provider === "claude_code"
 												? "Claude Home Path"
-												: "Codex Home Path"}
+												: provider === "grok_build"
+													? "Grok Home Path"
+													: "Codex Home Path"}
 										</FormLabel>
 										<FormControl>
 											<Input
 												placeholder={
 													provider === "claude_code"
 														? "/home/user"
-														: "/home/user/.codex"
+														: provider === "grok_build"
+															? "/home/user/.grok"
+															: "/home/user/.codex"
 												}
 												{...field}
 											/>
@@ -388,7 +394,9 @@ export const HandleAgentProfile = ({
 										<FormDescription>
 											{provider === "claude_code"
 												? "Absolute host user home path containing settings.json."
-												: "Absolute Codex home path containing auth.json."}
+												: provider === "grok_build"
+													? "Absolute Grok home path containing config.toml and auth.json."
+													: "Absolute Codex home path containing auth.json."}
 										</FormDescription>
 										<FormMessage />
 									</FormItem>
@@ -404,7 +412,16 @@ export const HandleAgentProfile = ({
 									<FormItem>
 										<FormLabel>Base URL</FormLabel>
 										<FormControl>
-											<Input placeholder="https://api.openai.com/v1" {...field} />
+											<Input
+												placeholder={
+													provider === "grok_build"
+														? "https://api.x.ai/v1"
+														: provider === "claude_code"
+															? "https://api.anthropic.com"
+															: "https://api.openai.com/v1"
+												}
+												{...field}
+											/>
 										</FormControl>
 										<FormDescription>
 											Used when Vulseek prepares the agent runtime config
@@ -425,7 +442,9 @@ export const HandleAgentProfile = ({
 										<FormControl>
 											<Input
 												type="password"
-												placeholder="sk-..."
+												placeholder={
+													provider === "grok_build" ? "xai-..." : "sk-..."
+												}
 												autoComplete="one-time-code"
 												{...field}
 											/>
@@ -448,46 +467,15 @@ export const HandleAgentProfile = ({
 								<FormItem>
 									<FormLabel>Model</FormLabel>
 									<FormControl>
-										<Input placeholder="gpt-5.4" {...field} />
+										<Input
+											placeholder={
+												provider === "grok_build" ? "grok-4.6" : "gpt-5.4"
+											}
+											{...field}
+										/>
 									</FormControl>
 									<FormDescription>
 										The model name used by the selected agent runtime
-									</FormDescription>
-									<FormMessage />
-								</FormItem>
-							)}
-						/>
-
-						<FormField
-							control={form.control}
-							name="pricingProvider"
-							render={({ field }) => (
-								<FormItem>
-									<FormLabel>Pricing Provider</FormLabel>
-									<Select
-										onValueChange={(v) => field.onChange(v === "__none__" ? null : v)}
-										value={field.value ?? "__none__"}
-									>
-										<FormControl>
-											<SelectTrigger>
-												<SelectValue placeholder="Select pricing provider" />
-											</SelectTrigger>
-										</FormControl>
-										<SelectContent>
-											<SelectItem value="__none__">Not specified</SelectItem>
-											<SelectItem value="anthropic">Anthropic</SelectItem>
-											<SelectItem value="openai">OpenAI</SelectItem>
-											<SelectItem value="google">Google</SelectItem>
-											<SelectItem value="x_ai">xAI</SelectItem>
-											<SelectItem value="groq">Groq</SelectItem>
-											<SelectItem value="cerebras">Cerebras</SelectItem>
-											<SelectItem value="cohere">Cohere</SelectItem>
-											<SelectItem value="fireworks">Fireworks</SelectItem>
-											<SelectItem value="deepseek">DeepSeek</SelectItem>
-										</SelectContent>
-									</Select>
-									<FormDescription>
-										Used to estimate API cost based on token usage
 									</FormDescription>
 									<FormMessage />
 								</FormItem>
@@ -572,7 +560,8 @@ export const HandleAgentProfile = ({
 										</div>
 									</FormControl>
 									<FormDescription>
-										One <code>KEY=VALUE</code> per line. These env vars are injected into the agent runtime container.
+										One <code>KEY=VALUE</code> per line. These env vars are
+										injected into the agent runtime container.
 									</FormDescription>
 									<FormMessage />
 								</FormItem>

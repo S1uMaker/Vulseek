@@ -14,7 +14,6 @@ export const buildTaskAgentProfileSnapshot = (
 					homePath: agentProfile.homePath,
 					baseUrl: agentProfile.baseUrl,
 					model: agentProfile.model,
-					pricingProvider: agentProfile.pricingProvider ?? null,
 					thinkingLevel: agentProfile.thinkingLevel,
 					thinkingLevelEnabled: agentProfile.thinkingLevelEnabled,
 				},

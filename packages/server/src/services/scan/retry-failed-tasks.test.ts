@@ -23,12 +23,15 @@ const makeScanJob = (overrides?: Partial<ScanJob>): ScanJob => ({
 	applicationId: null,
 	composeId: null,
 	pipelineVersionId: null,
+	pipelineProfileId: null,
 	pipelineYamlSnapshot: null,
 	pipelineCompiledSnapshot: null,
 	maxTasks: null,
 	deadlineAt: null,
 	taskCount: 0,
 	terminationReason: null,
+	tokenBudget: null,
+	timeBudgetSeconds: null,
 	createdAt: "2026-05-04T00:00:00.000Z",
 	startedAt: null,
 	finishedAt: "2026-05-04T00:10:00.000Z",
@@ -47,17 +50,16 @@ const makeScanJob = (overrides?: Partial<ScanJob>): ScanJob => ({
 });
 
 const makeTask = (overrides?: Partial<Task>): Task => ({
-		taskId: "task-1",
-		scanJobId: "scan-job-1",
-		vulnerabilityCandidateId: null,
-	parentTaskId: null,
+	taskId: "task-1",
+	scanJobId: "scan-job-1",
 	name: "task",
 	stageName: "identify-target",
+	lifecycle: "turn",
 	status: "pending",
-	downstreamDispatchStatus: "pending",
-	downstreamRouteKey: null,
-	downstreamDispatchedAt: null,
-	dispatchKey: null,
+	sourceMessageId: null,
+	sourceEdgeName: null,
+	sourceItemIndex: null,
+	rerunOfTaskId: null,
 	priority: null,
 	attempt: 0,
 	agentProfile: null,
@@ -66,10 +68,7 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 	threadId: null,
 	runtimeMode: "new_session",
 	forkedFromTaskId: null,
-	forkedFromThreadId: null,
 	stageGroupInstanceId: null,
-	input: null,
-	output: null,
 	inputTokens: null,
 	outputTokens: null,
 	thoughtTokens: null,
@@ -78,8 +77,6 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 	cachedWriteTokens: null,
 	estimatedCost: null,
 	errorMessage: null,
-	exitReason: null,
-	exitNote: null,
 	startedAt: null,
 	completedAt: null,
 	createdAt: "2026-05-04T00:00:00.000Z",
@@ -154,26 +151,18 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 		}),
 	];
 
-	const removed: string[] = [];
 	const cleared: string[] = [];
 	const reset: string[] = [];
-	const enqueued: string[] = [];
 	const scanJobReset: Array<{ scanJobId: string }> = [];
 
 	const result = await retryFailedScanJobTasksWithDeps("scan-job-1", {
 		loadScanJob: async () => makeScanJob(),
 		listTasks: async () => tasks,
-		removeQueuedTask: async (_scanJobId, task) => {
-			removed.push(task.taskId);
-		},
 		clearTaskArtifacts: async (_scanJobId, task) => {
 			cleared.push(task.taskId);
 		},
 		resetFailedTask: async (taskId) => {
 			reset.push(taskId);
-		},
-		enqueueTask: async (_scanJobId, task) => {
-			enqueued.push(task.taskId);
 		},
 		resetScanJobForRetry: async (input) => {
 			scanJobReset.push(input);
@@ -192,7 +181,7 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 		"triage-finding": 1,
 	});
 	assert.equal(result.retriedTaskCount, 9);
-	assert.deepEqual(removed, [
+	assert.deepEqual(cleared, [
 		"delta-scope-1",
 		"repository-profile-1",
 		"attack-surface-model-1",
@@ -203,9 +192,7 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 		"verify-finding-1",
 		"triage-finding-1",
 	]);
-	assert.deepEqual(cleared, removed);
-	assert.deepEqual(reset, removed);
-	assert.deepEqual(enqueued, removed);
+	assert.deepEqual(reset, cleared);
 	assert.deepEqual(scanJobReset, [
 		{
 			scanJobId: "scan-job-1",
@@ -228,10 +215,8 @@ test("retryFailedScanJobTasksWithDeps retries failed tasks without phase bookkee
 				status: "failed",
 			}),
 		],
-		removeQueuedTask: async () => {},
 		clearTaskArtifacts: async () => {},
 		resetFailedTask: async () => {},
-		enqueueTask: async () => {},
 		resetScanJobForRetry: async () => {},
 	});
 
@@ -254,10 +239,8 @@ test("retryFailedScanJobTasksWithDeps rejects when the job still has running tas
 					status: "running",
 				}),
 			],
-			removeQueuedTask: async () => {},
 			clearTaskArtifacts: async () => {},
 			resetFailedTask: async () => {},
-			enqueueTask: async () => {},
 			resetScanJobForRetry: async () => {},
 		}),
 		(error: unknown) =>
@@ -278,10 +261,8 @@ test("retryFailedScanJobTasksWithDeps rejects when there are no failed tasks", a
 					status: "completed",
 				}),
 			],
-			removeQueuedTask: async () => {},
 			clearTaskArtifacts: async () => {},
 			resetFailedTask: async () => {},
-			enqueueTask: async () => {},
 			resetScanJobForRetry: async () => {},
 		}),
 		(error: unknown) =>

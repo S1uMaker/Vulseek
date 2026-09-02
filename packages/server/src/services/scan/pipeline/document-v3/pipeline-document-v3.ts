@@ -106,7 +106,28 @@ const runtimeSchema = z
 	cwd: z.string().min(1).optional(),
 	/** Installed agent skill names. Copied into the sandbox and injected into the generated prompt. */
 	skills: z.array(z.string().min(1)).optional(),
+	/** Org MCP server slugs. Resolved from Settings and passed to session/new. */
+	mcp: z.array(z.string().min(1)).optional(),
 	prompt: z.string().min(1),
+	/**
+	 * How inbound edge work is delivered to this stage:
+	 * - prompt: launch a task and inject reconstructed input into the prompt
+	 * - poll: keep inbound tasks queued; the running agent polls scan-runtime
+	 */
+	inputDelivery: z.enum(["prompt", "poll"]).optional().default("prompt"),
+	/** Optional override for the injected poll-queue instructions. */
+	pollPrompt: z.string().min(1).optional(),
+	/**
+	 * When true, the runner notifies the in-flight agent when this stage's
+	 * inbound message count changes. The notify is a count-only stdin line;
+	 * the agent still polls for the full messages.
+	 */
+	messageNotification: z.boolean().optional(),
+	/**
+	 * Whether to append the generated OUTPUT SUBMISSION suffix.
+	 * Independent of policy/injection prompt additions. Omitted means include.
+	 */
+	outputSuffix: z.enum(["include", "omit"]).optional(),
 	prepareRepository: z.enum(PIPELINE_PREPARE_MODES).optional().default("none"),
 	includePolicy: z.boolean().optional().default(false),
 		plugins: z

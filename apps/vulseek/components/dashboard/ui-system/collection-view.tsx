@@ -130,11 +130,15 @@ export type CollectionViewProps<T> = {
 	renderCard?: (item: T) => React.ReactNode;
 	/** Override the default card grid columns/gap (projects want larger 2-col cards). */
 	cardGridClassName?: string;
+	/** Additional class names for desktop table cells. */
+	tableCellClassName?: string;
 	/**
 	 * Full-width single-column rows. Use this for growing operational lists
 	 * where every item should occupy one horizontal row.
 	 */
 	renderRow?: (item: T) => React.ReactNode;
+	/** Optional column labels for full-width row lists. */
+	rowHeader?: React.ReactNode;
 	onRowClick?: (item: T) => void;
 	className?: string;
 };
@@ -170,7 +174,9 @@ const CollectionView = <T,>({
 	mobileRender,
 	renderCard,
 	cardGridClassName,
+	tableCellClassName,
 	renderRow,
+	rowHeader,
 	onRowClick,
 	className,
 }: CollectionViewProps<T>) => {
@@ -357,15 +363,18 @@ const CollectionView = <T,>({
 					icon={Search}
 				/>
 			) : renderRow ? (
-				<RowList
-					className={cn(isRefreshing && "opacity-60 transition-opacity")}
-				>
-					{items.map((item) => (
-						<React.Fragment key={getRowId(item)}>
-							{renderRow(item)}
-						</React.Fragment>
-					))}
-				</RowList>
+				<div className="flex min-w-0 flex-col gap-2">
+					{rowHeader}
+					<RowList
+						className={cn(isRefreshing && "opacity-60 transition-opacity")}
+					>
+						{items.map((item) => (
+							<React.Fragment key={getRowId(item)}>
+								{renderRow(item)}
+							</React.Fragment>
+						))}
+					</RowList>
+				</div>
 			) : renderCard ? (
 				<div
 					className={cn(
@@ -467,9 +476,9 @@ const CollectionView = <T,>({
 												: undefined
 										}
 									>
-										{row.getVisibleCells().map((cell) => (
-											<TableCell key={cell.id}>
-												{flexRender(
+									{row.getVisibleCells().map((cell) => (
+										<TableCell key={cell.id} className={tableCellClassName}>
+											{flexRender(
 													cell.column.columnDef.cell,
 													cell.getContext(),
 												)}

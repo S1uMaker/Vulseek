@@ -30,10 +30,8 @@ export type RetryFailedTasksResult = {
 type RetryFailedTasksDeps = {
 	loadScanJob: (scanJobId: string) => Promise<ScanJob>;
 	listTasks: (scanJobId: string) => Promise<Task[]>;
-	removeQueuedTask: (scanJobId: string, task: Task) => Promise<void>;
 	clearTaskArtifacts: (scanJobId: string, task: Task) => Promise<void>;
 	resetFailedTask: (taskId: string) => Promise<unknown>;
-	enqueueTask: (scanJobId: string, task: Task) => Promise<void>;
 	resetScanJobForRetry: (input: { scanJobId: string }) => Promise<unknown>;
 };
 
@@ -121,10 +119,8 @@ export const retryFailedScanJobTasksWithDeps = async (
 
 	for (const task of failedTasks) {
 		const stageName = task.stageName as RetryableTaskStageName;
-		await deps.removeQueuedTask(scanJobId, task).catch(() => {});
 		await deps.clearTaskArtifacts(scanJobId, task).catch(() => {});
 		await deps.resetFailedTask(task.taskId);
-		await deps.enqueueTask(scanJobId, task);
 		retriedTasksByStage[stageName] += 1;
 	}
 

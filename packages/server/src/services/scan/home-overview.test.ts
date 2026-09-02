@@ -73,6 +73,7 @@ test("buildHomeOverviewFromRows fills daily rows and aggregates overview metrics
 				createdAt: "2026-07-06T01:00:00.000Z",
 				target: "GitLab",
 				targetKind: "application",
+				pipelineProfileName: "orch-hunt-default",
 				projectId: "project-1",
 				environmentId: "env-1",
 				serviceId: "app-1",
@@ -85,6 +86,7 @@ test("buildHomeOverviewFromRows fills daily rows and aggregates overview metrics
 				createdAt: "2026-07-07T02:00:00.000Z",
 				target: "Jira",
 				targetKind: "compose",
+				pipelineProfileName: null,
 				projectId: "project-1",
 				environmentId: "env-1",
 				serviceId: "compose-1",
@@ -97,6 +99,7 @@ test("buildHomeOverviewFromRows fills daily rows and aggregates overview metrics
 				createdAt: "2026-06-01T02:00:00.000Z",
 				target: "Old target",
 				targetKind: "application",
+				pipelineProfileName: "legacy",
 				projectId: "project-1",
 				environmentId: "env-1",
 				serviceId: "app-2",
@@ -175,5 +178,9 @@ test("buildHomeOverviewFromRows fills daily rows and aggregates overview metrics
 	assert.equal(
 		overview.running.jobs[0]?.href,
 		"/dashboard/project/project-1/environment/env-1/services/application/app-1/jobs/job-1",
+	);
+	assert.equal(
+		overview.running.jobs[0]?.pipelineProfileName,
+		"orch-hunt-default",
 	);
 });

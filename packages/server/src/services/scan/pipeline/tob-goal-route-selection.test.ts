@@ -147,7 +147,7 @@ test("tob-goal YAML drops inline GoalSpec and hunt-candidate re-entry", () => {
 	assert.match(document.stages["goal-hunt"]?.runtime.prompt ?? "", /\{\{goalPrompt\}\}/);
 	assert.match(
 		document.stages["goal-hunt"]?.runtime.prompt ?? "",
-		/Do not write \/task\/output\.json or mark the thread goal complete/,
+		/Do not submit a Message or mark the thread goal complete/,
 	);
 	assert.doesNotMatch(
 		document.stages["goal-hunt"]?.runtime.prompt ?? "",

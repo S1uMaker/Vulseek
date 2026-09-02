@@ -7,6 +7,7 @@ export type CompiledStageRuntimeSnapshot = {
 	nullableOutput: boolean | null;
 	cwd: string | null;
 	skills: string[];
+	mcp: string[];
 	prompt: string;
 	outputSchema: Record<string, unknown> | null;
 };
@@ -62,6 +63,11 @@ export const findCompiledStageRuntimeSnapshot = (
 		cwd: typeof runtime.cwd === "string" ? runtime.cwd : null,
 		skills: Array.isArray(runtime.skills)
 			? runtime.skills.filter(
+					(value): value is string => typeof value === "string",
+				)
+			: [],
+		mcp: Array.isArray(runtime.mcp)
+			? runtime.mcp.filter(
 					(value): value is string => typeof value === "string",
 				)
 			: [],

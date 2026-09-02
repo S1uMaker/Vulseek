@@ -121,7 +121,7 @@ HuntGoal:
       description: Why this surface is high-value for the GoalSpec versus alternatives. Used by later Surface rounds to avoid repeating dead zones.
       type: string
     goalPrompt:
-      description: Generate the goal prompt for the next stage (goal-hunt) on this surface. This is the Codex /goal body — outcome-heavy, path-light. Lock the hunt to this surface's scopeStatement and focusPaths. Tell Hunt to keep the goal active through a real investigation (multiple methods, end-to-end evidence) before writing output.json. Do not tell Hunt to stop at the first lead. Do not paste GoalSpec JSON or name a single tool.
+      description: Generate the goal prompt for the next stage (goal-hunt) on this surface. This is the Codex /goal body — outcome-heavy, path-light. Lock the hunt to this surface's scopeStatement and focusPaths. Tell Hunt to keep the goal active through a real investigation (multiple methods, end-to-end evidence) before submitting a Message. Do not tell Hunt to stop at the first lead. Do not paste GoalSpec JSON or name a single tool.
       type: string
       minLength: 1
   required:

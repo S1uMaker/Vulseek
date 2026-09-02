@@ -10,6 +10,10 @@
 	--agent-green: #1a7f37;
 	--agent-orange: #bc4c00;
 	position: relative;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	max-height: 65vh;
 	color: var(--agent-text);
 	background: var(--agent-bg);
 	border: 1px solid var(--agent-border);
@@ -18,6 +22,7 @@
 }
 .toolbar {
 	display: flex;
+	flex-shrink: 0;
 	gap: 10px;
 	align-items: center;
 	padding: 8px 12px;
@@ -37,7 +42,8 @@
 	text-transform: capitalize;
 }
 .timeline {
-	max-height: 65vh;
+	flex: 1;
+	min-height: 0;
 	overflow: auto;
 	padding: 4px;
 	font:
@@ -46,6 +52,9 @@
 		Menlo,
 		Consolas,
 		monospace;
+}
+.endSpacer {
+	height: 24px;
 }
 .turn {
 	margin-bottom: 8px;
@@ -73,6 +82,7 @@
 }
 .userSummary {
 	display: flex;
+	min-width: 0;
 	gap: 10px;
 	align-items: center;
 	cursor: pointer;
@@ -85,6 +95,7 @@
 }
 .userPreview {
 	min-width: 0;
+	flex: 1;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -173,6 +184,7 @@
 }
 .toolPreview {
 	min-width: 0;
+	flex: 1;
 	overflow: hidden;
 	color: var(--agent-dim);
 	text-overflow: ellipsis;

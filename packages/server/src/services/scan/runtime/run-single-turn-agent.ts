@@ -8,7 +8,11 @@ import { getAgentProfileById } from "../../ai";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
 import { resolveDatasetTrialRuntime } from "../../dataset";
-import { inspectRequiredToolsImageReference } from "../checkout-tools";
+import type { AcpMcpServer } from "../../mcp";
+import {
+	inspectRequiredToolsImageReference,
+	resolveCheckoutToolsDefinition,
+} from "../checkout-tools";
 import { findTaskByIdRepo, updateTaskRepo } from "../persistence/task.repo";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { getRuntimeStageSetting } from "../runtime-settings";
@@ -17,6 +21,7 @@ import { SCAN_STAGE_IDS } from "../stage-metadata";
 import type { AgentProfileLike, ScanJob } from "../types";
 import {
 	AGENT_RUNTIME_FILE_NAMES,
+	appendStdinJsonLine,
 	initializeAgentRuntimeFiles,
 } from "./agent-runtime-files";
 import { applyCodexRuntimeConfigToml } from "./codex-config-compat";
@@ -26,7 +31,7 @@ import {
 	ensureScanRuntimeProxyBypass,
 } from "./scan-runtime-api-auth";
 import {
-	buildStructuredOutputEnvelopeJsonSchema,
+	buildStructuredOutputJsonSchema,
 	buildStructuredOutputPromptSuffix,
 	type RouteOutputSchema,
 } from "./structured-output-schema";
@@ -36,10 +41,17 @@ export { buildStructuredOutputPromptSuffix } from "./structured-output-schema";
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const TASK_ALIAS_ROOT_IN_CONTAINER = "/task";
 const LANE_ALIAS_ROOT_IN_CONTAINER = "/lane";
+const ACP_DRIVER_FILE_NAME = "/opt/vulseek-acp/vulseek-acp-driver.mjs";
 const STRUCTURED_OUTPUT_SCHEMA_FILE_NAME = "output.schema.json";
 const STRUCTURED_OUTPUT_RESULT_FILE_NAME = "output.json";
 const CLAUDE_HOME_IN_CONTAINER = "/root/.claude";
-const JOB_AGENT_HOME_DIR_NAME = "agent-home";
+export const JOB_AGENT_HOME_DIR_NAME = "agent-home";
+
+export type AgentHomeProfileRef = {
+	agentProfileId?: string | null;
+	name?: string | null;
+} | null;
+
 const PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS = Number.parseInt(
 	process.env.VULSEEK_PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS || "120000",
 	10,
@@ -61,6 +73,18 @@ const sanitizeContextPathPart = (value: string) =>
 		.replace(/-+/g, "-")
 		.replace(/^-|-$/g, "") || "unknown";
 
+export const buildAgentProfileHomeDirName = (profile?: AgentHomeProfileRef) => {
+	const id = sanitizeContextPathPart(profile?.agentProfileId?.trim() || "");
+	const name = sanitizeContextPathPart(profile?.name?.trim() || "");
+	if (id === "unknown") {
+		return name === "unknown" ? "default" : name;
+	}
+	if (name === "unknown" || name === id) {
+		return id;
+	}
+	return `${name}-${id}`;
+};
+
 const buildProjectProfileContextRoot = () => TASK_ALIAS_ROOT_IN_CONTAINER;
 const buildProjectProfileCacheRoot = () =>
 	path.posix.join(buildProjectProfileContextRoot(), "cache");
@@ -78,10 +102,7 @@ const buildRuntimeIdentityExecEnvArgs = (identity: {
 		["VULSEEK_STAGE_NAME", identity.stageName],
 	]
 		.filter(([, value]) => Boolean(value))
-		.map(
-			([key, value]) =>
-				`-e '${escapeSingleQuotes(`${key}=${value}`)}'`,
-		)
+		.map(([key, value]) => `-e '${escapeSingleQuotes(`${key}=${value}`)}'`)
 		.join(" ");
 
 const buildNamespaceEnabledContainerArgs = () => {
@@ -130,9 +151,12 @@ const sanitizeProviderName = (value: string) =>
 	value.toLowerCase().replace(/[^a-z0-9_-]/g, "-") || "provider";
 
 const CODEX_AUTO_APPROVE_CONFIG_TOML = applyCodexRuntimeConfigToml(
-	[`approval_policy = "never"`, `sandbox_mode = "danger-full-access"`, ""].join(
-		"\n",
-	),
+	[
+		`approval_policy = "never"`,
+		`sandbox_mode = "danger-full-access"`,
+		`mcp_oauth_credentials_store = "file"`,
+		"",
+	].join("\n"),
 );
 const resolveAgentAuthMode = (
 	agentProfile: AgentProfileLike | null | undefined,
@@ -149,6 +173,9 @@ const withCodexAutoApproveConfigToml = (configToml: string) => {
 	}
 	if (!/^\s*sandbox_mode\s*=/m.test(configToml)) {
 		defaults.push(`sandbox_mode = "danger-full-access"`);
+	}
+	if (!/^\s*mcp_oauth_credentials_store\s*=/m.test(configToml)) {
+		defaults.push(`mcp_oauth_credentials_store = "file"`);
 	}
 	const withDefaults =
 		defaults.length === 0
@@ -234,12 +261,144 @@ const buildCodexAuthJson = (agentProfile: AgentProfileLike) =>
 		2,
 	);
 
+const GROK_REASONING_EFFORTS = new Set(["xhigh", "high", "medium", "low"]);
+const CLAUDE_REASONING_EFFORTS = new Set([
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+]);
+
+export const mapGrokReasoningEffort = (
+	thinkingLevel: string | null | undefined,
+) => {
+	const value = (thinkingLevel || "").trim().toLowerCase();
+	if (GROK_REASONING_EFFORTS.has(value)) {
+		return value;
+	}
+	if (value === "extra high" || value === "extra-high" || value === "highest") {
+		return "xhigh";
+	}
+	return "high";
+};
+
+export const mapClaudeReasoningEffort = (
+	thinkingLevel: string | null | undefined,
+) => {
+	const value = (thinkingLevel || "").trim().toLowerCase();
+	if (!value) {
+		return null;
+	}
+	if (CLAUDE_REASONING_EFFORTS.has(value)) {
+		return value;
+	}
+	if (value === "minimal") {
+		return "low";
+	}
+	if (value === "extra high" || value === "extra-high" || value === "highest") {
+		return "xhigh";
+	}
+	return "high";
+};
+
+export const mapClaudeSettingsEffort = (
+	thinkingLevel: string | null | undefined,
+) => {
+	const effort = mapClaudeReasoningEffort(thinkingLevel);
+	return effort === "max" ? "xhigh" : effort;
+};
+
+export const buildGrokConfigToml = (agentProfile: AgentProfileLike) => {
+	const modelId = agentProfile.model.trim() || "grok-4.6";
+	const effort = agentProfile.thinkingLevelEnabled
+		? mapGrokReasoningEffort(agentProfile.thinkingLevel)
+		: "high";
+	const modelTable = `model.${JSON.stringify(modelId)}`;
+	const apiKeyLines =
+		resolveAgentAuthMode(agentProfile) === "api_key"
+			? [`env_key = "XAI_API_KEY"`]
+			: [];
+	return [
+		`[ui]`,
+		`permission_mode = "always-approve"`,
+		`yolo = true`,
+		``,
+		`[models]`,
+		`default = ${JSON.stringify(modelId)}`,
+		`default_reasoning_effort = ${JSON.stringify(effort)}`,
+		``,
+		`[${modelTable}]`,
+		`model = ${JSON.stringify(modelId)}`,
+		`name = ${JSON.stringify(modelId)}`,
+		`base_url = ${JSON.stringify(agentProfile.baseUrl)}`,
+		...apiKeyLines,
+	].join("\n");
+};
+
+const buildGrokEnvPairs = (
+	agentProfile: AgentProfileLike,
+	grokHome: string,
+) => [
+	`GROK_HOME=${grokHome}`,
+	...(resolveAgentAuthMode(agentProfile) === "api_key"
+		? [`XAI_API_KEY=${agentProfile.apiKey}`]
+		: []),
+	...parseAgentProfileEnvPairs(agentProfile),
+];
+
+const sleep = async (ms: number) =>
+	await new Promise<void>((resolve) => {
+		setTimeout(resolve, ms);
+	});
+
+const containerPathHasContent = async (
+	containerName: string,
+	filePath: string,
+) => {
+	try {
+		await execAsync(
+			`docker exec ${containerName} bash -lc "test -s '${escapeSingleQuotes(
+				filePath,
+			)}'"`,
+		);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+const waitForContainerPaths = async (
+	containerName: string,
+	filePaths: string[],
+) => {
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		const missing: string[] = [];
+		for (const filePath of filePaths) {
+			if (!(await containerPathHasContent(containerName, filePath))) {
+				missing.push(filePath);
+			}
+		}
+		if (missing.length === 0) {
+			return;
+		}
+		await sleep(100);
+	}
+	throw new Error(
+		`Required agent-home files were not ready: ${filePaths.join(", ")}`,
+	);
+};
+
 const copyHostFileToContainer = async (input: {
 	containerName: string;
 	sourcePath: string;
 	targetPath: string;
 	description: string;
 }) => {
+	if (await containerPathHasContent(input.containerName, input.targetPath)) {
+		return;
+	}
 	const sourceDirectory = path.dirname(input.sourcePath);
 	const sourceFile = path.basename(input.sourcePath);
 	const helperName = `${input.containerName}-credential-copy-${randomUUID().slice(0, 8)}`;
@@ -247,6 +406,8 @@ const copyHostFileToContainer = async (input: {
 		tmpdir(),
 		`vulseek-credential-copy-${randomUUID().slice(0, 8)}-${sourceFile}`,
 	);
+	const destTempPath = `${input.targetPath}.${randomUUID()}.tmp`;
+	const destDirectory = path.posix.dirname(input.targetPath);
 	const { stdout: imageOutput } = await execAsync(
 		`docker inspect ${input.containerName} --format '{{.Config.Image}}'`,
 	);
@@ -263,15 +424,33 @@ const copyHostFileToContainer = async (input: {
 			`docker cp ${helperName}:'/host-credential/${escapeSingleQuotes(sourceFile)}' '${escapeSingleQuotes(localCopyPath)}'`,
 		);
 		await execAsync(
-			`docker cp '${escapeSingleQuotes(localCopyPath)}' ${input.containerName}:'${escapeSingleQuotes(input.targetPath)}'`,
+			`docker exec ${input.containerName} bash -lc "mkdir -p '${escapeSingleQuotes(
+				destDirectory,
+			)}'"`,
+		);
+		await execAsync(
+			`docker cp '${escapeSingleQuotes(localCopyPath)}' ${input.containerName}:'${escapeSingleQuotes(destTempPath)}'`,
+		);
+		await execAsync(
+			`docker exec ${input.containerName} bash -lc "mv -f '${escapeSingleQuotes(
+				destTempPath,
+			)}' '${escapeSingleQuotes(input.targetPath)}'"`,
 		);
 	} catch (error) {
+		if (await containerPathHasContent(input.containerName, input.targetPath)) {
+			return;
+		}
 		throw new Error(
 			`Unable to copy ${input.description} from ${input.sourcePath}: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	} finally {
 		await fs.unlink(localCopyPath).catch(() => {});
 		await execAsync(`docker rm -f ${helperName}`).catch(() => {});
+		await execAsync(
+			`docker exec ${input.containerName} bash -lc "rm -f '${escapeSingleQuotes(
+				destTempPath,
+			)}'"`,
+		).catch(() => {});
 	}
 };
 
@@ -347,10 +526,16 @@ const writeContainerFile = async (
 	content: string,
 ) => {
 	const encoded = Buffer.from(content, "utf-8").toString("base64");
+	const directory = path.posix.dirname(filePath);
+	const tempPath = `${filePath}.${randomUUID()}.tmp`;
 	await execAsync(
-		`docker exec ${containerName} bash -lc "mkdir -p '${path.posix.dirname(
+		`docker exec ${containerName} bash -lc "mkdir -p '${escapeSingleQuotes(
+			directory,
+		)}' && echo '${encoded}' | base64 -d > '${escapeSingleQuotes(
+			tempPath,
+		)}' && mv -f '${escapeSingleQuotes(tempPath)}' '${escapeSingleQuotes(
 			filePath,
-		)}' && echo '${encoded}' | base64 -d > '${filePath}'"`,
+		)}'"`,
 	);
 };
 
@@ -367,38 +552,12 @@ const appendContainerFile = async (
 	);
 };
 
-const pendingDriverInputWrites = new Map<string, Promise<void>>();
-
-const writeDriverTaskToInputFile = async (input: {
+export const writeDriverTaskToInputFile = async (input: {
 	inputPath: string;
 	taskInput: Record<string, unknown>;
 }) => {
-	const previousWrite =
-		pendingDriverInputWrites.get(input.inputPath) || Promise.resolve();
-	const currentWrite = previousWrite
-		.catch(() => {})
-		.then(async () => {
-			await fs.mkdir(path.dirname(input.inputPath), { recursive: true });
-			await fs.appendFile(
-				input.inputPath,
-				`${JSON.stringify(input.taskInput)}\n`,
-				"utf-8",
-			);
-		});
-	pendingDriverInputWrites.set(input.inputPath, currentWrite);
-	try {
-		await currentWrite;
-	} finally {
-		if (pendingDriverInputWrites.get(input.inputPath) === currentWrite) {
-			pendingDriverInputWrites.delete(input.inputPath);
-		}
-	}
+	await appendStdinJsonLine(input.inputPath, input.taskInput);
 };
-
-const sleep = async (ms: number) =>
-	await new Promise<void>((resolve) => {
-		setTimeout(resolve, ms);
-	});
 
 const appendHostBootstrapLog = async (
 	logPath: string | null | undefined,
@@ -549,7 +708,7 @@ const resolveProjectProfileHostPath = async (input: {
 	return hostProfileDir;
 };
 
-const resolveJobRootFromRuntimeDir = (
+export const resolveJobRootFromRuntimeDir = (
 	runtimeDir: string,
 	scanJobId: string,
 ) => {
@@ -568,16 +727,19 @@ const resolveJobRootFromRuntimeDir = (
 export const buildJobAgentHomePathOnHost = (
 	runtimeDir: string,
 	scanJobId: string,
+	profile?: AgentHomeProfileRef,
 ) =>
 	path.join(
 		resolveJobRootFromRuntimeDir(runtimeDir, scanJobId),
 		JOB_AGENT_HOME_DIR_NAME,
+		buildAgentProfileHomeDirName(profile),
 	);
 
 export const ensureJobAgentHome = async (input: {
 	projectName: string;
 	serviceName: string;
 	scanJobId: string;
+	agentProfile?: AgentHomeProfileRef;
 }) => {
 	const profileDir = await resolveProjectProfileHostPath({
 		projectName: input.projectName,
@@ -588,17 +750,24 @@ export const ensureJobAgentHome = async (input: {
 		"jobs",
 		input.scanJobId,
 		JOB_AGENT_HOME_DIR_NAME,
+		...(input.agentProfile
+			? [buildAgentProfileHomeDirName(input.agentProfile)]
+			: []),
 	);
 	await fs.mkdir(jobHomePath, { recursive: true });
 	return jobHomePath;
 };
 
-export const buildJobAgentHomePathInContainer = (scanJobId: string) =>
+export const buildJobAgentHomePathInContainer = (
+	scanJobId: string,
+	profile?: AgentHomeProfileRef,
+) =>
 	path.posix.join(
 		CONTAINER_SCAN_CONTEXT_ROOT,
 		"jobs",
 		scanJobId,
 		JOB_AGENT_HOME_DIR_NAME,
+		buildAgentProfileHomeDirName(profile),
 	);
 
 /**
@@ -710,7 +879,9 @@ const resolveScanExecutionContext = async (
 				imageId: imageDigest,
 			}))
 		) {
-			throw new Error(`Dataset scan tools image is missing or changed: ${imageTag}`);
+			throw new Error(
+				`Dataset scan tools image is missing or changed: ${imageTag}`,
+			);
 		}
 		const repositoryProfileAgentProfileId =
 			getRuntimeStageSetting(
@@ -816,35 +987,46 @@ const copyCodexAssetsToContainerHome = async (
 						"Codex host home auth mode is enabled but no home path was configured on the agent profile.",
 					);
 				}
-				await copyHostFileToContainer({
-					containerName,
-					sourcePath: path.join(hostPath, "auth.json"),
-					targetPath: path.posix.join(codexHome, "auth.json"),
-					description: "Codex host home auth.json",
-				});
-				await writeContainerFile(
-					containerName,
-					`${codexHome}/config.toml`,
-					joinTomlBlocks(buildCodexConfigToml(agentProfile), mcpConfigToml),
-				);
-				await execAsync(
-					`docker exec ${containerName} bash -lc "test -s '${codexHome}/auth.json' && test -s '${codexHome}/config.toml'"`,
-				);
+				const authPath = path.posix.join(codexHome, "auth.json");
+				const configPath = path.posix.join(codexHome, "config.toml");
+				if (
+					(await containerPathHasContent(containerName, authPath)) &&
+					(await containerPathHasContent(containerName, configPath))
+				) {
+					return;
+				}
+				try {
+					await copyHostFileToContainer({
+						containerName,
+						sourcePath: path.join(hostPath, "auth.json"),
+						targetPath: authPath,
+						description: "Codex host home auth.json",
+					});
+					await writeContainerFile(
+						containerName,
+						configPath,
+						joinTomlBlocks(buildCodexConfigToml(agentProfile), mcpConfigToml),
+					);
+				} catch {
+					// Shared job agent-home is written by concurrent hunters; a
+					// racing copy must not fail this task if the files land.
+				}
+				await waitForContainerPaths(containerName, [authPath, configPath]);
 				return;
 			}
+			const authPath = path.posix.join(codexHome, "auth.json");
+			const configPath = path.posix.join(codexHome, "config.toml");
 			await writeContainerFile(
 				containerName,
-				`${codexHome}/config.toml`,
+				configPath,
 				joinTomlBlocks(buildCodexConfigToml(agentProfile), mcpConfigToml),
 			);
 			await writeContainerFile(
 				containerName,
-				`${codexHome}/auth.json`,
+				authPath,
 				buildCodexAuthJson(agentProfile),
 			);
-			await execAsync(
-				`docker exec ${containerName} bash -lc "test -s '${codexHome}/auth.json' && test -s '${codexHome}/config.toml'"`,
-			);
+			await waitForContainerPaths(containerName, [authPath, configPath]);
 		}
 		return;
 	}
@@ -899,11 +1081,11 @@ const copyCodexAssetsToContainerHome = async (
 			);
 		}
 	}
-	await execAsync(
-		`docker exec ${containerName} bash -lc "test -s '${codexHome}/config.toml'${
-			copiedCodexAuth ? ` && test -s '${codexHome}/auth.json'` : ""
-		}"`,
-	);
+	const requiredPaths = [`${codexHome}/config.toml`];
+	if (copiedCodexAuth) {
+		requiredPaths.push(`${codexHome}/auth.json`);
+	}
+	await waitForContainerPaths(containerName, requiredPaths);
 };
 
 const CLAUDE_REQUIRED_SETTINGS = {
@@ -1005,7 +1187,7 @@ const mergeClaudeSettingsJson = (
 			? (existing.env as Record<string, unknown>)
 			: {};
 	const profileEnv = buildClaudeProfileSettingsEnv(agentProfile);
-	return {
+	const merged: Record<string, unknown> = {
 		...existing,
 		env: {
 			...existingEnv,
@@ -1027,6 +1209,17 @@ const mergeClaudeSettingsJson = (
 			),
 		},
 	};
+	if (agentProfile?.provider === "claude_code") {
+		if (agentProfile.thinkingLevelEnabled) {
+			const effortLevel = mapClaudeSettingsEffort(agentProfile.thinkingLevel);
+			if (effortLevel) {
+				merged.effortLevel = effortLevel;
+			}
+		} else {
+			delete merged.effortLevel;
+		}
+	}
+	return merged;
 };
 
 const initializeClaudeHomeInContainer = async (
@@ -1048,6 +1241,50 @@ const initializeClaudeHomeInContainer = async (
 			2,
 		)}\n`,
 	);
+};
+
+const copyGrokAssetsToContainerHome = async (
+	containerName: string,
+	grokHome: string,
+	agentProfile?: AgentProfileLike | null,
+) => {
+	if (!agentProfile || agentProfile.provider !== "grok_build") {
+		return;
+	}
+	if (resolveAgentAuthMode(agentProfile) === "host_home") {
+		const hostPath = resolveAgentHomeHostPath(agentProfile);
+		if (!hostPath) {
+			throw new Error(
+				"Grok Build host home auth mode is enabled but no home path was configured on the agent profile.",
+			);
+		}
+		await copyHostFileToContainer({
+			containerName,
+			sourcePath: path.join(hostPath, "config.toml"),
+			targetPath: path.posix.join(grokHome, "config.toml"),
+			description: "Grok Build host home config.toml",
+		});
+		await copyHostFileToContainer({
+			containerName,
+			sourcePath: path.join(hostPath, "auth.json"),
+			targetPath: path.posix.join(grokHome, "auth.json"),
+			description: "Grok Build host home auth.json",
+		}).catch(() => {
+			// Cached browser login is optional when XAI_API_KEY is also set.
+		});
+		await waitForContainerPaths(containerName, [
+			path.posix.join(grokHome, "config.toml"),
+		]);
+		return;
+	}
+	await writeContainerFile(
+		containerName,
+		`${grokHome}/config.toml`,
+		`${buildGrokConfigToml(agentProfile)}\n`,
+	);
+	await waitForContainerPaths(containerName, [
+		path.posix.join(grokHome, "config.toml"),
+	]);
 };
 
 const copyClaudeAssetsToContainerHome = async (
@@ -1079,11 +1316,9 @@ const copyClaudeAssetsToContainerHome = async (
 		claudeHome,
 		agentProfile,
 	);
-	await execAsync(
-		`docker exec ${containerName} bash -lc "test -s '${escapeSingleQuotes(
-			path.posix.join(claudeHome, "settings.json"),
-		)}'"`,
-	);
+	await waitForContainerPaths(containerName, [
+		path.posix.join(claudeHome, "settings.json"),
+	]);
 };
 
 export type StageContainerInput = {
@@ -1120,11 +1355,15 @@ export type StageContainerInput = {
 	/** Skills explicitly required by this stage. */
 	skillNames?: readonly string[];
 	/**
-	 * When true, still write policy/schema files but do not append their
-	 * instructions to the prompt. Unused by goal stages; they now receive
-	 * policy, injection, and the structured-output suffix like other stages.
+	 * When true, still write policy/schema files but do not append policy or
+	 * injection instructions to the prompt. Independent of `outputSuffix`.
 	 */
 	omitPromptAdditions?: boolean;
+	/**
+	 * Whether to append the generated OUTPUT SUBMISSION suffix.
+	 * Defaults to include. Independent of `omitPromptAdditions`.
+	 */
+	outputSuffix?: "include" | "omit";
 };
 
 export type RunSingleTurnAgentInput = StageContainerInput & {
@@ -1140,6 +1379,7 @@ export type RunSingleTurnAgentInput = StageContainerInput & {
 	routeOutputSchemas?: RouteOutputSchema[];
 	onThreadId?: (threadId: string) => Promise<void>;
 	sessionMode?: "new" | "fork";
+	mcpServers?: AcpMcpServer[];
 	parentSessionId?: string | null;
 	parentTaskId?: string | null;
 	goal?: boolean;
@@ -1157,21 +1397,22 @@ export type RunSingleTurnAgentResult = {
 const isResearchPipeline = (value: ScanJob | string) =>
 	typeof value === "string"
 		? value === "research"
-		: Array.isArray((value.pipelineCompiledSnapshot as { stages?: Array<{ id: string }> } | null)?.stages) &&
-			(value.pipelineCompiledSnapshot as { stages: Array<{ id: string }> }).stages.some(
-				(stage) => stage.id === "research-scope",
-			);
+		: Array.isArray(
+				(
+					value.pipelineCompiledSnapshot as {
+						stages?: Array<{ id: string }>;
+					} | null
+				)?.stages,
+			) &&
+			(
+				value.pipelineCompiledSnapshot as { stages: Array<{ id: string }> }
+			).stages.some((stage) => stage.id === "research-scope");
 
 export const buildResearchContainerEnvPairs = (
 	scanJob: ScanJob | string,
 	scanJobId: string,
 	taskId: string,
-) =>
-	isResearchPipeline(scanJob)
-		? [
-				"VULSEEK_RESEARCH_DATABASE_URL",
-			]
-		: [];
+) => (isResearchPipeline(scanJob) ? ["VULSEEK_RESEARCH_DATABASE_URL"] : []);
 
 export const requireResearchDatabaseContext = (
 	scanJob: ScanJob | string,
@@ -1219,9 +1460,11 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		"jobs",
 		input.scanJob.scanJobId,
 		JOB_AGENT_HOME_DIR_NAME,
+		buildAgentProfileHomeDirName(input.agentProfile),
 	);
 	const jobAgentHomeContainerPath = buildJobAgentHomePathInContainer(
 		input.scanJob.scanJobId,
+		input.agentProfile,
 	);
 	await fs.mkdir(jobAgentHomeHostPath, { recursive: true });
 	await fs.mkdir(input.stageDirPath, { recursive: true });
@@ -1339,7 +1582,24 @@ export const startContainer = async (input: StageContainerInput) => {
 					logPath,
 					"recreate_container_missing_lane_mount",
 					"",
-					() => execAsync(`docker rm -f ${input.containerName}`).catch(() => {}),
+					() =>
+						execAsync(`docker rm -f ${input.containerName}`).catch(() => {}),
+				);
+				running = false;
+			}
+		}
+		if (running) {
+			const hasAgentHomeMount = await containerHasMountDestination(
+				input.containerName,
+				runtime.agentHome.codexContainerDir,
+			);
+			if (!hasAgentHomeMount) {
+				await withHostBootstrapLog(
+					logPath,
+					"recreate_container_missing_agent_home_mount",
+					"",
+					() =>
+						execAsync(`docker rm -f ${input.containerName}`).catch(() => {}),
 				);
 				running = false;
 			}
@@ -1350,6 +1610,7 @@ export const startContainer = async (input: StageContainerInput) => {
 					`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}'"`,
 				),
 			);
+			await syncAcpDriverIntoContainer(input.containerName, logPath);
 			if (input.taskRealRootInContainer) {
 				if (!input.persistent) {
 					await drainPreviousTaskAliasInContainer({
@@ -1399,6 +1660,7 @@ export const startContainer = async (input: StageContainerInput) => {
 			}),
 	);
 
+	await syncAcpDriverIntoContainer(input.containerName, logPath);
 	await withHostBootstrapLog(logPath, "install_runtime_skills", "", () =>
 		installRuntimeSkillsInContainer({
 			containerName: input.containerName,
@@ -1472,8 +1734,23 @@ const updateTaskAliasSymlinkInContainer = async (input: {
 	});
 
 const DRAIN_PREVIOUS_DRIVER_TIMEOUT_MS = 60_000;
-const ACP_DRIVER_FILE_NAME = "/opt/vulseek-acp/vulseek-acp-driver.mjs";
 const CONTAINER_BOOTSTRAP_LOG_FILE_NAME = "container-bootstrap.log";
+
+const syncAcpDriverIntoContainer = async (
+	containerName: string,
+	logPath?: string | null,
+) => {
+	const assets = await resolveCheckoutToolsDefinition();
+	await withHostBootstrapLog(
+		logPath,
+		"sync_acp_driver",
+		assets.acpDriverPath,
+		() =>
+			execAsync(
+				`docker cp '${escapeSingleQuotes(assets.acpDriverPath)}' ${containerName}:'${ACP_DRIVER_FILE_NAME}'`,
+			),
+	);
+};
 
 const drainPreviousTaskAliasInContainer = async (input: {
 	containerName: string;
@@ -1653,6 +1930,18 @@ const prepareTaskAgentHomeInContainer = async (input: {
 					input.agentProfile,
 				),
 		);
+	} else if (input.agentProvider === "grok_build") {
+		await withHostBootstrapLog(
+			input.logPath,
+			"agent_home_copy_grok_assets",
+			"",
+			() =>
+				copyGrokAssetsToContainerHome(
+					input.containerName,
+					input.agentHomePathInContainer,
+					input.agentProfile,
+				),
+		);
 	} else {
 		await withHostBootstrapLog(
 			input.logPath,
@@ -1713,12 +2002,11 @@ export const runSingleTurnAgentInContainer = async (
 	);
 	if (input.outputSchema || input.routeOutputSchemas?.length) {
 		const stepStartedAt = Date.now();
-		const jsonSchema = buildStructuredOutputEnvelopeJsonSchema(
+		const jsonSchema = buildStructuredOutputJsonSchema(
 			input.outputSchema || input.routeOutputSchemas![0]!.schema,
 			input.routeOutputSchemas,
 			{
 				nullableOutput: input.nullableOutput,
-				allowAgentExit: input.allowAgentExit,
 			},
 		);
 		const serializedJsonSchema = `${JSON.stringify(jsonSchema, null, 2)}\n`;
@@ -1770,30 +2058,27 @@ export const runSingleTurnAgentInContainer = async (
 				})
 			: null;
 	const omitPromptAdditions = Boolean(input.omitPromptAdditions);
+	const includeOutputSuffix = input.outputSuffix !== "omit";
 	const promptAdditions = omitPromptAdditions
 		? []
 		: [securityPolicyArtifact?.instruction, injectionPromptText || null].filter(
 				Boolean,
 			);
-	const outputProtocolPrompt = omitPromptAdditions
-		? ""
-		: [
-				...promptAdditions,
-				input.outputSchema || input.routeOutputSchemas?.length
-					? buildStructuredOutputPromptSuffix(
-							input.outputSchema || input.routeOutputSchemas![0]!.schema,
-							structuredOutputSchemaAgentPathInContainer,
-							structuredOutputResultAgentPathInContainer,
-							input.routeOutputSchemas,
-							{
-								allowAgentExit: input.allowAgentExit,
-								nullableOutput: input.nullableOutput,
-							},
-						)
-					: "",
-			]
-				.filter(Boolean)
-				.join("\n");
+	const outputProtocolPrompt = [
+		...promptAdditions,
+		includeOutputSuffix &&
+		(input.outputSchema || input.routeOutputSchemas?.length)
+			? buildStructuredOutputPromptSuffix(
+					structuredOutputSchemaAgentPathInContainer,
+					input.routeOutputSchemas,
+					{
+						nullableOutput: input.nullableOutput,
+					},
+				)
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n");
 	const resolvedPromptFinal = resolvedPrompt;
 	const promptWithOutputSchema = resolvedPromptFinal;
 	const runtimeFileNames = AGENT_RUNTIME_FILE_NAMES;
@@ -1861,6 +2146,7 @@ export const runSingleTurnAgentInContainer = async (
 	);
 	const agentHomePathInContainer = buildJobAgentHomePathInContainer(
 		input.scanJob.scanJobId,
+		input.agentProfile,
 	);
 	const agentsDir = await resolveAgentsDirectory();
 	const taskAgentHome = persistentDriverAlive
@@ -1898,16 +2184,48 @@ export const runSingleTurnAgentInContainer = async (
 							input.agentProfile,
 							taskAgentHome.agentHomePathInContainer,
 						)
-					: parseAgentProfileEnvPairs(input.agentProfile),
+					: agentProvider === "grok_build"
+						? buildGrokEnvPairs(
+								input.agentProfile,
+								taskAgentHome.agentHomePathInContainer,
+							)
+						: parseAgentProfileEnvPairs(input.agentProfile),
 			)
 		: {};
+	const driverProvider =
+		input.agentProfile?.provider === "claude_code"
+			? "claude"
+			: input.agentProfile?.provider === "grok_build"
+				? "grok"
+				: "codex";
+	const grokAdapterArgs =
+		driverProvider === "grok"
+			? [
+					"agent",
+					"--always-approve",
+					"--no-leader",
+					...(input.agentProfile?.model
+						? ["--model", input.agentProfile.model]
+						: []),
+					...(input.agentProfile?.thinkingLevelEnabled
+						? [
+								"--reasoning-effort",
+								mapGrokReasoningEffort(input.agentProfile.thinkingLevel),
+							]
+						: []),
+					"stdio",
+				]
+			: undefined;
 	const buildDriverTaskInput = () => ({
 		scanJobId: input.scanJob.scanJobId,
 		taskId: input.taskId || undefined,
 		stageName: input.stageName || undefined,
-		provider:
-			input.agentProfile?.provider === "claude_code" ? "claude" : "codex",
+		provider: driverProvider,
+		...(grokAdapterArgs
+			? { adapterCommand: "grok", adapterArgs: grokAdapterArgs }
+			: {}),
 		cwd: input.cwd,
+		mcpServers: input.mcpServers ?? [],
 		prompt: promptWithOutputSchema,
 		followUpPrompt: input.followUpPrompt || null,
 		outputProtocolPrompt: outputProtocolPrompt || null,
@@ -1922,12 +2240,16 @@ export const runSingleTurnAgentInContainer = async (
 		structuredOutputGracePeriodMs: 2_000,
 		structuredOutputRecoveryAttempts: 1,
 		goalEnabled: Boolean(input.goal),
-		goalPreserving: Boolean(input.goal && input.goalPreserving && input.persistent),
+		goalPreserving: Boolean(
+			input.goal && input.goalPreserving && input.persistent,
+		),
 		nullableOutput: Boolean(input.nullableOutput),
 		allowAgentExit: Boolean(input.allowAgentExit),
 		model: input.agentProfile?.model || null,
 		thinkingLevel: input.agentProfile?.thinkingLevelEnabled
-			? input.agentProfile.thinkingLevel
+			? input.agentProfile.provider === "claude_code"
+				? mapClaudeReasoningEffort(input.agentProfile.thinkingLevel)
+				: input.agentProfile.thinkingLevel
 			: null,
 		sessionMode: input.laneThreadId ? "persistent" : input.sessionMode || "new",
 		persistent: Boolean(input.persistent),
@@ -1990,6 +2312,7 @@ export const runSingleTurnAgentInContainer = async (
 			taskInput: driverTaskInput,
 		}),
 	);
+	await syncAcpDriverIntoContainer(input.containerName, taskStderrPath);
 	await withHostBootstrapLog(taskStderrPath, "launch_driver", "", () =>
 		execAsync(
 			`docker exec -d ${buildRuntimeIdentityExecEnvArgs({

@@ -1,6 +1,6 @@
 import { closeDbConnection, db } from "@vulseek/server/db";
 import { cancelScanJob } from "@vulseek/server";
-import { scanJobs, tasks } from "@vulseek/server/db/schema";
+import { scanJobs, messages, tasks } from "@vulseek/server/db/schema";
 import { Queue } from "bullmq";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { execFile } from "node:child_process";
@@ -16,7 +16,7 @@ const OPEN_TASK_STATUSES = [
 	"starting",
 	"running",
 ] as const;
-const OPEN_DISPATCH_STATUSES = ["pending", "dispatching"] as const;
+const OPEN_DISPATCH_STATUSES = ["pending", "processing"] as const;
 const TERMINAL_JOB_STATUSES = [
 	"finalizing",
 	"finished",
@@ -110,20 +110,33 @@ const repairDbState = async (scanJobId: string) =>
 				),
 			)
 			.returning({ taskId: tasks.taskId });
-		const closedDispatch = await tx
-			.update(tasks)
-			.set({
-				downstreamDispatchStatus: "completed",
-				downstreamDispatchedAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
-			})
-			.where(
-				and(
-					eq(tasks.scanJobId, scanJobId),
-					inArray(tasks.downstreamDispatchStatus, [...OPEN_DISPATCH_STATUSES]),
-				),
-			)
-			.returning({ taskId: tasks.taskId });
+		const producerIds = canceledTasks.map((row) => row.taskId);
+		const allProducerIds = (
+			await tx
+				.select({ taskId: tasks.taskId })
+				.from(tasks)
+				.where(eq(tasks.scanJobId, scanJobId))
+		).map((row) => row.taskId);
+		const closedDispatch =
+			allProducerIds.length === 0
+				? []
+				: await tx
+						.update(messages)
+						.set({
+							dispatchStatus: "failed",
+							errorMessage: "Consistency repair",
+							updatedAt: new Date().toISOString(),
+						})
+						.where(
+							and(
+								inArray(messages.sourceTaskId, allProducerIds),
+								inArray(messages.status, [
+									...OPEN_DISPATCH_STATUSES,
+								]),
+							),
+						)
+						.returning({ taskId: messages.sourceTaskId });
+		void producerIds;
 		return { tasks: canceledTasks.length, dispatch: closedDispatch.length };
 	});
 
@@ -149,9 +162,10 @@ if (args.includes("--scan-job-id") && !scanJobId) {
 			const [counts] = await db
 				.select({
 					openTasks: sql<number>`count(*) filter (where ${inArray(tasks.status, [...OPEN_TASK_STATUSES])})`,
-					openDispatch: sql<number>`count(*) filter (where ${inArray(tasks.downstreamDispatchStatus, [...OPEN_DISPATCH_STATUSES])})`,
+					openDispatch: sql<number>`count(*) filter (where ${inArray(messages.status, [...OPEN_DISPATCH_STATUSES])})`,
 				})
 				.from(tasks)
+				.leftJoin(messages, eq(messages.sourceTaskId, tasks.taskId))
 				.where(eq(tasks.scanJobId, job.scanJobId));
 			const openTasks = Number(counts?.openTasks ?? 0);
 			const openDispatch = Number(counts?.openDispatch ?? 0);

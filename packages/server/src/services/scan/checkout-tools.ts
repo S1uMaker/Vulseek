@@ -213,6 +213,13 @@ export const resolveCheckoutToolsImageVariant = (
 	return environment.NODE_ENV === "production" ? "release" : "dev";
 };
 
+export const SCAN_TOOLS_VERSION_LABEL =
+	"com.fuzzing-peach.vulseek.scan-tools.version";
+export const SCAN_TOOLS_VARIANT_LABEL =
+	"com.fuzzing-peach.vulseek.scan-tools.variant";
+export const SCAN_TOOLS_IMAGE_LABEL =
+	"com.fuzzing-peach.vulseek.scan-tools.image";
+
 export const buildCheckoutToolsImageTag = (
 	version: string,
 	variant: CheckoutToolsImageVariant,
@@ -222,10 +229,13 @@ export const matchesCheckoutToolsImageLabels = (
 	definition: Pick<CheckoutToolsDefinition, "version" | "variant">,
 	labels: Record<string, string> | null | undefined,
 ) =>
-	labels?.["com.fuzzing-peach.vulseek.scan-tools.version"] ===
-		definition.version &&
-	labels?.["com.fuzzing-peach.vulseek.scan-tools.variant"] ===
-		definition.variant;
+	labels?.[SCAN_TOOLS_VERSION_LABEL] === definition.version &&
+	labels?.[SCAN_TOOLS_VARIANT_LABEL] === definition.variant;
+
+export const checkoutImageMatchesCurrentTools = (
+	labels: Record<string, string> | null | undefined,
+	toolsVersion: string,
+) => labels?.[SCAN_TOOLS_VERSION_LABEL] === toolsVersion;
 
 export const canRebuildCheckoutTools = (role: "owner" | "admin" | "member") =>
 	role === "owner" || role === "admin";

@@ -85,6 +85,7 @@ RUN --mount=type=cache,id=vulseek-pip-cache,target=/root/.cache/pip,sharing=lock
     python3 -m venv /opt/vulseek-venv \
     && /opt/vulseek-venv/bin/pip install --upgrade pip \
 	    && /opt/vulseek-venv/bin/pip install \
+	      requests \
 	      jsonschema \
 	      'psycopg[binary]>=3.2,<4' \
 	      tree-sitter \
@@ -111,11 +112,15 @@ COPY codex-acp-fork-1.3.0.patch /tmp/vulseek-codex-acp-fork.patch
 RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     npm config set registry https://registry.npmjs.org \
     && npm config get registry \
-    && npm install --prefix /opt/vulseek-acp \
-      @agentclientprotocol/sdk@1.3.0 \
-      @agentclientprotocol/codex-acp@1.3.0 \
-      @agentclientprotocol/claude-agent-acp@0.68.0 \
-    && patch -d /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp \
+	    && npm install -g ccusage@20.0.20 \
+	    && command -v ccusage >/dev/null \
+	    && ccusage --help >/dev/null \
+	    && npm install --prefix /opt/vulseek-acp \
+	      @agentclientprotocol/sdk@1.3.0 \
+	      @agentclientprotocol/codex-acp@1.3.0 \
+	      @agentclientprotocol/claude-agent-acp@0.68.0 \
+	    && chmod 0755 /opt/vulseek-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js \
+	    && patch -d /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp \
       -p1 < /tmp/vulseek-codex-acp-fork.patch \
     && grep -F 'fork: {}' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
     && grep -F 'method: "thread/fork"' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
@@ -123,8 +128,14 @@ RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     && grep -F 'createTurnSessionInfoUpdate' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
     && grep -F 'turn: { status: "completed" }' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
     && grep -F 'createTaskCompletedSessionInfoUpdate' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
-    && grep -F 'task: { status: "completed" }' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
-    && grep -F 'controlMethod: GOAL_CONTROL_METHOD' /opt/vulseek-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js >/dev/null \
+	    && grep -F 'task: { status: "completed" }' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
+	    && ! grep -F 'requires goal text of at most 4000 characters' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
+	    && grep -F 'const fullObjective = objective.length > 4e3 ? objective : null' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
+	    && grep -F 'await this.steerTurn({' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
+	    && grep -F 'await onGoalTurnStarted?.(turnId)' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
+	    && test -f /opt/vulseek-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js \
+    && test -f /opt/vulseek-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/goal-extension.js \
+    && node --check /opt/vulseek-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js \
     && node --check /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js \
     && rm -f /tmp/vulseek-codex-acp-fork.patch
 COPY vulseek-acp-driver.mjs agent-events.mjs /opt/vulseek-acp/
@@ -135,29 +146,46 @@ RUN chmod 0755 /opt/vulseek-acp/vulseek-acp-driver.mjs \
     && test -x /opt/vulseek-acp/node_modules/.bin/claude-agent-acp
 ENV PATH="/opt/vulseek-acp/node_modules/.bin:$PATH"
 
+# Grok Build native ACP: `grok agent stdio`.
+# BuildKit does not inherit the client HTTP_PROXY unless it is passed as
+# --build-arg (see getDockerBuildEnvironmentPairs). Without that, curl talks
+# to x.ai:443 directly and times out.
+RUN echo "[vulseek] installing grok CLI HTTP_PROXY=${HTTP_PROXY:-<empty>}" \
+    && curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 30 --max-time 120 \
+      https://x.ai/cli/install.sh -o /tmp/grok-install.sh \
+    && bash /tmp/grok-install.sh \
+    && rm -f /tmp/grok-install.sh \
+    && if [ -x /root/.grok/bin/grok ]; then install -m 0755 /root/.grok/bin/grok /usr/local/bin/grok; fi \
+    && command -v grok >/dev/null \
+    && grok --version
+
 ENV PATH="/root/.local/bin:$PATH" \
     UV_TOOL_BIN_DIR="/usr/local/bin"
 RUN --mount=type=cache,id=vulseek-uv-cache,target=/root/.cache/uv,sharing=locked \
     curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh \
     && uv --version \
     && uv tool install -p 3.13 serena-agent@latest --prerelease=allow \
+    && ln -sf "$(uv tool dir)/serena-agent/bin/serena" /usr/local/bin/serena \
     && mkdir -p /root/.serena \
     && serena init -b LSP \
-    && serena setup codex \
-    && serena setup claude-code \
-    && sed -i 's#^ls_specific_settings: {}#ls_specific_settings:\n  cpp:\n    ls_path: "/usr/local/bin/clangd-wrapper"#' /root/.serena/serena_config.yml \
+    && if command -v codex >/dev/null; then serena setup codex || true; fi \
+    && if command -v claude >/dev/null; then serena setup claude-code || true; fi \
+    && sed -i 's#^ls_specific_settings: {}#ls_specific_settings:\n  cpp:\n    ls_path: "/opt/vulseek/clangd-wrapper"#' /root/.serena/serena_config.yml \
     && sed -i 's#^ignored_paths: \[\]#ignored_paths:\n- "/scan-context"\n- "/scan-context/**"#' /root/.serena/serena_config.yml \
     && sed -i 's#^project_serena_folder_location:.*#project_serena_folder_location: "/scan-context/.serena"#' /root/.serena/serena_config.yml \
-    && serena --help >/dev/null
+    && command -v serena >/dev/null
 
-RUN echo '#!/bin/bash' > /usr/local/bin/clangd-wrapper \
-    && echo 'args=()' >> /usr/local/bin/clangd-wrapper \
-    && echo 'for arg in "$@"; do' >> /usr/local/bin/clangd-wrapper \
-    && echo '    [ "$arg" = "--background-index" ] && continue' >> /usr/local/bin/clangd-wrapper \
-    && echo '    args+=("$arg")' >> /usr/local/bin/clangd-wrapper \
-    && echo 'done' >> /usr/local/bin/clangd-wrapper \
-    && echo 'exec /usr/bin/clangd --background-index=0 "${args[@]}"' >> /usr/local/bin/clangd-wrapper \
-    && chmod +x /usr/local/bin/clangd-wrapper
+RUN mkdir -p /opt/vulseek \
+    && printf '%s\n' \
+      '#!/bin/bash' \
+      'args=()' \
+      'for arg in "$@"; do' \
+      '    [ "$arg" = "--background-index" ] && continue' \
+      '    args+=("$arg")' \
+      'done' \
+      'exec /usr/bin/clangd --background-index=0 "${args[@]}"' \
+      > /opt/vulseek/clangd-wrapper \
+    && chmod 0755 /opt/vulseek/clangd-wrapper
 
 RUN --mount=type=cache,id=vulseek-codeql-downloads,target=/root/.cache/vulseek-codeql,sharing=locked \
     mkdir -p /opt/codeql \

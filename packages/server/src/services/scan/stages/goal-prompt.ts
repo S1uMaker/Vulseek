@@ -1,7 +1,5 @@
 /** Native `/goal` helpers. The goal text is the rendered stage prompt. */
 
-export const CODEX_NATIVE_GOAL_MAX_CHARS = 4000;
-
 const collapseWhitespace = (value: string) =>
 	value.replace(/\s+/g, " ").trim();
 
@@ -57,23 +55,12 @@ export const formatGoalInputAsNaturalText = (input: unknown): string =>
 export const isNativeGoalPrompt = (prompt: string) =>
 	/^\s*\/goal(?:\s|$)/i.test(prompt);
 
-export const prefixNativeGoal = (
-	prompt: string,
-	maxChars = CODEX_NATIVE_GOAL_MAX_CHARS,
-) => {
+export const prefixNativeGoal = (prompt: string) => {
 	const trimmed = prompt.trim();
 	const withPrefix = isNativeGoalPrompt(trimmed)
 		? trimmed
 		: `/goal ${trimmed}`;
-	if (withPrefix.length <= maxChars) return withPrefix;
-	return `${withPrefix.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
-};
-
-export const isSurfaceGoalReentry = (input: unknown) => {
-	const feedback = readRecordValue(input, "feedback");
-	return Boolean(
-		feedback && typeof feedback === "object" && !Array.isArray(feedback),
-	);
+	return withPrefix;
 };
 
 /** Feedback-only follow-up after the standing `/goal`. No extra wrapper text. */
@@ -89,15 +76,12 @@ export const resolveGoalStagePrompt = (input: {
 	renderedPrompt: string;
 	stageInput: unknown;
 	sharedSession?: boolean;
-	maxChars?: number;
+	reentry?: boolean;
 }) => {
-	if (input.sharedSession && isSurfaceGoalReentry(input.stageInput)) {
+	if (input.sharedSession && input.reentry) {
 		return buildSurfacePlannerTurnPrompt({
 			feedback: readRecordValue(input.stageInput, "feedback"),
 		});
 	}
-	const trimmed = input.renderedPrompt.trim();
-	const maxChars = input.maxChars ?? CODEX_NATIVE_GOAL_MAX_CHARS;
-	if (trimmed.length <= maxChars) return trimmed;
-	return `${trimmed.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+	return input.renderedPrompt.trim();
 };

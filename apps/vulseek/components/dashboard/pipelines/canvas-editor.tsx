@@ -218,6 +218,11 @@ const PipelineStageNode = ({
 								· {stage.runtime.skills.join(", ")}
 							</span>
 						) : null}
+						{stage.runtime.mcp?.length ? (
+							<span className="truncate">
+								· mcp {stage.runtime.mcp.join(", ")}
+							</span>
+						) : null}
 					</div>
 				</div>
 				<div className="flex shrink-0 flex-col items-end gap-1">

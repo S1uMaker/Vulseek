@@ -56,7 +56,7 @@ export type AgentActivityMetadata = {
 	scanJobId: string;
 	taskKind: string;
 	containerName?: string | null;
-	provider?: "codex" | "claude";
+	provider?: "codex" | "claude" | "grok";
 	status?: string;
 	sessionId?: string | null;
 };

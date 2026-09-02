@@ -1,39 +1,42 @@
-import { bindTaskRuntimeRepo } from "../persistence/task.repo";
-import {
-	bindStageLaneRuntimeRepo,
-	findStageLaneRuntimeByActiveTaskIdRepo,
-} from "../persistence/stage-lane-runtime.repo";
-import {
-	syncVulnerabilityCandidatesFromProducerTask,
-	type CandidateSyncTransaction,
-} from "../persistence/candidate.repo";
-import {
-	createStageDefinition,
-	type StageDefinition,
-	type StageQueueBinding,
-} from "../pipeline/stage-definition";
-import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
-import { renderPipelineTemplate } from "../pipeline/scan-pipeline-edge-transform";
-import { surfaceCoverageContainerPath } from "../pipeline/tob-goal-coverage";
-import type { YamlPipelineStage } from "../pipeline/yaml-pipeline-runtime";
-import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
+import { promises as fs } from "node:fs";
+import { findPipelineOrganizationId, resolveAcpMcpServers } from "../../mcp";
 import {
 	readTaskJsonArtifact,
 	taskArtifactHostPath,
 	writeTaskJsonArtifact,
 } from "../artifacts/task-artifact-paths";
-import { promises as fs } from "node:fs";
+import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
+import {
+	type CandidateSyncTransaction,
+	syncVulnerabilityCandidatesFromMessage,
+} from "../persistence/candidate.repo";
+import { findResearchTrackIdentityRepo } from "../persistence/research-track.repo";
+import { updateScanJobTargetContextRepo } from "../persistence/scan-job.repo";
+import {
+	bindStageLaneRuntimeRepo,
+	findStageLaneRuntimeByActiveTaskIdRepo,
+} from "../persistence/stage-lane-runtime.repo";
+import { bindTaskRuntimeRepo } from "../persistence/task.repo";
+import { renderPipelineTemplate } from "../pipeline/scan-pipeline-edge-transform";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import {
 	isJsonSchemaContract,
 	validateJsonSchemaContractArtifacts,
 	validateStructuredOutputSchemaSource,
 } from "../pipeline/scan-pipeline-schema-contracts";
 import { applySchemaTransforms } from "../pipeline/scan-pipeline-schema-transforms";
-import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
-import { updateScanJobTargetContextRepo } from "../persistence/scan-job.repo";
-import { findResearchTrackIdentityRepo } from "../persistence/research-track.repo";
+import {
+	createStageDefinition,
+	type StageDefinition,
+	type StageQueueBinding,
+} from "../pipeline/stage-definition";
+import { appendPollInputPrompt } from "../pipeline/stage-input-delivery";
+import { surfaceCoverageContainerPath } from "../pipeline/tob-goal-coverage";
+import type { YamlPipelineStage } from "../pipeline/yaml-pipeline-runtime";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { prepareRepositoryForScanInContainer } from "../repository/prepare-repository";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
+import type { ScanJob } from "../types";
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
@@ -42,29 +45,25 @@ import {
 	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
 import {
-	isSurfaceGoalReentry,
-	resolveGoalStagePrompt,
-} from "./goal-prompt";
-import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
 	type StageContext,
 } from "./full-scan-stage.runtime";
-import type { ScanJob } from "../types";
+import {
+	isResearchStage,
+	resolveStageContainerNameParts,
+	resolveStageReuseContainer,
+} from "./generic-agent-container";
+import { resolveGoalStagePrompt } from "./goal-prompt";
 import {
 	assertResearchTrackIdentity,
 	enrichResearchTrackInput,
 } from "./research-track-input";
 
+export { resolveStageContainerNameParts, resolveStageReuseContainer };
+
 type GenericStageContext = StageContext & { scanJob?: ScanJob };
 
-const RESEARCH_STAGES = new Set([
-	"research-scope", "surface-map", "track-plan", "vulnerability-discovery",
-	"track-review", "finding-validation", "finding-review", "chain-synthesis",
-	"chain-review", "exploit-validation", "exploit-review", "research-report",
-]);
-const isResearchStage = (stageName: string) =>
-	stageName === "research" || RESEARCH_STAGES.has(stageName);
 const getResearchMinimumDurationMs = () => {
 	const configured = Number.parseInt(
 		process.env.VULSEEK_RESEARCH_MIN_DURATION_MS || "10800000",
@@ -74,31 +73,6 @@ const getResearchMinimumDurationMs = () => {
 		? configured
 		: 3 * 60 * 60 * 1000;
 };
-
-export const resolveStageReuseContainer = (
-	stageName: string,
-	configured: boolean,
-	goal = false,
-	goalSession?: "shared" | "per-task",
-) =>
-	goalSession === "shared"
-		? true
-		: isResearchStage(stageName) || goal
-			? false
-			: configured;
-
-export const resolveStageContainerNameParts = (
-	stageName: string,
-	taskId: string,
-	configured: Array<string | null | undefined> | undefined,
-	goal = false,
-	goalSession?: "shared" | "per-task",
-) =>
-	goalSession === "shared"
-		? configured
-		: isResearchStage(stageName) || goal
-		? [...(configured || []), taskId]
-		: configured;
 
 const toPromptValues = (value: unknown): Record<string, string | number> => {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -152,7 +126,7 @@ const resolvePromptValues = async (
 						researchDeadlineAt: new Date(
 							Date.now() + getResearchMinimumDurationMs(),
 						).toISOString(),
-				}
+					}
 				: {}),
 		},
 		{
@@ -182,6 +156,8 @@ export function createGenericAgentStageDefinition<
 		nullableOutput: input.config.runtime.nullableOutput ?? undefined,
 		jobOutput: input.config.jobOutput,
 		goal: input.config.goal ?? false,
+		inputDelivery: input.config.runtime.inputDelivery ?? "prompt",
+		messageNotification: input.config.runtime.messageNotification === true,
 		allowAgentExit: input.config.allowAgentExit,
 		outputSchema: input.outputSchema,
 		queue: input.queue,
@@ -195,18 +171,11 @@ export function createGenericAgentStageDefinition<
 			const stageCtx = ctx as GenericStageContext;
 			const scanJob = stageCtx.scanJob;
 			if (!scanJob) throw new Error("Generic stage requires scanJob context");
-			const reuseContainer = resolveStageReuseContainer(
-				stageCtx.stageName,
-				stageCtx.reuseContainer,
-				input.config.goal,
-				input.config.runtime.goalSession,
-			);
+			const reuseContainer = stageCtx.reuseContainer;
 			const containerNameParts = resolveStageContainerNameParts(
-				stageCtx.stageName,
 				stageCtx.taskId,
 				input.config.containerNameParts,
-				input.config.goal,
-				input.config.runtime.goalSession,
+				reuseContainer,
 			);
 			const runtime = await launchAgentStageRuntime({
 				ctx: stageCtx,
@@ -223,46 +192,44 @@ export function createGenericAgentStageDefinition<
 					targetTag: scanJob.targetTag,
 					commitSha: scanJob.commitSha,
 					baseSha: scanJob.baseSha,
-					commitWindow:
-						scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
+					commitWindow: scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
 					scanRootDir: runtime.taskStageRootInContainer,
 					datasetRepository: Boolean(scanJob.datasetEvaluationTrialId),
 				});
 				if (!scanJob.datasetEvaluationTrialId) {
 					await updateScanJobTargetContextRepo(scanJob.scanJobId, {
-					targetRef: repositoryState.currentBranch || repositoryState.targetRef,
-					targetTag:
-						repositoryState.currentExactTag || repositoryState.targetTag,
-					commitSha: repositoryState.resolvedTargetSha,
-					baseSha: repositoryState.resolvedBaseSha,
-					commitWindow: repositoryState.commitWindow,
-				});
-			}
+						targetRef:
+							repositoryState.currentBranch || repositoryState.targetRef,
+						targetTag:
+							repositoryState.currentExactTag || repositoryState.targetTag,
+						commitSha: repositoryState.resolvedTargetSha,
+						baseSha: repositoryState.resolvedBaseSha,
+						commitWindow: repositoryState.commitWindow,
+					});
+				}
 			}
 		},
-	run: async (ctx, stageInput) => {
+		run: async (ctx, stageInput) => {
 			const stageCtx = ctx as GenericStageContext;
 			const scanJob = stageCtx.scanJob;
 			if (!scanJob) throw new Error("Generic stage requires scanJob context");
-			let effectiveStageInput =
-				isResearchStage(stageCtx.stageName)
-					? await enrichResearchTrackInput({
-							stageName: stageCtx.stageName,
-							stageInput,
-							resolveTrack: (trackKey, approachFamily) =>
-								findResearchTrackIdentityRepo({
-									scanJobId: stageCtx.scanJobId,
-									trackKey,
-									approachFamily,
-								}),
-						})
-					: stageInput;
+			const effectiveStageInput = isResearchStage(stageCtx.stageName)
+				? await enrichResearchTrackInput({
+						stageName: stageCtx.stageName,
+						stageInput,
+						resolveTrack: (trackKey, approachFamily) =>
+							findResearchTrackIdentityRepo({
+								scanJobId: stageCtx.scanJobId,
+								trackKey,
+								approachFamily,
+							}),
+					})
+				: stageInput;
+			const reuseContainer = stageCtx.reuseContainer;
 			const containerNameParts = resolveStageContainerNameParts(
-				stageCtx.stageName,
 				stageCtx.taskId,
 				input.config.containerNameParts,
-				input.config.goal,
-				input.config.runtime.goalSession,
+				reuseContainer,
 			);
 			const runtime = await resolveAgentStageRuntime({
 				ctx: stageCtx,
@@ -273,7 +240,12 @@ export function createGenericAgentStageDefinition<
 				relativePath: "inputs/task-input.json",
 				value: effectiveStageInput,
 			});
-			const promptTemplate = await resolveStageRuntimePromptTemplate(stageCtx);
+			const promptTemplate = appendPollInputPrompt({
+				prompt: await resolveStageRuntimePromptTemplate(stageCtx),
+				stageName: stageCtx.stageName,
+				inputDelivery: input.config.runtime.inputDelivery,
+				pollPrompt: input.config.runtime.pollPrompt,
+			});
 			const promptValues = await resolvePromptValues(
 				stageCtx,
 				effectiveStageInput,
@@ -286,24 +258,23 @@ export function createGenericAgentStageDefinition<
 				{ injectSkills: !input.config.goal },
 			);
 			const sharedSession = input.config.runtime.goalSession === "shared";
+			const lane = await findStageLaneRuntimeByActiveTaskIdRepo(
+				stageCtx.taskId,
+			).catch(() => null);
+			let initialGoalPrompt = lane?.initialGoalPrompt ?? null;
 			const reentry = Boolean(
-				input.config.goal &&
-					sharedSession &&
-					isSurfaceGoalReentry(effectiveStageInput),
+				input.config.goal && sharedSession && initialGoalPrompt,
 			);
 			const stagePrompt = input.config.goal
 				? resolveGoalStagePrompt({
 						renderedPrompt,
 						stageInput: effectiveStageInput,
 						sharedSession,
+						reentry,
 					})
 				: renderedPrompt;
 			const followUpPrompt = reentry ? stagePrompt : null;
 			const standingPrompt = reentry ? "" : stagePrompt;
-			const lane = await findStageLaneRuntimeByActiveTaskIdRepo(
-				stageCtx.taskId,
-			).catch(() => null);
-			let initialGoalPrompt = lane?.initialGoalPrompt ?? null;
 			if (
 				input.config.goal &&
 				input.config.goalPreserving &&
@@ -319,6 +290,17 @@ export function createGenericAgentStageDefinition<
 				});
 				initialGoalPrompt = standingPrompt;
 			}
+			const mcpSlugs = input.config.runtime.mcp ?? [];
+			const mcpServers =
+				mcpSlugs.length > 0
+					? await resolveAcpMcpServers({
+							organizationId: await findPipelineOrganizationId(
+								scanJob.pipelineId,
+							),
+							slugs: mcpSlugs,
+							provider: runtime.agentProfile?.provider ?? null,
+						})
+					: [];
 			const result = await runSingleTurnAgentInContainer({
 				scanJob,
 				agentProfile: runtime.agentProfile,
@@ -331,15 +313,12 @@ export function createGenericAgentStageDefinition<
 				taskStageRootInContainer: runtime.taskStageRootInContainer,
 				taskRealRootInContainer: runtime.taskRealRootInContainer,
 				persistent: stageCtx.persistent,
-				reuseContainer: resolveStageReuseContainer(
-					stageCtx.stageName,
-					stageCtx.reuseContainer,
-					input.config.goal,
-					input.config.runtime.goalSession,
-				),
+				reuseContainer,
 				groupedPersistent: stageCtx.groupedPersistent,
 				allowAgentExit: input.config.allowAgentExit,
 				includePolicy: Boolean(input.config.runtime?.includePolicy),
+				outputSuffix:
+					input.config.runtime?.outputSuffix === "omit" ? "omit" : "include",
 				goalPreserving: Boolean(input.config.goalPreserving),
 				followUpPrompt,
 				initialGoalPrompt,
@@ -348,6 +327,7 @@ export function createGenericAgentStageDefinition<
 				laneThreadId: stageCtx.laneThreadId,
 				laneDriverPid: stageCtx.laneDriverPid,
 				cwd: await resolveStageRuntimeCwd(stageCtx),
+				mcpServers,
 				sessionMode: stageCtx.sessionMode,
 				parentSessionId: stageCtx.parentSessionId,
 				parentTaskId: stageCtx.parentTaskId,
@@ -405,7 +385,9 @@ export function createGenericAgentStageDefinition<
 						.then(() => true)
 						.catch(() => false);
 					if (input.config.report.required && !reportExists) {
-						throw new Error(`Required report is missing: ${input.config.report.path}`);
+						throw new Error(
+							`Required report is missing: ${input.config.report.path}`,
+						);
 					}
 				}
 				return output;
@@ -415,11 +397,19 @@ export function createGenericAgentStageDefinition<
 				);
 			}
 		},
-		onSuccess: async (ctx, stageInput, output, transaction) => {
+		onSuccess: async (ctx, stageInput, output, transaction, metadata) => {
+			const messageId = metadata?.messageId;
 			for (const effect of input.config.effects) {
 				if (effect.type === "sync-candidates") {
-					await syncVulnerabilityCandidatesFromProducerTask(
-						ctx.taskId,
+					if (!messageId) {
+						continue;
+					}
+					await syncVulnerabilityCandidatesFromMessage(
+						{
+							taskId: ctx.taskId,
+							messageId,
+							output,
+						},
 						transaction as CandidateSyncTransaction | undefined,
 					);
 				}
@@ -430,6 +420,7 @@ export function createGenericAgentStageDefinition<
 					await applyTobGoalRegistryEffect({
 						scanJobId: ctx.scanJobId,
 						taskId: ctx.taskId,
+						messageId: messageId ?? null,
 						operation: effect.operation,
 						stageOutput: output,
 						stageInput,

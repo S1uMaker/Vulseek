@@ -9,14 +9,11 @@ import {
 	useCollectionQuery,
 } from "@/components/dashboard/ui-system";
 import { DateTooltip } from "@/components/shared/date-tooltip";
-import { Badge } from "@/components/ui/badge";
 import type { ListQueryConfig } from "@/lib/ui-system/list-query";
 import { api } from "@/utils/api";
 import {
 	formatResourceTypeLabel,
 	formatScanJobStatusLabel,
-	formatPipelineKindLabel,
-	resolveScanJobPipelineKind,
 	type ScanTranslation,
 	scanT,
 } from "./scan-i18n";
@@ -49,14 +46,14 @@ const JOB_STATUS_OPTIONS = [
 ];
 
 const formatJobTitle = (job: { scanJobId: string }) =>
-	`Scan Job (${job.scanJobId.slice(0, 6)})`;
+	job.scanJobId.slice(0, 6);
 
-const formatTriggerSource = (t: ScanTranslation, triggerSource: string) =>
-	triggerSource === "schedule"
-		? scanT(t, "scan.jobs.auto", "auto")
-		: triggerSource === "manual"
-			? scanT(t, "scan.jobs.manual", "manual")
-			: triggerSource;
+const formatPipelineProfileLabel = (
+	t: ScanTranslation,
+	job: { pipelineProfileName?: string | null },
+) =>
+	job.pipelineProfileName?.trim() ||
+	scanT(t, "scan.pipeline.defaults", "Pipeline defaults");
 
 const formatTokenUsage = (t: ScanTranslation, value?: number | null) => {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -205,24 +202,21 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 						},
 						{
 							id: "pipeline",
-							header: "Scan Type",
+							header: "Pipeline",
 							cell: ({ row }) => (
-								<Badge
-									variant="outline"
-									className="h-5 border-border px-1.5 text-[11px] font-normal leading-none"
-								>
-									{formatPipelineKindLabel(
-										t,
-										resolveScanJobPipelineKind(row.original),
-									)}
-								</Badge>
+								<span className="text-sm font-medium text-foreground">
+									{row.original.pipelineSlug || "-"}
+								</span>
 							),
 						},
 						{
-							id: "triggerSource",
-							header: "Source",
-							cell: ({ row }) =>
-								formatTriggerSource(t, row.original.triggerSource),
+							id: "pipelineProfile",
+							header: scanT(t, "scan.field.pipelineProfile", "Profile"),
+							cell: ({ row }) => (
+								<span className="text-sm font-medium text-foreground">
+									{formatPipelineProfileLabel(t, row.original)}
+								</span>
+							),
 						},
 						{
 							id: "tokens",
@@ -271,16 +265,12 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 									{formatJobTitle(job)}
 								</span>
 								<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
-									<Badge
-										variant="outline"
-										className="h-5 border-border px-1.5 text-[11px] font-normal leading-none"
-									>
-										{formatPipelineKindLabel(
-											t,
-											resolveScanJobPipelineKind(job),
-										)}
-									</Badge>
-									<span>{formatTriggerSource(t, job.triggerSource)}</span>
+									<span className="text-sm font-medium text-foreground">
+										{job.pipelineSlug || "-"}
+									</span>
+									<span className="text-sm font-medium text-foreground">
+										{formatPipelineProfileLabel(t, job)}
+									</span>
 									<span className="opacity-30" aria-hidden>
 										·
 									</span>

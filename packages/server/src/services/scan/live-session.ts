@@ -172,8 +172,14 @@ const resolveScanJobBaseDir = async (scanJobId: string) => {
 	);
 };
 
-const toAgentProvider = (provider?: string | null): "codex" | "claude" =>
-	provider === "claude_code" ? "claude" : "codex";
+const toAgentProvider = (
+	provider?: string | null,
+): "codex" | "claude" | "grok" =>
+	provider === "claude_code"
+		? "claude"
+		: provider === "grok_build"
+			? "grok"
+			: "codex";
 
 const resolveTaskAgentProvider = (
 	agentProfile?: { provider?: string | null } | null,
@@ -212,7 +218,7 @@ export type AgentTaskRuntime = {
 	status: string;
 	containerName: string | null;
 	sessionId: string | null;
-	provider: "codex" | "claude";
+	provider: "codex" | "claude" | "grok";
 	baseDir: string;
 	runtimeDir: string;
 	stdoutPath: string;

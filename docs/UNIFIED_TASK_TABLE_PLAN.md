@@ -726,7 +726,7 @@ bindTaskRuntimeRepo(input: {
 })
 
 storeTaskInputRepo(taskId: string, input: string)
-storeTaskOutputRepo(taskId: string, output: string)
+storeMessageRepo(taskId: string, output: string)
 storeTaskRawOutputRepo(taskId: string, rawOutput: string)
 ```
 

@@ -378,6 +378,66 @@ describe("validatePipelineDocumentV3", () => {
 		).toBe(true);
 	});
 
+	it("round-trips optional runtime.mcp slugs", () => {
+		const document: PipelineDocumentV3 = {
+			...structuredClone(minimalDocument),
+			stages: {
+				...minimalDocument.stages,
+				start: stage({
+					runtime: {
+						kind: "agent",
+						prompt: "p",
+						prepareRepository: "none",
+						includePolicy: false,
+						plugins: [],
+						mcp: ["securitycontext", "custom-tools"],
+					},
+				}),
+			},
+		};
+		const { document: parsed, diagnostics } = parsePipelineDocumentV3(
+			serializePipelineDocumentV3(document),
+		);
+		expect(diagnostics).toEqual([]);
+		expect(parsed?.stages.start?.runtime.mcp).toEqual([
+			"securitycontext",
+			"custom-tools",
+		]);
+	});
+
+	it("defaults messageNotification to false", () => {
+		const { document } = parsePipelineDocumentV3(
+			serializePipelineDocumentV3(minimalDocument),
+		);
+		expect(document?.stages.start?.runtime.messageNotification ?? false).toBe(
+			false,
+		);
+	});
+
+	it("rejects poll inputDelivery without the scan-runtime skill", () => {
+		const document: PipelineDocumentV3 = {
+			...structuredClone(minimalDocument),
+			stages: {
+				...minimalDocument.stages,
+				start: stage({
+					runtime: {
+						kind: "agent",
+						prompt: "p",
+						prepareRepository: "none",
+						includePolicy: false,
+						plugins: [],
+						inputDelivery: "poll",
+						skills: [],
+					},
+				}),
+			},
+		};
+		const diagnostics = collectPipelineDiagnostics(document);
+		expect(
+			diagnostics.some((d) => d.code === "stage.poll_requires_scan_runtime"),
+		).toBe(true);
+	});
+
 	it("rejects goalPreserving on a non-persistent stage", () => {
 		const document: PipelineDocumentV3 = {
 			...structuredClone(minimalDocument),

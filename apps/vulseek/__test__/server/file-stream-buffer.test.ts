@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	clearFileStreamBuffer,
+	clipLatestText,
 	getFileStreamBuffer,
 } from "@/server/utils/file-stream-buffer";
 
@@ -13,6 +14,14 @@ afterEach(async () => {
 	await Promise.all(
 		tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
 	);
+});
+
+describe("clipLatestText", () => {
+	it("keeps the latest window and drops a split first line", () => {
+		expect(clipLatestText("abc", 10)).toBe("abc");
+		expect(clipLatestText("keep-me\n", 8)).toBe("keep-me\n");
+		expect(clipLatestText("old-line\nnew-line\n", 10)).toBe("new-line\n");
+	});
 });
 
 describe("FileStreamBuffer", () => {
@@ -56,6 +65,21 @@ describe("FileStreamBuffer", () => {
 			},
 		]);
 		unsubscribe();
+		clearFileStreamBuffer(filePath);
+	});
+
+	it("keeps only the latest window when maxContentChars is set", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "file-stream-buffer-"));
+		tempDirs.push(dir);
+		const filePath = path.join(dir, "session.jsonl");
+		await writeFile(filePath, "old-record\nkeep-me\n");
+		const buffer = getFileStreamBuffer(filePath, {
+			pollIntervalMs: 60_000,
+			maxContentChars: 10,
+		});
+		const snapshot = await buffer.getSnapshot();
+		expect(snapshot.content).toBe("keep-me\n");
+		expect(snapshot.offset).toBeGreaterThan(snapshot.content.length);
 		clearFileStreamBuffer(filePath);
 	});
 });

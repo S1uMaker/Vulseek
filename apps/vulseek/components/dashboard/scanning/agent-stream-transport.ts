@@ -1,7 +1,7 @@
 export type AgentStreamMetadata = {
 	taskId: string;
 	scanJobId: string;
-	provider: "codex" | "claude-code";
+	provider: "codex" | "claude-code" | "grok";
 	threadId: string | null;
 	status: string;
 };

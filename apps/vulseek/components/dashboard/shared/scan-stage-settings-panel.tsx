@@ -52,7 +52,7 @@ import {
 type AgentProfileOption = {
 	agentProfileId: string;
 	name: string;
-	provider?: "codex" | "claude_code" | string;
+	provider?: "codex" | "claude_code" | "grok_build" | string;
 	isEnabled: boolean;
 };
 

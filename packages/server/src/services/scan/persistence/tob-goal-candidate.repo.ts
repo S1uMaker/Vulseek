@@ -12,6 +12,7 @@ export const upsertTobGoalCandidateRepo = async (input: {
 	candidateId: string;
 	huntGoalId: string;
 	huntTaskId?: string | null;
+	messageId?: string | null;
 	status?: string;
 	title: string;
 	summary?: string;
@@ -25,6 +26,7 @@ export const upsertTobGoalCandidateRepo = async (input: {
 			candidateId: input.candidateId,
 			huntGoalId: input.huntGoalId,
 			huntTaskId: input.huntTaskId ?? null,
+			messageId: input.messageId ?? null,
 			status: input.status ?? "discovered",
 			title: input.title,
 			summary: input.summary ?? "",
@@ -37,6 +39,7 @@ export const upsertTobGoalCandidateRepo = async (input: {
 			set: {
 				huntGoalId: input.huntGoalId,
 				huntTaskId: input.huntTaskId ?? null,
+				messageId: input.messageId ?? null,
 				status: input.status ?? "discovered",
 				title: input.title,
 				summary: input.summary ?? "",

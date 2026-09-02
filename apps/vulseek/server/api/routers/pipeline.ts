@@ -44,6 +44,7 @@ import {
 	listPipelineProfilesForOrganization,
 	updatePipelineProfileForOrganization,
 } from "@vulseek/server/services/pipeline-profiles";
+import { listMcpServers } from "@vulseek/server/services/mcp";
 import { createPipelineRun } from "@vulseek/server/services/scan/api/pipeline-runs";
 import { listAvailableAgentSkills } from "@vulseek/server/services/scan/runtime/available-skills";
 
@@ -164,10 +165,15 @@ export const pipelineRouter = createTRPCRouter({
 	 * Skills come from agents/skills/<name>/SKILL.md.
 	 * Plugins and effects are the server-registered safe lists from the V3 contract.
 	 */
-	runtimeCatalog: protectedProcedure.query(async () => {
+	runtimeCatalog: protectedProcedure.query(async ({ ctx }) => {
+		const servers = await listMcpServers(ctx.session.activeOrganizationId);
 		return {
 			agentProfiles: [],
 			skills: await listAvailableAgentSkills(),
+			mcp: servers.map((server) => ({
+				name: server.slug,
+				description: server.name,
+			})),
 			plugins: ["research-track", "research-deadline"],
 			effects: [
 				"sync-candidates",

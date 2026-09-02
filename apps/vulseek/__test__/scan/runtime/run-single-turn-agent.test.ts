@@ -1,15 +1,69 @@
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import {
+	buildAgentProfileHomeDirName,
 	buildCodexConfigToml,
+	buildGrokConfigToml,
+	buildJobAgentHomePathInContainer,
+	buildJobAgentHomePathOnHost,
 	buildResearchContainerEnvPairs,
 	buildStructuredOutputPromptSuffix,
+	mapClaudeReasoningEffort,
+	mapClaudeSettingsEffort,
+	mapGrokReasoningEffort,
 	remapScanContextAppPathToHost,
 	requireResearchDatabaseContext,
 } from "../../../../../packages/server/src/services/scan/runtime/run-single-turn-agent";
 
 const schema = z.object({
 	value: z.string(),
+});
+
+describe("agent profile home paths", () => {
+	test("uses a sanitized profile name plus id so different agents do not share a home", () => {
+		const grok = {
+			agentProfileId: "WL4xmdq-foiJk8mWYsm3X",
+			name: "grok-4.5[zdk]",
+		};
+		const codex = {
+			agentProfileId: "SvNUmboLzDgMU-Jqc77mM",
+			name: "GPT-5.6-luna[zdk]",
+		};
+		expect(buildAgentProfileHomeDirName(grok)).toBe(
+			"grok-4.5-zdk-WL4xmdq-foiJk8mWYsm3X",
+		);
+		expect(buildAgentProfileHomeDirName(codex)).toBe(
+			"GPT-5.6-luna-zdk-SvNUmboLzDgMU-Jqc77mM",
+		);
+		expect(buildAgentProfileHomeDirName(grok)).not.toBe(
+			buildAgentProfileHomeDirName(codex),
+		);
+		expect(buildAgentProfileHomeDirName(null)).toBe("default");
+	});
+
+	test("nests host and container agent homes under agent-home/<profile>", () => {
+		const grok = {
+			agentProfileId: "WL4xmdq-foiJk8mWYsm3X",
+			name: "grok-4.5[zdk]",
+		};
+		const jobId = "UJszS6zXMjRKSLPH0eYdH";
+		expect(
+			buildJobAgentHomePathOnHost(
+				`/data/jobs/${jobId}/scanning/full_scan/stages/hunter/tasks/t1`,
+				jobId,
+				grok,
+			),
+		).toBe(`/data/jobs/${jobId}/agent-home/grok-4.5-zdk-WL4xmdq-foiJk8mWYsm3X`);
+		expect(buildJobAgentHomePathInContainer(jobId, grok)).toBe(
+			`/scan-context/jobs/${jobId}/agent-home/grok-4.5-zdk-WL4xmdq-foiJk8mWYsm3X`,
+		);
+		expect(buildJobAgentHomePathInContainer(jobId, grok)).not.toBe(
+			buildJobAgentHomePathInContainer(jobId, {
+				agentProfileId: "SvNUmboLzDgMU-Jqc77mM",
+				name: "GPT-5.6-luna[zdk]",
+			}),
+		);
+	});
 });
 
 describe("remapScanContextAppPathToHost", () => {
@@ -34,29 +88,30 @@ describe("remapScanContextAppPathToHost", () => {
 });
 
 describe("buildStructuredOutputPromptSuffix", () => {
-	test("uses stable task output paths for non-routed stages", () => {
+	test("describes output submission for non-routed stages", () => {
 		const suffix = buildStructuredOutputPromptSuffix(
-			schema,
 			"/task/output.schema.json",
-			"/task/output.json",
 		);
 
-		expect(suffix).toMatch(/read \/task\/output\.schema\.json/);
-		expect(suffix).toMatch(/output-validator\/validate_output\.py/);
-		expect(suffix).toMatch(/Write the final result only to \/task\/output\.json/);
-		expect(suffix).toMatch(/no dynamic route; set route=null/);
+		expect(suffix).toMatch(/Read \/task\/output\.schema\.json/);
+		expect(suffix).toMatch(/submit-message/);
+		expect(suffix).toMatch(/OUTPUT SUBMISSION/);
+		expect(suffix).toMatch(/output data schema/);
+		expect(suffix).toMatch(/multiple times/);
+		expect(suffix).toMatch(/schema-compatible empty object or array/);
+		expect(suffix).not.toMatch(/validate-output/);
+		expect(suffix).not.toMatch(
+			/Runtime output protocol \(generated; do not duplicate/,
+		);
+		expect(suffix).not.toMatch(/Do not write `?\/?task\/output\.json/);
+		expect(suffix).not.toMatch(/output-validator/);
 		expect(suffix).not.toMatch(/\/scan-context\//);
 		expect(suffix).not.toMatch(/\/workspace\/repo/);
-		expect(suffix).toMatch(
-			/If validation fails, fix the files[\s\S]*End the turn only after it succeeds\./,
-		);
 	});
 
-	test("keeps dynamic route instructions with stable task paths", () => {
+	test("includes dynamic route keys and descriptions", () => {
 		const suffix = buildStructuredOutputPromptSuffix(
-			schema,
 			"/task/output.schema.json",
-			"/task/output.json",
 			[
 				{
 					routeKey: "build",
@@ -72,8 +127,8 @@ describe("buildStructuredOutputPromptSuffix", () => {
 			],
 		);
 
-		expect(suffix).toMatch(/Write the final result only to \/task\/output\.json/);
-		expect(suffix).toMatch(/Choose exactly one route key below/);
+		expect(suffix).toMatch(/submit-message/);
+		expect(suffix).toMatch(/specific downstream stage/);
 		expect(suffix).toMatch(/- build \(default\): Build a fuzzer/);
 		expect(suffix).toMatch(/- critic: Criticize analysis/);
 		expect(suffix).not.toMatch(/\/scan-context\//);
@@ -107,6 +162,7 @@ describe("buildCodexConfigToml", () => {
 		expect(config).toContain("[shell_environment_policy]");
 		expect(config).toContain('inherit = "all"');
 		expect(config).toContain("ignore_default_excludes = true");
+		expect(config).toContain('mcp_oauth_credentials_store = "file"');
 	});
 
 	test("keeps the configured API-key provider for API-key credentials", () => {
@@ -118,15 +174,62 @@ describe("buildCodexConfigToml", () => {
 	});
 });
 
+describe("buildGrokConfigToml", () => {
+	test("writes GROK_HOME config with xAI model and always-approve", () => {
+		const config = buildGrokConfigToml({
+			...codexProfile("api_key"),
+			provider: "grok_build",
+			baseUrl: "https://api.x.ai/v1",
+			model: "grok-4.6",
+			thinkingLevel: "xhigh",
+		});
+		expect(config).toContain('default = "grok-4.6"');
+		expect(config).toContain('default_reasoning_effort = "xhigh"');
+		expect(config).toContain('[model."grok-4.6"]');
+		expect(config).toContain('base_url = "https://api.x.ai/v1"');
+		expect(config).toContain('env_key = "XAI_API_KEY"');
+		expect(config).toContain('permission_mode = "always-approve"');
+		expect(config).not.toContain("sk-");
+	});
+
+	test("maps thinking levels onto grok reasoning effort", () => {
+		expect(mapGrokReasoningEffort("medium")).toBe("medium");
+		expect(mapGrokReasoningEffort("extra-high")).toBe("xhigh");
+		expect(mapGrokReasoningEffort("unknown")).toBe("high");
+	});
+});
+
+describe("mapClaudeReasoningEffort", () => {
+	test("maps profile thinking levels onto Claude ACP effort", () => {
+		expect(mapClaudeReasoningEffort("medium")).toBe("medium");
+		expect(mapClaudeReasoningEffort("minimal")).toBe("low");
+		expect(mapClaudeReasoningEffort("extra-high")).toBe("xhigh");
+		expect(mapClaudeReasoningEffort("max")).toBe("max");
+		expect(mapClaudeReasoningEffort("")).toBeNull();
+		expect(mapClaudeReasoningEffort(null)).toBeNull();
+		expect(mapClaudeReasoningEffort("unknown")).toBe("high");
+	});
+
+	test("persists max as xhigh in Claude settings.json", () => {
+		expect(mapClaudeSettingsEffort("max")).toBe("xhigh");
+		expect(mapClaudeSettingsEffort("medium")).toBe("medium");
+	});
+});
+
 describe("buildScanRuntimeApiEnvPairs", () => {
 	test("injects API URL, job token, and scan job id", async () => {
 		const { buildScanRuntimeApiEnvPairs } = await import(
 			"../../../../../packages/server/src/services/scan/runtime/scan-runtime-api-auth"
 		);
-		const pairs = buildScanRuntimeApiEnvPairs("job-a", "task-a", "orchestrator", {
-			VULSEEK_RUNTIME_API_SECRET: "secret",
-			VULSEEK_SERVICE_NAME: "vulseek-dev",
-		});
+		const pairs = buildScanRuntimeApiEnvPairs(
+			"job-a",
+			"task-a",
+			"orchestrator",
+			{
+				VULSEEK_RUNTIME_API_SECRET: "secret",
+				VULSEEK_SERVICE_NAME: "vulseek-dev",
+			},
+		);
 		expect(pairs).toEqual([
 			"VULSEEK_RUNTIME_API_URL=http://vulseek-dev:3000",
 			expect.stringMatching(/^VULSEEK_RUNTIME_TOKEN=[0-9a-f]{64}$/),

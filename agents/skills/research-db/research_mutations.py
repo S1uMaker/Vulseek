@@ -73,6 +73,7 @@ ENTITY_SPECS = {
             "scanJobId",
             "trackId",
             "producerTaskId",
+            "messageId",
             "content",
             "status",
             "latestValidationVerdict",
@@ -86,6 +87,7 @@ ENTITY_SPECS = {
         {
             "trackId",
             "producerTaskId",
+            "messageId",
             "content",
             "status",
             "latestValidationVerdict",

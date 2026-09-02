@@ -23,6 +23,7 @@ const makeSnapshot = (
 	activeTasksByStage: new Map(),
 	pendingTargets: [],
 	pendingTaskMetadata: [],
+	pendingMessageCountBySourceStage: new Map(),
 	stagePolicies: new Map(),
 	statusCounts: [],
 	...input,
@@ -126,6 +127,7 @@ test("fan-out stages are pollable only below their concurrency limit", () => {
 		getPollableStageNames(
 			makeSnapshot({
 				pendingTargets,
+				pendingMessageCountBySourceStage: new Map([[stageName, 8]]),
 				stagePolicies: new Map([[stageName, policy]]),
 			}),
 		),
@@ -136,6 +138,7 @@ test("fan-out stages are pollable only below their concurrency limit", () => {
 			makeSnapshot({
 				activeCountByStage: new Map([[stageName, 8]]),
 				pendingTargets,
+				pendingMessageCountBySourceStage: new Map([[stageName, 8]]),
 				stagePolicies: new Map([[stageName, policy]]),
 			}),
 		),

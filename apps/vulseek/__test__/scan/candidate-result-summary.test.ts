@@ -2,7 +2,7 @@ import { buildCandidateResultSummary } from "@vulseek/server/services/scan/persi
 import { describe, expect, it } from "vitest";
 
 describe("candidate result summary", () => {
-	it("counts candidates without projections without inventing result nodes", () => {
+	it("counts candidates without stage results without inventing result nodes", () => {
 		const summary = buildCandidateResultSummary([
 			{
 				analysisResult: null,

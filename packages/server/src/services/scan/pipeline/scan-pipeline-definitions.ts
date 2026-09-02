@@ -21,8 +21,13 @@ const stageRuntimeConfigSchema = z
 		nullableOutput: z.boolean().nullable().optional(),
 		cwd: z.string().min(1).nullable().optional(),
 		skills: z.array(z.string().min(1)).nullable().optional(),
+		mcp: z.array(z.string().min(1)).nullable().optional(),
 		prompt: z.string().nullable().optional(),
 		promptFile: z.string().min(1).nullable().optional(),
+		inputDelivery: z.enum(["prompt", "poll"]).optional(),
+		pollPrompt: z.string().min(1).nullable().optional(),
+		messageNotification: z.boolean().optional(),
+		outputSuffix: z.enum(["include", "omit"]).optional(),
 		inputArtifacts: z.record(z.unknown()).nullable().optional(),
 		outputSchema: z.record(z.unknown()).nullable().optional(),
 		prepareRepository: z.boolean().default(false),
@@ -232,8 +237,13 @@ export type ScanStageRuntimeConfig = {
 	nullableOutput: boolean | null;
 	cwd: string | null;
 	skills: string[] | null;
+	mcp: string[] | null;
 	prompt: string | null;
 	promptFile: string | null;
+	inputDelivery?: "prompt" | "poll";
+	pollPrompt?: string | null;
+	messageNotification?: boolean;
+	outputSuffix?: "include" | "omit";
 	inputArtifacts: Record<string, unknown> | null;
 	outputSchema: Record<string, unknown> | null;
 	prepareRepository?: boolean;
@@ -628,8 +638,15 @@ const normalizeStageRuntimeConfig = (
 	nullableOutput: config.nullableOutput ?? null,
 	cwd: config.cwd ?? null,
 	skills: config.skills ?? null,
+	mcp: config.mcp ?? null,
 	prompt: config.prompt ?? null,
 	promptFile: config.promptFile ?? null,
+	...(config.inputDelivery ? { inputDelivery: config.inputDelivery } : {}),
+	...(config.pollPrompt ? { pollPrompt: config.pollPrompt } : {}),
+	...(config.messageNotification
+		? { messageNotification: true }
+		: {}),
+	outputSuffix: config.outputSuffix === "omit" ? "omit" : "include",
 	inputArtifacts: config.inputArtifacts ?? null,
 	outputSchema: config.outputSchema ?? null,
 	prepareRepository: config.prepareRepository ?? false,
@@ -1240,6 +1257,7 @@ export const createStageRuntimeConfigWithDeps = (input: {
 			(await loadRuntimeConfig())?.nullableOutput ?? null,
 		getCwd: async () => (await loadRuntimeConfig())?.cwd ?? null,
 		getSkills: async () => (await loadRuntimeConfig())?.skills ?? [],
+		getMcp: async () => (await loadRuntimeConfig())?.mcp ?? [],
 		getPrompt: async () => {
 			const runtimeConfig = await loadRuntimeConfig();
 			if (runtimeConfig?.prompt?.trim()) {

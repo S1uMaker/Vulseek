@@ -49,8 +49,13 @@ const runtimeSchema = z.object({
 	nullableOutput: z.boolean().nullable().optional(),
 	cwd: z.string().min(1).nullable().optional(),
 	skills: z.array(z.string().min(1)).nullable().optional(),
+	mcp: z.array(z.string().min(1)).nullable().optional(),
 	prompt: z.string().nullable().optional(),
 	promptFile: z.string().min(1).nullable().optional(),
+	inputDelivery: z.enum(["prompt", "poll"]).optional().default("prompt"),
+	pollPrompt: z.string().min(1).nullable().optional(),
+	messageNotification: z.boolean().optional(),
+	outputSuffix: z.enum(["include", "omit"]).optional(),
 	prepareRepository: z.boolean().optional().default(false),
 	/** When true, append Security Policy file path instruction to the agent prompt. */
 	includePolicy: z.boolean().optional().default(false),

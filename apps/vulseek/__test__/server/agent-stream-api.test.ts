@@ -25,12 +25,18 @@ vi.mock("@vulseek/server", () => ({
 	},
 }));
 
-vi.mock("@/server/utils/file-stream-buffer", () => ({
-	getFileStreamBuffer: () => ({
-		getSnapshot: mocks.getSnapshot,
-		subscribe: mocks.subscribe,
-	}),
-}));
+vi.mock("@/server/utils/file-stream-buffer", async (importOriginal) => {
+	const actual = await importOriginal<
+		typeof import("@/server/utils/file-stream-buffer")
+	>();
+	return {
+		...actual,
+		getFileStreamBuffer: () => ({
+			getSnapshot: mocks.getSnapshot,
+			subscribe: mocks.subscribe,
+		}),
+	};
+});
 
 import handler from "@/pages/api/scan/tasks/[taskId]/agent-stream";
 
@@ -218,6 +224,43 @@ describe("task AgentStream SSE", () => {
 		]);
 		expect(writes.join("")).toContain("source_unavailable");
 		expect(response.writableEnded).toBe(true);
+	});
+
+	it("sends only the latest transcript window and latest prompts", async () => {
+		const latestLine = `${JSON.stringify({ type: "item", id: "latest" })}\n`;
+		const transcript = `HEAD_MARKER\n${"x".repeat(600_000)}\n${latestLine}`;
+		const prompts = Array.from({ length: 40 }, (_, index) => ({
+			type: "vulseek_prompt",
+			promptId: `prompt-${String(index + 1).padStart(3, "0")}`,
+			taskId: "task-1",
+			sessionId: "thread-1",
+			turnIndex: index + 1,
+			timestamp: "2026-08-24T00:00:00.000Z",
+			text: `prompt-${String(index + 1).padStart(3, "0")}`,
+		}));
+		let snapshotCalls = 0;
+		mocks.getSnapshot.mockImplementation(async () => {
+			snapshotCalls += 1;
+			if (snapshotCalls === 1) {
+				return { content: transcript, offset: transcript.length };
+			}
+			return {
+				content: `${prompts.map((prompt) => JSON.stringify(prompt)).join("\n")}\n`,
+				offset: 1,
+			};
+		});
+		const { request, close } = makeRequest();
+		const { response, writes } = makeResponse();
+
+		await handler(request as never, response as never);
+		const payload = writes.join("");
+		expect(payload).toContain("latest");
+		expect(payload).not.toContain("HEAD_MARKER");
+		expect(payload).toContain("prompt-040");
+		expect(payload).not.toContain("prompt-001");
+		expect(payload).toContain('"truncated":true');
+		expect(payload).toContain('"length":30');
+		close();
 	});
 
 	it("re-sends a full snapshot for each reconnect", async () => {

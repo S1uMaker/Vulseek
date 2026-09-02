@@ -21,8 +21,9 @@ export type CandidateSyncDeps = {
 	upsertCandidates: (
 		candidates: PersistedVulnerabilityCandidateInput[],
 	) => Promise<void>;
-	deleteStaleCandidatesForProducerTask: (input: {
+	deleteStaleCandidatesForMessage: (input: {
 		producerTaskId: string;
+		messageId: string;
 		keepCandidateIds: string[];
 	}) => Promise<void>;
 };
@@ -41,10 +42,12 @@ const toPersistedCandidate = (
 	task: Task,
 	producerStageName: CandidateProducerStageName,
 	candidate: Candidate,
+	messageId: string,
 ): PersistedVulnerabilityCandidateInput => ({
 	vulnerabilityCandidateId: candidate.id,
 	scanJobId: task.scanJobId,
 	producerTaskId: task.taskId,
+	messageId,
 	producerStageName,
 	functionId: candidate.functionId,
 	title: candidate.title,
@@ -81,21 +84,21 @@ const parseCandidateOutput = async (
 	return candidateSchema.parse(candidate);
 };
 
-export const syncVulnerabilityCandidatesFromProducerTaskWithDeps = async (
-	taskId: string,
+export const syncVulnerabilityCandidatesFromMessageWithDeps = async (
+	input: {
+		taskId: string;
+		messageId: string;
+		output: unknown;
+	},
 	deps: CandidateSyncDeps,
 ) => {
-	const task = await deps.findTaskById(taskId);
+	const task = await deps.findTaskById(input.taskId);
 	const producerStageName = task.stageName;
 	if (!isCandidateProducerStage(producerStageName)) {
-		await deps.deleteStaleCandidatesForProducerTask({
-			producerTaskId: task.taskId,
-			keepCandidateIds: [],
-		});
 		return { synced: 0 };
 	}
 
-	const output = asRecord(task.output);
+	const output = asRecord(input.output);
 	const rawCandidates = Array.isArray(output?.candidates)
 		? output.candidates
 		: output?.candidate
@@ -107,14 +110,52 @@ export const syncVulnerabilityCandidatesFromProducerTaskWithDeps = async (
 		),
 	);
 	const persistedCandidates = candidates.map((candidate) =>
-		toPersistedCandidate(task, producerStageName, candidate),
+		toPersistedCandidate(
+			task,
+			producerStageName,
+			candidate,
+			input.messageId,
+		),
 	);
 	await deps.upsertCandidates(persistedCandidates);
-	await deps.deleteStaleCandidatesForProducerTask({
+	await deps.deleteStaleCandidatesForMessage({
 		producerTaskId: task.taskId,
+		messageId: input.messageId,
 		keepCandidateIds: persistedCandidates.map(
 			(candidate) => candidate.vulnerabilityCandidateId,
 		),
 	});
 	return { synced: persistedCandidates.length };
+};
+
+export const syncVulnerabilityCandidatesFromProducerTaskWithDeps = async (
+	taskId: string,
+	deps: CandidateSyncDeps & {
+		getOutput?: (task: Task) => Promise<unknown> | unknown;
+		getMessageId?: (task: Task) => Promise<string | null> | string | null;
+		deleteStaleCandidatesForProducerTask?: (input: {
+			producerTaskId: string;
+			keepCandidateIds: string[];
+		}) => Promise<void>;
+	},
+) => {
+	const task = await deps.findTaskById(taskId);
+	if (!isCandidateProducerStage(task.stageName)) {
+		await deps.deleteStaleCandidatesForProducerTask?.({
+			producerTaskId: task.taskId,
+			keepCandidateIds: [],
+		});
+		return { synced: 0 };
+	}
+	const rawOutput = deps.getOutput ? await deps.getOutput(task) : null;
+	const messageId = deps.getMessageId
+		? await deps.getMessageId(task)
+		: null;
+	if (!messageId) {
+		return { synced: 0 };
+	}
+	return syncVulnerabilityCandidatesFromMessageWithDeps(
+		{ taskId, messageId, output: rawOutput },
+		deps,
+	);
 };

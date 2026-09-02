@@ -22,6 +22,7 @@ export type HomeOverviewRunningJob = {
 	title: string;
 	target: string;
 	targetKind: "application" | "compose";
+	pipelineProfileName: string | null;
 	projectId: string;
 	environmentId: string;
 	serviceId: string;
@@ -64,6 +65,7 @@ export type OverviewJobRow = {
 	createdAt: string;
 	target: string;
 	targetKind: "application" | "compose";
+	pipelineProfileName: string | null;
 	projectId: string;
 	environmentId: string;
 	serviceId: string;
@@ -189,7 +191,9 @@ export const buildHomeOverviewFromRows = (input: {
 	const runningContainerCountByScanJobId = new Map<string, Set<string>>();
 	let securityIssueCount = 0;
 	for (const task of input.tasks) {
-		const activity = activityByDate.get(dateByScanJobId.get(task.scanJobId) || "");
+		const activity = activityByDate.get(
+			dateByScanJobId.get(task.scanJobId) || "",
+		);
 		if (activity) {
 			activity.taskCount += 1;
 		}
@@ -228,9 +232,7 @@ export const buildHomeOverviewFromRows = (input: {
 
 	const runningJobs = input.jobs
 		.filter(
-			(
-				job,
-			): job is OverviewJobRow & { status: "pending" | "running" } =>
+			(job): job is OverviewJobRow & { status: "pending" | "running" } =>
 				job.status === "pending" || job.status === "running",
 		)
 		.map((job) => {
@@ -245,6 +247,7 @@ export const buildHomeOverviewFromRows = (input: {
 				title: job.title,
 				target: job.target,
 				targetKind: job.targetKind,
+				pipelineProfileName: job.pipelineProfileName?.trim() || null,
 				projectId: job.projectId,
 				environmentId: job.environmentId,
 				serviceId: job.serviceId,
@@ -256,7 +259,10 @@ export const buildHomeOverviewFromRows = (input: {
 				href,
 			};
 		})
-		.sort((left, right) => parseDateMs(right.createdAt) - parseDateMs(left.createdAt));
+		.sort(
+			(left, right) =>
+				parseDateMs(right.createdAt) - parseDateMs(left.createdAt),
+		);
 
 	return {
 		projectCount: input.projectCount,

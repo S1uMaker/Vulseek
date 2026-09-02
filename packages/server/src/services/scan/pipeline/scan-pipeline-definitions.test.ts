@@ -356,12 +356,14 @@ pipelines:
 		nullableOutput: false,
 		cwd: "/workspace/repo",
 		skills: ["repo-profiler"],
+		mcp: null,
 		prompt: "Profile the repository.\n",
 		promptFile: null,
 		inputArtifacts: null,
 		outputSchema: null,
 		prepareRepository: false,
 		includePolicy: false,
+		outputSuffix: "include",
 	});
 	assert.equal(definitions.schemas.Module?.type, "object");
 	assert.deepEqual(definitions.stages[0]?.outputSchema, {

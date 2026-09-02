@@ -84,6 +84,8 @@ export const createStageRuntimeConfig = (
 				(stage) => stage.skills,
 				legacyConfig.getSkills,
 			),
+		getMcp: async () =>
+			await fromCompiledOrLegacy((stage) => stage.mcp, legacyConfig.getMcp),
 		getPrompt: async () =>
 			await fromCompiledOrLegacy(
 				(stage) => stage.prompt,

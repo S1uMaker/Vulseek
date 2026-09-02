@@ -12,13 +12,14 @@ import {
 import { taskArtifactHostPath } from "./scan/artifacts/task-artifact-paths";
 import { inspectRequiredToolsImageReference } from "./scan/checkout-tools";
 import { findScanJobByIdRepo } from "./scan/persistence/scan-job.repo";
+import { findMessageByIdRepo } from "./scan/persistence/message.repo";
 import {
 	findTaskByIdRepo,
 	listTasksByScanJobIdRepo,
 } from "./scan/persistence/task.repo";
 import {
-	buildJobAgentHomePathOnHost,
 	removeContainer,
+	resolveJobRootFromRuntimeDir,
 	runSingleTurnAgentInContainer,
 	startContainer,
 } from "./scan/runtime/run-single-turn-agent";
@@ -59,7 +60,7 @@ const scoringTimeoutMs = () => {
 };
 
 const resolveJobRoot = (taskDir: string, scanJobId: string) =>
-	path.dirname(buildJobAgentHomePathOnHost(taskDir, scanJobId));
+	resolveJobRootFromRuntimeDir(taskDir, scanJobId);
 
 const resolveProfileHostDir = (projectName: string, serviceName: string) => {
 	const scanContextHostRoot =
@@ -160,7 +161,14 @@ const copyJobOutputArtifacts = async (input: {
 	const prepared: PreparedJobOutput[] = [];
 	const outputTasks = [];
 	for (const [outputIndex, output] of input.outputs.entries()) {
-		const task = await findTaskByIdRepo(output.taskId);
+		const { findMessageByIdRepo } = await import(
+			"./scan/persistence/message.repo"
+		);
+		const taskOutput = await findMessageByIdRepo(output.messageId);
+		if (!taskOutput) {
+			throw new Error(`Job output Message ${output.messageId} not found`);
+		}
+		const task = await findTaskByIdRepo(taskOutput.sourceTaskId);
 		if (task.scanJobId !== input.scanJobId) {
 			throw new Error(
 				`Job output task ${task.taskId} does not belong to scan ${input.scanJobId}`,
@@ -210,7 +218,7 @@ const copyJobOutputArtifacts = async (input: {
 			}
 			const outputDirectory = `${String(outputIndex).padStart(4, "0")}-${sanitizePathPart(
 				output.stageName,
-			)}-${sanitizePathPart(output.taskId).slice(0, 12)}`;
+			)}-${sanitizePathPart(output.messageId).slice(0, 12)}`;
 			const targetRelativePath = path.join(
 				"inputs",
 				"job-outputs",
@@ -229,7 +237,7 @@ const copyJobOutputArtifacts = async (input: {
 			});
 		}
 		prepared.push({
-			taskId: output.taskId,
+			taskId: task.taskId,
 			stageName: output.stageName,
 			artifacts: output.artifacts.map((artifact) => artifact.path),
 			localArtifacts,
@@ -349,7 +357,7 @@ export const scoreDatasetEvaluationTrial = async (input: {
 	const outputs = selectScorableJobOutputs([...scanJob.outputs]).sort(
 		(left, right) =>
 			left.stageName.localeCompare(right.stageName) ||
-			left.taskId.localeCompare(right.taskId),
+			left.messageId.localeCompare(right.messageId),
 	);
 	if (outputs.length === 0) {
 		throw new Error("Scan Job produced no Job output artifacts to score");
@@ -357,7 +365,13 @@ export const scoreDatasetEvaluationTrial = async (input: {
 
 	const projectName = `dataset-${runtime.dataset.datasetId}`;
 	const serviceName = `${runtime.profile.profileId}-${runtime.sample.id}`;
-	const firstTask = await findTaskByIdRepo(outputs[0]!.taskId);
+	const firstOutput = await findMessageByIdRepo(outputs[0]!.messageId);
+	if (!firstOutput) {
+		throw new Error(
+			`Job output Message ${outputs[0]!.messageId} not found`,
+		);
+	}
+	const firstTask = await findTaskByIdRepo(firstOutput.sourceTaskId);
 	const firstTaskDir = await resolveTaskRuntimeDirForTask({
 		scanJobId: input.scanJobId,
 		projectName,

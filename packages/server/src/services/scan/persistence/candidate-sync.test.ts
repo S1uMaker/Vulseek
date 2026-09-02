@@ -3,21 +3,49 @@ import test from "node:test";
 import {
 	type PersistedVulnerabilityCandidateInput,
 	syncVulnerabilityCandidatesFromProducerTaskWithDeps,
+	syncVulnerabilityCandidatesFromMessageWithDeps,
 } from "./candidate-sync";
 import type { Task } from "../types";
 
+const producerOutput = {
+	candidates: [
+		{
+			id: "candidate-1",
+			functionId: "parse_request",
+			title: "Unchecked redirect URI",
+			description: "OAuth redirect URI is accepted without HTTPS.",
+			filePath: "app/oauth.ts",
+			line: 42,
+			vulnerabilityType: "oauth",
+			confidence: 0.8,
+			score: 8,
+			claim: "HTTP redirect URI can be registered.",
+			rootCauseKey: "oauth-redirect-http",
+			targetId: "target-1",
+			targetKind: "function",
+			evidence: [],
+			attackerControl: "redirect_uri parameter",
+			affectedSink: "OAuth callback registration",
+			preconditions: ["attacker can create an OAuth integration"],
+			quickDisproofAttempt: "checked registration validation",
+			needsFuzzing: false,
+			needsManualAnalysis: true,
+		},
+		"/task/candidates/candidate-2.json",
+	],
+};
+
 const makeProducerTask = (overrides?: Partial<Task>): Task => ({
 	taskId: "producer-1",
-		scanJobId: "scan-job-1",
-		vulnerabilityCandidateId: null,
-	parentTaskId: null,
+	scanJobId: "scan-job-1",
 	name: "Scan Target",
 	stageName: "scan-target",
+	lifecycle: "turn",
 	status: "completed",
-	downstreamDispatchStatus: "completed",
-	downstreamRouteKey: null,
-	downstreamDispatchedAt: null,
-	dispatchKey: null,
+	sourceMessageId: null,
+	sourceEdgeName: null,
+	sourceItemIndex: null,
+	rerunOfTaskId: null,
 	priority: null,
 	attempt: 0,
 	agentProfile: null,
@@ -26,36 +54,7 @@ const makeProducerTask = (overrides?: Partial<Task>): Task => ({
 	threadId: null,
 	runtimeMode: "new_session",
 	forkedFromTaskId: null,
-	forkedFromThreadId: null,
 	stageGroupInstanceId: null,
-	input: null,
-	output: {
-		candidates: [
-			{
-				id: "candidate-1",
-				functionId: "parse_request",
-				title: "Unchecked redirect URI",
-				description: "OAuth redirect URI is accepted without HTTPS.",
-				filePath: "app/oauth.ts",
-				line: 42,
-				vulnerabilityType: "oauth",
-				confidence: 0.8,
-				score: 8,
-				claim: "HTTP redirect URI can be registered.",
-				rootCauseKey: "oauth-redirect-http",
-				targetId: "target-1",
-				targetKind: "function",
-				evidence: [],
-				attackerControl: "redirect_uri parameter",
-				affectedSink: "OAuth callback registration",
-				preconditions: ["attacker can create an OAuth integration"],
-				quickDisproofAttempt: "checked registration validation",
-				needsFuzzing: false,
-				needsManualAnalysis: true,
-			},
-			"/task/candidates/candidate-2.json",
-		],
-	},
 	inputTokens: null,
 	outputTokens: null,
 	thoughtTokens: null,
@@ -64,8 +63,6 @@ const makeProducerTask = (overrides?: Partial<Task>): Task => ({
 	cachedWriteTokens: null,
 	estimatedCost: null,
 	errorMessage: null,
-	exitReason: null,
-	exitNote: null,
 	startedAt: "2026-07-07T01:00:00.000Z",
 	completedAt: "2026-07-07T01:05:00.000Z",
 	createdAt: "2026-07-07T01:00:00.000Z",
@@ -78,8 +75,12 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps upserts parsed candida
 	const deleted: string[] = [];
 	const task = makeProducerTask();
 
-	const result = await syncVulnerabilityCandidatesFromProducerTaskWithDeps(
-		task.taskId,
+	const result = await syncVulnerabilityCandidatesFromMessageWithDeps(
+		{
+			taskId: task.taskId,
+			messageId: "to-1",
+			output: producerOutput,
+		},
 		{
 			findTaskById: async () => task,
 			readTaskJsonArtifact: async (_task, containerPath) => {
@@ -108,8 +109,9 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps upserts parsed candida
 			upsertCandidates: async (candidates) => {
 				upserted.push(...candidates);
 			},
-			deleteStaleCandidatesForProducerTask: async (input) => {
+			deleteStaleCandidatesForMessage: async (input) => {
 				assert.equal(input.producerTaskId, "producer-1");
+				assert.equal(input.messageId, "to-1");
 				deleted.push(...input.keepCandidateIds);
 			},
 		},
@@ -121,17 +123,20 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps upserts parsed candida
 		upserted.map((candidate) => ({
 			vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
 			producerTaskId: candidate.producerTaskId,
+			messageId: candidate.messageId,
 			producerStageName: candidate.producerStageName,
 		})),
 		[
 			{
 				vulnerabilityCandidateId: "candidate-1",
 				producerTaskId: "producer-1",
+				messageId: "to-1",
 				producerStageName: "scan-target",
 			},
 			{
 				vulnerabilityCandidateId: "candidate-2",
 				producerTaskId: "producer-1",
+				messageId: "to-1",
 				producerStageName: "scan-target",
 			},
 		],
@@ -143,7 +148,6 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps clears stale rows for 
 	const task = makeProducerTask({
 		taskId: "analysis-1",
 		stageName: "analyze-finding",
-		output: null,
 	});
 	let upsertCalled = false;
 	let deletedProducerTaskId = "";
@@ -153,11 +157,15 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps clears stale rows for 
 		task.taskId,
 		{
 			findTaskById: async () => task,
+			getOutput: () => null,
 			readTaskJsonArtifact: async () => {
 				throw new Error("non-producer task should not read artifacts");
 			},
 			upsertCandidates: async () => {
 				upsertCalled = true;
+			},
+			deleteStaleCandidatesForMessage: async () => {
+				throw new Error("non-producer should not delete by Message");
 			},
 			deleteStaleCandidatesForProducerTask: async (input) => {
 				deletedProducerTaskId = input.producerTaskId;
@@ -173,16 +181,19 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps clears stale rows for 
 });
 
 test("syncVulnerabilityCandidatesFromProducerTaskWithDeps deletes stale rows when producer output has no candidates", async () => {
-	const task = makeProducerTask({
-		output: {
-			candidates: [],
-		},
-	});
-	const deleted: Array<{ producerTaskId: string; keepCandidateIds: string[] }> =
-		[];
+	const task = makeProducerTask();
+	const deleted: Array<{
+		producerTaskId: string;
+		messageId: string;
+		keepCandidateIds: string[];
+	}> = [];
 
-	const result = await syncVulnerabilityCandidatesFromProducerTaskWithDeps(
-		task.taskId,
+	const result = await syncVulnerabilityCandidatesFromMessageWithDeps(
+		{
+			taskId: task.taskId,
+			messageId: "to-empty",
+			output: { candidates: [] },
+		},
 		{
 			findTaskById: async () => task,
 			readTaskJsonArtifact: async () => {
@@ -191,7 +202,7 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps deletes stale rows whe
 			upsertCandidates: async (candidates) => {
 				assert.equal(candidates.length, 0);
 			},
-			deleteStaleCandidatesForProducerTask: async (input) => {
+			deleteStaleCandidatesForMessage: async (input) => {
 				deleted.push(input);
 			},
 		},
@@ -201,21 +212,24 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps deletes stale rows whe
 	assert.deepEqual(deleted, [
 		{
 			producerTaskId: "producer-1",
+			messageId: "to-empty",
 			keepCandidateIds: [],
 		},
 	]);
 });
 
 test("syncVulnerabilityCandidatesFromProducerTaskWithDeps accepts a single Hunter candidate", async () => {
-	const sourceOutput = makeProducerTask().output as { candidates: unknown[] };
 	const task = makeProducerTask({
 		stageName: "hunter",
-		output: { candidate: sourceOutput.candidates[0] },
 	});
 	let synced: PersistedVulnerabilityCandidateInput[] = [];
 
-	const result = await syncVulnerabilityCandidatesFromProducerTaskWithDeps(
-		task.taskId,
+	const result = await syncVulnerabilityCandidatesFromMessageWithDeps(
+		{
+			taskId: task.taskId,
+			messageId: "to-hunt",
+			output: { candidate: producerOutput.candidates[0] },
+		},
 		{
 			findTaskById: async () => task,
 			readTaskJsonArtifact: async () => {
@@ -224,7 +238,11 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps accepts a single Hunte
 			upsertCandidates: async (candidates) => {
 				synced = candidates;
 			},
-			deleteStaleCandidatesForProducerTask: async ({ keepCandidateIds }) => {
+			deleteStaleCandidatesForMessage: async ({
+				keepCandidateIds,
+				messageId,
+			}) => {
+				assert.equal(messageId, "to-hunt");
 				assert.deepEqual(keepCandidateIds, ["candidate-1"]);
 			},
 		},
@@ -232,4 +250,5 @@ test("syncVulnerabilityCandidatesFromProducerTaskWithDeps accepts a single Hunte
 
 	assert.equal(result.synced, 1);
 	assert.equal(synced[0]?.vulnerabilityCandidateId, "candidate-1");
+	assert.equal(synced[0]?.messageId, "to-hunt");
 });

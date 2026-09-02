@@ -1,4 +1,4 @@
-import { normalizeTerminalTaskFilters } from "@vulseek/server/services/scan/terminal-task-filters";
+import { normalizeTerminalTaskFilters } from "../../../../packages/server/src/services/scan/terminal-task-filters";
 import { describe, expect, it } from "vitest";
 
 describe("terminal task filters", () => {
@@ -24,6 +24,39 @@ describe("terminal task filters", () => {
 			}),
 		).toEqual({
 			stageName: "analyze-finding",
+			status: undefined,
+		});
+	});
+
+	it("passes through the current pipeline's stage ids", () => {
+		expect(
+			normalizeTerminalTaskFilters({
+				stage: "orchestrator",
+				status: "completed",
+			}),
+		).toEqual({
+			stageName: "orchestrator",
+			status: "completed",
+		});
+		expect(
+			normalizeTerminalTaskFilters({
+				stage: "hunter",
+				status: "failed",
+			}),
+		).toEqual({
+			stageName: "hunter",
+			status: "failed",
+		});
+	});
+
+	it("drops non-terminal statuses instead of filtering the finished list by them", () => {
+		expect(
+			normalizeTerminalTaskFilters({
+				stage: "hunter",
+				status: "running",
+			}),
+		).toEqual({
+			stageName: "hunter",
 			status: undefined,
 		});
 	});

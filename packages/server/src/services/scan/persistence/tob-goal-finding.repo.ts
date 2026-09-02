@@ -12,6 +12,7 @@ export const upsertTobGoalFindingRepo = async (input: {
 	findingId: string;
 	sourceCandidateId: string;
 	huntGoalId: string;
+	messageId?: string | null;
 	status?: string;
 	title: string;
 	summary?: string;
@@ -26,6 +27,7 @@ export const upsertTobGoalFindingRepo = async (input: {
 			findingId: input.findingId,
 			sourceCandidateId: input.sourceCandidateId,
 			huntGoalId: input.huntGoalId,
+			messageId: input.messageId ?? null,
 			status: input.status ?? "novel",
 			title: input.title,
 			summary: input.summary ?? "",
@@ -39,6 +41,7 @@ export const upsertTobGoalFindingRepo = async (input: {
 			set: {
 				sourceCandidateId: input.sourceCandidateId,
 				huntGoalId: input.huntGoalId,
+				messageId: input.messageId ?? null,
 				status: input.status ?? "novel",
 				title: input.title,
 				summary: input.summary ?? "",

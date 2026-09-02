@@ -1,14 +1,9 @@
 import { db } from "@vulseek/server/db";
-import { scanJobs, tasks } from "@vulseek/server/db/schema";
-import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
+import { scanJobs, messages, tasks } from "@vulseek/server/db/schema";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { resolveTerminalScanJobStatus } from "../state/scan-state-machine";
-
-const TERMINAL_TASK_STATUSES = [
-	"completed",
-	"failed",
-	"exited",
-	"canceled",
-] as const;
+import { closeOpenMessagesForJobRepo } from "./message.repo";
+import { computeScanJobSettlement } from "./message-store";
 
 export type ScanJobSettlement = {
 	rootTerminal: boolean;
@@ -18,35 +13,43 @@ export type ScanJobSettlement = {
 	failedNonRootTaskCount: number;
 };
 
+export { computeScanJobSettlement };
+
 export const getScanJobSettlementRepo = async (
 	scanJobId: string,
 ): Promise<ScanJobSettlement> => {
 	const [row] = await db
 		.select({
 			rootCount: sql<number>`count(*) filter (
-				where ${tasks.parentTaskId} is null
+				where ${tasks.sourceMessageId} is null
 			)`,
 			rootTerminalCount: sql<number>`count(*) filter (
-				where ${tasks.parentTaskId} is null
+				where ${tasks.sourceMessageId} is null
 				and ${tasks.status} in ('completed', 'failed', 'exited', 'canceled')
 			)`,
 			rootFailedCount: sql<number>`count(*) filter (
-				where ${tasks.parentTaskId} is null
+				where ${tasks.sourceMessageId} is null
 				and ${tasks.status}::text in ('failed', 'exited')
 			)`,
 			openTaskCount: sql<number>`count(*) filter (
 				where ${tasks.status} in ('pending', 'launching', 'launched', 'starting', 'running')
 			)`,
-			unsettledDispatchCount: sql<number>`count(*) filter (
-				where ${tasks.status} in ('completed', 'failed', 'exited', 'canceled')
-				and ${tasks.downstreamDispatchStatus} <> 'completed'
-			)`,
 			failedNonRootTaskCount: sql<number>`count(*) filter (
-				where ${tasks.parentTaskId} is not null
+				where ${tasks.sourceMessageId} is not null
 				and ${tasks.status}::text in ('failed', 'exited')
 			)`,
 		})
 		.from(tasks)
+		.where(eq(tasks.scanJobId, scanJobId));
+
+	const [dispatchRow] = await db
+		.select({
+			unsettledDispatchCount: sql<number>`count(*) filter (
+				where ${messages.status} in ('pending', 'processing')
+			)`,
+		})
+		.from(messages)
+		.innerJoin(tasks, eq(tasks.taskId, messages.sourceTaskId))
 		.where(eq(tasks.scanJobId, scanJobId));
 
 	const rootCount = Number(row?.rootCount ?? 0);
@@ -57,149 +60,16 @@ export const getScanJobSettlementRepo = async (
 			Number(row?.openTaskCount ?? 0) === 0,
 		rootFailed: Number(row?.rootFailedCount ?? 0) > 0,
 		openTaskCount: Number(row?.openTaskCount ?? 0),
-		unsettledDispatchCount: Number(row?.unsettledDispatchCount ?? 0),
+		unsettledDispatchCount: Number(dispatchRow?.unsettledDispatchCount ?? 0),
 		failedNonRootTaskCount: Number(row?.failedNonRootTaskCount ?? 0),
 	};
 };
 
-export type DownstreamDispatchClaimResult = {
-	claimed: boolean;
-	jobStatus: (typeof scanJobs.$inferSelect)["status"] | null;
-};
-
-export const claimPendingDownstreamDispatchResultRepo = async (
-	taskId: string,
-): Promise<DownstreamDispatchClaimResult> => {
-	return await db.transaction(async (tx) => {
-		const task = await tx
-			.select({ scanJobId: tasks.scanJobId })
-			.from(tasks)
-			.where(eq(tasks.taskId, taskId))
-			.limit(1)
-			.then((rows) => rows[0] ?? null);
-		if (!task) return { claimed: false, jobStatus: null };
-		const job = await tx
-			.select({ status: scanJobs.status })
-			.from(scanJobs)
-			.where(eq(scanJobs.scanJobId, task.scanJobId))
-			.for("share")
-			.limit(1)
-			.then((rows) => rows[0] ?? null);
-		if (!job || job.status !== "running") {
-			return { claimed: false, jobStatus: job?.status ?? null };
-		}
-		const [row] = await tx
-			.update(tasks)
-			.set({
-				downstreamDispatchStatus: "dispatching",
-				downstreamDispatchedAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
-			})
-			.where(
-				and(
-					eq(tasks.taskId, taskId),
-					inArray(tasks.status, [...TERMINAL_TASK_STATUSES]),
-					eq(tasks.downstreamDispatchStatus, "pending"),
-				),
-			)
-			.returning({ taskId: tasks.taskId });
-		return { claimed: Boolean(row), jobStatus: job.status };
-	});
-};
-
-export const claimPendingDownstreamDispatchRepo = async (taskId: string) =>
-	(await claimPendingDownstreamDispatchResultRepo(taskId)).claimed;
-
-export const completeDownstreamDispatchRepo = async (taskId: string) => {
-	await db
-		.update(tasks)
-		.set({
-			downstreamDispatchStatus: "completed",
-			downstreamDispatchedAt: new Date().toISOString(),
-			updatedAt: new Date().toISOString(),
-		})
-		.where(eq(tasks.taskId, taskId));
-};
-
-export const releaseDownstreamDispatchClaimRepo = async (taskId: string) => {
-	const [updated] = await db
-		.update(tasks)
-		.set({
-			downstreamDispatchStatus: "pending",
-			updatedAt: new Date().toISOString(),
-		})
-		.where(
-			and(
-				eq(tasks.taskId, taskId),
-				eq(tasks.downstreamDispatchStatus, "dispatching"),
-			),
-		)
-		.returning({ taskId: tasks.taskId });
-	return Boolean(updated);
-};
-
-export const listPendingCompletedDownstreamDispatchesRepo = async (
-	scanJobId: string,
-) => {
-	return db
-		.select({
-			taskId: tasks.taskId,
-			stageName: tasks.stageName,
-			input: tasks.input,
-			output: tasks.output,
-			downstreamRouteKey: tasks.downstreamRouteKey,
-		})
-		.from(tasks)
-		.where(
-			and(
-				eq(tasks.scanJobId, scanJobId),
-				eq(tasks.status, "completed"),
-				eq(tasks.downstreamDispatchStatus, "pending"),
-			),
-		)
-		.orderBy(asc(tasks.updatedAt));
-};
-
-export const completeTerminalTaskDispatchesRepo = async (scanJobId: string) => {
-	const updated = await db
-		.update(tasks)
-		.set({
-			downstreamDispatchStatus: "completed",
-			downstreamDispatchedAt: new Date().toISOString(),
-			updatedAt: new Date().toISOString(),
-		})
-		.where(
-			and(
-				eq(tasks.scanJobId, scanJobId),
-				inArray(tasks.status, ["failed", "exited", "canceled"]),
-				inArray(tasks.downstreamDispatchStatus, ["pending", "dispatching"]),
-			),
-		)
-		.returning({ taskId: tasks.taskId });
-	return updated.length;
-};
-
-export const resetStaleDownstreamDispatchesRepo = async (scanJobId: string) => {
-	const staleBefore = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-	const updated = await db
-		.update(tasks)
-		.set({
-			downstreamDispatchStatus: "pending",
-			updatedAt: new Date().toISOString(),
-		})
-		.where(
-			and(
-				eq(tasks.scanJobId, scanJobId),
-				eq(tasks.downstreamDispatchStatus, "dispatching"),
-				or(
-					sql`${tasks.downstreamDispatchedAt} is null`,
-					sql`${tasks.downstreamDispatchedAt} < ${staleBefore}`,
-				),
-			),
-		)
-		.returning({ taskId: tasks.taskId });
-	return updated.length;
-};
+export const completeTerminalTaskDispatchesRepo = async (scanJobId: string) =>
+	closeOpenMessagesForJobRepo(
+		scanJobId,
+		"Producer task or job is no longer running",
+	);
 
 export const settleScanJobRepo = async (scanJobId: string) => {
 	const state = await getScanJobSettlementRepo(scanJobId);

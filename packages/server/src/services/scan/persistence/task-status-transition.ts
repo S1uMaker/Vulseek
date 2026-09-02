@@ -24,17 +24,4 @@ export const buildTaskStatusTransitionPatch = (input: {
 	input.to === "canceled"
 		? { completedAt: input.now }
 		: {}),
-	...(input.to === "failed" ||
-	input.to === "exited" ||
-	input.to === "canceled"
-		? {
-				downstreamDispatchStatus: "completed" as const,
-				downstreamDispatchedAt: input.now,
-		  }
-		: {}),
-	...(input.to === "completed" || input.to === "exited"
-		? input.terminalRouteKey !== undefined
-			? { downstreamRouteKey: input.terminalRouteKey }
-			: {}
-		: {}),
 });

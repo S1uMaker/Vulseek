@@ -1,4 +1,3 @@
-import { backfillCandidateResultProjections } from "@vulseek/server/services/scan/persistence/candidate-result-projection-backfill";
 import { backfillScanJobCosts } from "@vulseek/server/services/scan/persistence/scan-job-cost-backfill";
 import { backfillScanPipelineDefinitionSnapshots } from "@vulseek/server/services/scan/persistence/scan-pipeline-definition-backfill";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -20,10 +19,6 @@ export const migration = async () => {
 			await backfillScanPipelineDefinitionSnapshots();
 		console.log(
 			`Scan pipeline snapshot backfill complete: processed=${pipelineBackfill.processedCount} updated=${pipelineBackfill.updatedCount}`,
-		);
-		const backfill = await backfillCandidateResultProjections();
-		console.log(
-			`Candidate result projection backfill complete: processed=${backfill.processedCount} skipped=${backfill.skippedCount}`,
 		);
 		const costBackfill = await backfillScanJobCosts();
 		console.log(

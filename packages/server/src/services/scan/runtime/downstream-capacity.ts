@@ -5,24 +5,15 @@ import {
 	countActiveTasksByScanJobAndStageRepo,
 	findTaskByIdRepo,
 } from "../persistence/task.repo";
-import {
-	isFullScanStageActive,
-	resolveStageConcurrencySetting,
-} from "../stages/full-scan-stage.runtime";
+import { getRuntimeStageSetting } from "../runtime-settings";
+import { isFullScanStageActive } from "../stages/full-scan-stage.runtime";
 import {
 	parseBearerToken,
 	verifyScanRuntimeToken,
 } from "./scan-runtime-api-auth";
+import { ScanRuntimeApiError } from "./scan-runtime-api-error";
 
-export class ScanRuntimeApiError extends Error {
-	status: number;
-
-	constructor(status: number, message: string) {
-		super(message);
-		this.name = "ScanRuntimeApiError";
-		this.status = status;
-	}
-}
+export { ScanRuntimeApiError };
 
 export type DownstreamCapacityStage = {
 	stageName: string;
@@ -79,6 +70,25 @@ const yamlConcurrencyForStage = (
 	return asPositiveInt(stage?.concurrency, 1) || 1;
 };
 
+/** Concurrency the running job actually uses: frozen runtime settings, then compiled overrides, then YAML. */
+export const resolveRunningPipelineStageConcurrency = (
+	snapshot: CompiledPipelineDefinition | null,
+	scanRuntimeSettings: unknown,
+	stageName: string,
+) => {
+	const runtimeConcurrency = getRuntimeStageSetting(
+		scanRuntimeSettings,
+		stageName,
+	).concurrency;
+	const overrideConcurrency =
+		snapshot?.stageOverrides?.[stageName]?.concurrency;
+	return (
+		asPositiveInt(runtimeConcurrency, 0) ||
+		asPositiveInt(overrideConcurrency, 0) ||
+		yamlConcurrencyForStage(snapshot, stageName)
+	);
+};
+
 const loadCompiledSnapshot = (
 	job: Pick<ScanJob, "pipelineCompiledSnapshot">,
 ): CompiledPipelineDefinition | null => {
@@ -99,9 +109,10 @@ export type DownstreamCapacityDeps = {
 		scanJobId: string;
 		stageName: string;
 	} | null>;
-	findScanJobById: (
-		scanJobId: string,
-	) => Promise<Pick<ScanJob, "scanJobId" | "pipelineCompiledSnapshot"> | null>;
+	findScanJobById: (scanJobId: string) => Promise<Pick<
+		ScanJob,
+		"scanJobId" | "pipelineCompiledSnapshot" | "scanRuntimeSettings"
+	> | null>;
 	resolveConcurrency: (
 		scanJobId: string,
 		stageName: string,
@@ -132,8 +143,7 @@ const defaultDeps: DownstreamCapacityDeps = {
 			return null;
 		}
 	},
-	resolveConcurrency: (scanJobId, stageName, fallback) =>
-		resolveStageConcurrencySetting(scanJobId, stageName, () => fallback),
+	resolveConcurrency: async (_scanJobId, _stageName, fallback) => fallback,
 	countActiveTasks: async (scanJobId, stageName) =>
 		asPositiveInt(
 			await countActiveTasksByScanJobAndStageRepo({ scanJobId, stageName }),
@@ -183,12 +193,16 @@ export const queryDownstreamCapacity = async (input: {
 
 	const stages: DownstreamCapacityStage[] = [];
 	for (const stageName of stageNames) {
-		const fallback = yamlConcurrencyForStage(snapshot, stageName);
+		const running = resolveRunningPipelineStageConcurrency(
+			snapshot,
+			scanJob.scanRuntimeSettings,
+			stageName,
+		);
 		const concurrency = Math.max(
 			1,
 			asPositiveInt(
-				await deps.resolveConcurrency(input.scanJobId, stageName, fallback),
-				fallback,
+				await deps.resolveConcurrency(input.scanJobId, stageName, running),
+				running,
 			),
 		);
 		const activeTasks = asPositiveInt(

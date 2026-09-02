@@ -3,7 +3,6 @@ import test from "node:test";
 import {
 	buildSurfacePlannerTurnPrompt,
 	isNativeGoalPrompt,
-	isSurfaceGoalReentry,
 	prefixNativeGoal,
 	resolveGoalStagePrompt,
 } from "./goal-prompt";
@@ -26,7 +25,19 @@ test("goal stages send the rendered stage prompt without a /goal prefix", () => 
 	assert.doesNotMatch(prompt, /objective/);
 	assert.doesNotMatch(prompt, /Use the installed skills/);
 	assert.doesNotMatch(prompt, /output-validator/);
-	assert.ok(prompt.length < 4000);
+});
+
+test("goal stage prompts preserve long rendered prompts", () => {
+	const longPrompt = `${"Inspect this repository carefully. ".repeat(300)}final requirement`;
+
+	assert.equal(
+		resolveGoalStagePrompt({
+			renderedPrompt: longPrompt,
+			stageInput: {},
+		}),
+		longPrompt,
+	);
+	assert.equal(prefixNativeGoal(longPrompt), `/goal ${longPrompt}`);
 });
 
 test("prefixNativeGoal does not double the /goal marker", () => {
@@ -48,6 +59,7 @@ test("Surface re-entry is a continuation, not a new /goal", () => {
 			},
 		},
 		sharedSession: true,
+		reentry: true,
 	});
 
 	assert.equal(isNativeGoalPrompt(turn), false);
@@ -56,15 +68,45 @@ test("Surface re-entry is a continuation, not a new /goal", () => {
 	assert.doesNotMatch(turn, /Continue the standing planner goal/);
 	assert.doesNotMatch(turn, /Emit the next SurfaceDispatch/);
 	assert.doesNotMatch(turn, /^\/goal\s/);
-	assert.equal(isSurfaceGoalReentry({ feedback: null }), false);
-	assert.equal(
-		isSurfaceGoalReentry({ feedback: { kind: "judge-reject" } }),
-		true,
-	);
 	assert.doesNotMatch(
 		buildSurfacePlannerTurnPrompt({
 			feedback: { kind: "judge-reject", summary: "covered" },
 		}),
 		/^\/goal\s/,
 	);
+});
+
+test("orch-hunt string feedback is a continuation turn, not a new standing prompt", () => {
+	const hunterFeedback =
+		"Scoped audit found one confirmed high-impact candidate: unauthenticated system.multicall is registered in wp-includes/IXR/class-IXR-server.php.";
+	const turn = resolveGoalStagePrompt({
+		renderedPrompt: [
+			"You are the Orchestrator for a high-severity vulnerability research scan.",
+			"Dispatch huntTasks. Do not hunt yourself.",
+		].join("\n"),
+		stageInput: { feedback: hunterFeedback, repositoryPath: "/workspace/repo" },
+		sharedSession: true,
+		reentry: true,
+	});
+
+	assert.equal(isNativeGoalPrompt(turn), false);
+	assert.match(turn, /system\.multicall/);
+	assert.doesNotMatch(turn, /You are the Orchestrator/);
+	assert.doesNotMatch(turn, /^\/goal\s/);
+	assert.equal(
+		buildSurfacePlannerTurnPrompt({ feedback: hunterFeedback }),
+		hunterFeedback,
+	);
+});
+
+test("shared session without lane initialGoalPrompt keeps the standing prompt", () => {
+	const hunterFeedback = "FAMILY F5: unauthenticated system.multicall.";
+	const prompt = resolveGoalStagePrompt({
+		renderedPrompt: surfacePrompt,
+		stageInput: { feedback: hunterFeedback },
+		sharedSession: true,
+		reentry: false,
+	});
+	assert.equal(prompt, surfacePrompt);
+	assert.doesNotMatch(prompt, /system\.multicall/);
 });

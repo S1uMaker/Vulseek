@@ -6,6 +6,7 @@ import type {
 	PipelineStageV3,
 } from "@vulseek/server/services/scan/pipeline/document-v3";
 import { ALLOWED_RUNTIME_PLUGINS } from "@vulseek/server/services/scan/pipeline/document-v3";
+import { McpMultiSelect } from "@/components/dashboard/pipelines/mcp-multi-select";
 import { SkillMultiSelect } from "@/components/dashboard/pipelines/skill-multi-select";
 import type { PipelineEditorAction } from "@/lib/pipeline-editor/pipeline-editor-state";
 import { cn } from "@/lib/utils";
@@ -363,6 +364,24 @@ export const StageEditor = ({
 											skills: skills.length > 0 ? skills : undefined,
 										},
 										`stage:${stageId}:skills`,
+									)
+								}
+							/>
+						</FieldTemplate>
+						<FieldTemplate
+							label="MCP"
+							description="Attach MCP servers from Settings. They are passed to the agent on session/new."
+						>
+							<McpMultiSelect
+								value={stage.runtime.mcp}
+								readOnly={readOnly}
+								onChange={(mcp) =>
+									patchRuntime(
+										{
+											...stage.runtime,
+											mcp: mcp.length > 0 ? mcp : undefined,
+										},
+										`stage:${stageId}:mcp`,
 									)
 								}
 							/>

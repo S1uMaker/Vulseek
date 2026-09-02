@@ -28,6 +28,7 @@ describe("job output artifacts", () => {
 				materializeTaskJobOutput({
 					taskDir,
 					taskId: "task-1",
+					messageId: "to-1",
 					stageName: "report",
 					output: {
 						reportPath: "/task/report.md",
@@ -37,7 +38,7 @@ describe("job output artifacts", () => {
 					},
 				}),
 			).resolves.toEqual({
-				taskId: "task-1",
+				messageId: "to-1",
 				stageName: "report",
 				artifacts: [
 					{ path: "/task/job-output/artifacts/evidence.bin" },
@@ -67,6 +68,7 @@ describe("job output artifacts", () => {
 				materializeTaskJobOutput({
 					taskDir,
 					taskId: "task-1",
+					messageId: "to-1",
 					stageName: "report",
 					output: { verdict: "complete" },
 				}),
@@ -90,6 +92,7 @@ describe("job output artifacts", () => {
 				materializeTaskJobOutput({
 					taskDir,
 					taskId: "task-1",
+					messageId: "to-1",
 					stageName: "report",
 					output: { bundlePath: "/task/bundle" },
 				}),
@@ -111,6 +114,7 @@ describe("job output artifacts", () => {
 				materializeTaskJobOutput({
 					taskDir,
 					taskId: "task-1",
+					messageId: "to-1",
 					stageName: "report",
 					output: { reportPath: "/task/missing.md" },
 				}),
@@ -134,6 +138,7 @@ describe("job output artifacts", () => {
 				materializeTaskJobOutput({
 					taskDir,
 					taskId: "task-1",
+					messageId: "to-1",
 					stageName: "report",
 					output: { reportPath: "/task/secret.txt" },
 				}),
@@ -152,12 +157,14 @@ describe("job output artifacts", () => {
 			await materializeTaskJobOutput({
 				taskDir,
 				taskId: "task-1",
+				messageId: "to-1",
 				stageName: "report",
 				output: { path: "/task/first.txt" },
 			});
 			await materializeTaskJobOutput({
 				taskDir,
 				taskId: "task-1",
+				messageId: "to-1",
 				stageName: "report",
 				output: { path: "/task/second.txt" },
 			});

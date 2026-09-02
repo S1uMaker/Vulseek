@@ -9,4 +9,4 @@ Work only within the stage scope supplied by the task. Read the configured scope
 
 Do not use changelogs, Git history, patched-version diffs, or external intelligence unless the scan job explicitly permits it. Do not claim a stronger impact than the configured success criteria. Do not execute payloads or access protected assets in source-only validation stages.
 
-Return only the stage-specific object required by `output.schema.json`. The runtime wraps it in the full-scan envelope `{ route, exit, output }`.
+Read `/task/output.schema.json` and submit the stage-specific object with `scan-runtime submit-message`. Do not wrap the payload in `{ route, exit, output }`.

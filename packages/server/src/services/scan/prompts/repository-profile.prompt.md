@@ -16,6 +16,6 @@ Profile the full checked-out repository. Follow the skill for inventory, splitti
 Write these files, then stop:
 - `/task/repository.json` — repository fields only
 - one module JSON file per module — exact module schema; use `name`, not `title`
-- `/task/output.json` — path manifest only: `repository` is `/task/repository.json`, `modules` is the module file paths
+- submit-message path manifest only: `repository` is `/task/repository.json`, `modules` is the module file paths
 
 Produce at least 4 modules.

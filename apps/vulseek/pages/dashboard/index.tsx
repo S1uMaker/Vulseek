@@ -1,5 +1,5 @@
-import { validateRequest } from "@vulseek/server/lib/auth";
 import { createServerSideHelpers } from "@trpc/react-query/server";
+import { validateRequest } from "@vulseek/server/lib/auth";
 import {
 	Activity,
 	ArrowRight,
@@ -12,10 +12,10 @@ import {
 import type { GetServerSidePropsContext } from "next";
 import Link from "next/link";
 import {
-	useEffect,
-	useRef,
 	type ComponentType,
 	type ReactElement,
+	useEffect,
+	useRef,
 } from "react";
 import superjson from "superjson";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -30,8 +30,8 @@ import {
 import {
 	Tooltip,
 	TooltipContent,
-	TooltipProvider,
 	TooltipPortal,
+	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
@@ -83,8 +83,12 @@ const StatCard = (props: {
 				<Icon className="h-4 w-4 text-muted-foreground" />
 			</CardHeader>
 			<CardContent>
-				<div className="text-3xl font-semibold tracking-tight">{props.value}</div>
-				<p className="mt-1 text-xs text-muted-foreground">{props.description}</p>
+				<div className="text-3xl font-semibold tracking-tight">
+					{props.value}
+				</div>
+				<p className="mt-1 text-xs text-muted-foreground">
+					{props.description}
+				</p>
 			</CardContent>
 		</Card>
 	);
@@ -106,7 +110,9 @@ const HeatmapCell = ({ day }: { day: HomeHeatmapDay }) => {
 	);
 
 	if (!hasActivity) {
-		return <span aria-label={`${day.date}: no activity`} className={cellClassName} />;
+		return (
+			<span aria-label={`${day.date}: no activity`} className={cellClassName} />
+		);
 	}
 
 	return (
@@ -233,7 +239,9 @@ const DashboardHome = () => {
 					<StatCard
 						title="Tokens"
 						value={
-							isSummaryLoading ? "-" : formatTokensInMillions(summary?.totalTokens)
+							isSummaryLoading
+								? "-"
+								: formatTokensInMillions(summary?.totalTokens)
 						}
 						description="Total scan token pressure in millions"
 						icon={Zap}
@@ -241,9 +249,7 @@ const DashboardHome = () => {
 					<StatCard
 						title="Security Issues"
 						value={
-							isSummaryLoading
-								? "-"
-								: formatNumber(summary?.securityIssueCount)
+							isSummaryLoading ? "-" : formatNumber(summary?.securityIssueCount)
 						}
 						description="Triage results marked as security issues"
 						icon={ShieldCheck}
@@ -331,7 +337,9 @@ const DashboardHome = () => {
 													</Badge>
 												</div>
 												<p className="mt-1 text-sm text-muted-foreground">
-													{job.targetKind} · {job.target}
+													{[job.targetKind, job.target, job.pipelineProfileName]
+														.filter(Boolean)
+														.join(" · ")}
 												</p>
 											</div>
 											<div className="grid grid-cols-3 gap-3 text-right text-sm">
@@ -461,8 +469,8 @@ export async function getServerSideProps(ctx: GetServerSidePropsContext) {
 	});
 
 	await Promise.all([
-			helpers.scan.homeSummary.prefetch(),
-			helpers.scan.homeActivity.prefetch({ days: 365 }),
+		helpers.scan.homeSummary.prefetch(),
+		helpers.scan.homeActivity.prefetch({ days: 365 }),
 		helpers.user.get.prefetch(),
 		helpers.settings.isCloud.prefetch(),
 	]);

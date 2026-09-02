@@ -10,34 +10,28 @@ import {
 	listTasksByScanJobIdRepo,
 	resetFailedTaskForRetryRepo,
 	storeTaskInputRepo,
-	storeTaskOutputRepo,
+	storeMessageRepo,
 	updateTaskRepo,
 	updateTaskStatusRepo,
 } from "../persistence/task.repo";
 import type { Task } from "../types";
-import {
-	normalizeTaskApiTokenUsage,
-	normalizeTasksApiTokenUsage,
-} from "./token-usage";
 
 export const createTask = async (input: Parameters<typeof createTaskRepo>[0]) =>
 	await createTaskRepo(input);
 
 export const findTaskById = async (taskId: string) =>
-	normalizeTaskApiTokenUsage(await findTaskByIdRepo(taskId));
+	await findTaskByIdRepo(taskId);
 
 export const findTasksByScanJobId = async (scanJobId: string) =>
-	normalizeTasksApiTokenUsage(await listTasksByScanJobIdRepo(scanJobId));
+	await listTasksByScanJobIdRepo(scanJobId);
 
 export const findChildTasksByParentTaskId = async (parentTaskId: string) =>
-	normalizeTasksApiTokenUsage(
-		await listChildTasksByParentTaskIdRepo(parentTaskId),
-	);
+	await listChildTasksByParentTaskIdRepo(parentTaskId);
 
 export const findTasksByScanJobAndStage = async (input: {
 	scanJobId: string;
 	stageName: string;
-}) => normalizeTasksApiTokenUsage(await listTasksByScanJobAndStageRepo(input));
+}) => await listTasksByScanJobAndStageRepo(input);
 
 export const updateTask = async (taskId: string, patch: Partial<Task>) =>
 	await updateTaskRepo(taskId, patch);
@@ -70,11 +64,11 @@ export const bindTaskRuntime = async (input: {
 	agentProfile?: Task["agentProfile"];
 }) => await bindTaskRuntimeRepo(input);
 
-export const storeTaskInput = async (taskId: string, input: Task["input"]) =>
+export const storeTaskInput = async (taskId: string, input: unknown) =>
 	await storeTaskInputRepo(taskId, input);
 
-export const storeTaskOutput = async (taskId: string, output: Task["output"]) =>
-	await storeTaskOutputRepo(taskId, output);
+export const storeMessage = async (taskId: string, output: unknown) =>
+	await storeMessageRepo(taskId, output);
 
 export const resetFailedTaskForRetry = async (taskId: string) =>
 	await resetFailedTaskForRetryRepo(taskId);

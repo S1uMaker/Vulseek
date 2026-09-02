@@ -21,6 +21,8 @@ import {
 	findScanJobsByComposeIdPage,
 	findScanJobTerminalTasksPage,
 	findTaskById,
+	listMessagesPageBySourceTaskIdRepo,
+	reconstructTaskInput,
 	findTobGoalCandidateRepo,
 	findTobGoalFindingRepo,
 	findVulnerabilityCandidateById,
@@ -519,7 +521,54 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			return { task, scanJob };
+			let reconstructedInput: unknown = null;
+			try {
+				reconstructedInput = await reconstructTaskInput(task);
+			} catch {
+				reconstructedInput = null;
+			}
+			const taskOutputPage = await listMessagesPageBySourceTaskIdRepo({
+				sourceTaskId: task.taskId,
+				limit: 50,
+				offset: 0,
+			});
+			return {
+				task,
+				scanJob,
+				reconstructedInput,
+				messages: {
+					items: taskOutputPage.rows,
+					total: taskOutputPage.total,
+				},
+			};
+		}),
+
+	messages: protectedProcedure
+		.input(
+			z.object({
+				taskId: z.string().min(1),
+				page: z.number().int().min(1).default(1),
+				pageSize: z.number().int().min(1).max(100).default(20),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			const task = await findTaskById(input.taskId);
+			await authorizeScanJobAccess(
+				task.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			const offset = (input.page - 1) * input.pageSize;
+			const result = await listMessagesPageBySourceTaskIdRepo({
+				sourceTaskId: task.taskId,
+				limit: input.pageSize,
+				offset,
+			});
+			return {
+				items: result.rows,
+				total: result.total,
+				page: input.page,
+				pageSize: input.pageSize,
+			};
 		}),
 
 	cancelTask: protectedProcedure

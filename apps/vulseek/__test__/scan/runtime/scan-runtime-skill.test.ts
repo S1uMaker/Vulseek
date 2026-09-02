@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -110,7 +112,8 @@ describe("scan-runtime Python CLI", () => {
 						{
 							taskId: "hunter-task",
 							stageName: "hunter",
-							title: "Hunt",
+							name: "xmlrpc-unauth",
+							title: "xmlrpc-unauth",
 							status: "running",
 						},
 					],
@@ -133,8 +136,225 @@ describe("scan-runtime Python CLI", () => {
 		});
 		expect(JSON.parse(stdout).tasks[0]).toMatchObject({
 			taskId: "hunter-task",
-			title: "Hunt",
+			name: "xmlrpc-unauth",
+			title: "xmlrpc-unauth",
 			status: "running",
+		});
+	});
+
+	it("queries completed stage outputs for a downstream stage", async () => {
+		const api = await startMockApi((req) => {
+			expect(req.url).toBe(
+				"/api/internal/scan/runtime/stage-outputs?stage=hunter",
+			);
+			return {
+				status: 200,
+				body: {
+					ok: true,
+					outputs: [
+						{
+							name: "xmlrpc-unauth",
+							taskId: "hunter-task",
+							output: { name: "xmlrpc-unauth", feedback: "no chain" },
+						},
+					],
+				},
+			};
+		});
+		servers.push(api);
+		const { stdout } = await runSkill(
+			[
+				"stage-outputs",
+				"--stage",
+				"hunter",
+				"--api-url",
+				api.url,
+				"--token",
+				"test-token",
+			],
+			{
+				VULSEEK_SCAN_JOB_ID: "job-1",
+				VULSEEK_TASK_ID: "orch-task",
+				VULSEEK_STAGE_NAME: "orchestrator",
+			},
+		);
+		expect(JSON.parse(stdout).outputs[0].name).toBe("xmlrpc-unauth");
+	});
+
+	it("polls queued inbound tasks for the current stage", async () => {
+		const api = await startMockApi((req) => {
+			expect(req.method).toBe("POST");
+			expect(req.url).toBe(
+				"/api/internal/scan/runtime/poll-messages?stage=orchestrator",
+			);
+			return {
+				status: 200,
+				body: {
+					ok: true,
+					messages: [
+						{
+							messageId: "to-hunter-1",
+							name: "xmlrpc-unauth",
+							input: { name: "xmlrpc-unauth", feedback: "no chain" },
+						},
+					],
+				},
+			};
+		});
+		servers.push(api);
+		const { stdout } = await runSkill(
+			[
+				"poll-messages",
+				"--stage",
+				"orchestrator",
+				"--api-url",
+				api.url,
+				"--token",
+				"test-token",
+			],
+			{
+				VULSEEK_SCAN_JOB_ID: "job-1",
+				VULSEEK_TASK_ID: "orch-task",
+				VULSEEK_STAGE_NAME: "orchestrator",
+			},
+		);
+		expect(JSON.parse(stdout).messages[0].name).toBe("xmlrpc-unauth");
+	});
+
+	it("completes queued inbound tasks by id", async () => {
+		const api = await startMockApi((req) => {
+			expect(req.method).toBe("POST");
+			expect(req.url).toBe(
+				"/api/internal/scan/runtime/complete-messages?stage=orchestrator",
+			);
+			return {
+				status: 200,
+				body: { ok: true, completedMessageIds: ["to-hunter-1"] },
+			};
+		});
+		servers.push(api);
+		const { stdout } = await runSkill(
+			[
+				"complete-messages",
+				"--stage",
+				"orchestrator",
+				"--message-id",
+				"to-hunter-1",
+				"--api-url",
+				api.url,
+				"--token",
+				"test-token",
+			],
+			{
+				VULSEEK_SCAN_JOB_ID: "job-1",
+				VULSEEK_TASK_ID: "orch-task",
+				VULSEEK_STAGE_NAME: "orchestrator",
+			},
+		);
+		expect(JSON.parse(stdout).completedMessageIds).toEqual([
+			"to-hunter-1",
+		]);
+	});
+
+	it("posts submit-message JSON from stdin", async () => {
+		const requests: Array<{ url?: string; method?: string }> = [];
+		const api = await startMockApi((req) => {
+			requests.push({ url: req.url, method: req.method });
+			return {
+				status: 201,
+				body: {
+					ok: true,
+					idempotent: false,
+					message: { messageId: "to-1", sequence: 1 },
+				},
+			};
+		});
+		servers.push(api);
+		const { stdout } = await new Promise<{ stdout: string }>(
+			(resolve, reject) => {
+				const child = execFile(
+					"python3",
+					[
+						skillPath,
+						"submit-message",
+						"--api-url",
+						api.url,
+						"--token",
+						"test-token",
+						"--route",
+						"hunt",
+						"--submission-key",
+						"k1",
+					],
+					{
+						env: {
+							...process.env,
+							VULSEEK_SCAN_JOB_ID: "job-1",
+							VULSEEK_TASK_ID: "orch-task",
+							VULSEEK_STAGE_NAME: "orchestrator",
+						},
+					},
+					(error, stdout) => {
+						if (error) reject(error);
+						else resolve({ stdout: String(stdout) });
+					},
+				);
+				child.stdin?.write('{"huntTasks":[]}\n');
+				child.stdin?.end();
+			},
+		);
+		expect(requests[0]?.method).toBe("POST");
+		expect(requests[0]?.url).toBe("/api/internal/scan/runtime/messages");
+		expect(stdout).toContain("to-1");
+	});
+
+	it("submits output and writes a debug copy after automatic validation", async () => {
+		const debugDir = await mkdtemp(join(tmpdir(), "scan-runtime-debug-"));
+		const debugPath = join(debugDir, "output.json");
+		const api = await startMockApi(() => ({
+			status: 200,
+			body: {
+				ok: true,
+				idempotent: false,
+				message: { messageId: "to-2", sequence: 1 },
+			},
+		}));
+		servers.push(api);
+		const { stdout } = await new Promise<{ stdout: string }>(
+			(resolve, reject) => {
+				const child = execFile(
+					"python3",
+					[
+						skillPath,
+						"submit-message",
+						"--api-url",
+						api.url,
+						"--token",
+						"test-token",
+						"--route",
+						"hunt",
+					],
+					{
+						env: {
+							...process.env,
+							VULSEEK_SCAN_JOB_ID: "job-1",
+							VULSEEK_TASK_ID: "orch-task",
+							VULSEEK_STAGE_NAME: "orchestrator",
+							VULSEEK_DEBUG_OUTPUT_PATH: debugPath,
+						},
+					},
+					(error, stdout) => {
+						if (error) reject(error);
+						else resolve({ stdout: String(stdout) });
+					},
+				);
+				child.stdin?.write('{"huntTasks":["alpha"]}\n');
+				child.stdin?.end();
+			},
+		);
+		expect(stdout).toContain("to-2");
+		expect(JSON.parse(await readFile(debugPath, "utf8"))).toEqual({
+			huntTasks: ["alpha"],
 		});
 	});
 

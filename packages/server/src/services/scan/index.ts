@@ -10,5 +10,7 @@ export * from "./runtime/downstream-capacity";
 export * from "./runtime/job-tab-data";
 export * from "./runtime/running-tasks";
 export * from "./runtime/scan-runtime-api-auth";
-export * from "./persistence/candidate-result-projection-backfill";
+export * from "./runtime/submit-message";
+export * from "./runtime/reconstruct-task-input";
+export * from "./persistence/message.repo";
 export * from "./types";

@@ -14,6 +14,7 @@ import { ScanRuntimeApiError } from "./downstream-capacity";
 export type RunningStageTask = {
 	taskId: string;
 	stageName: string;
+	name: string;
 	title: string;
 	status: "launching" | "launched" | "starting" | "running";
 	startedAt: string | null;
@@ -66,7 +67,15 @@ const defaultDeps: RunningTasksDeps = {
 		}
 	},
 	listRunningTasks: async (input) =>
-		listRunningTaskViewsByScanJobAndStageRepo(input),
+		(await listRunningTaskViewsByScanJobAndStageRepo(input)).map((row) => ({
+			taskId: row.taskId,
+			stageName: row.stageName,
+			name: row.name || row.title,
+			title: row.title,
+			status: row.status,
+			startedAt: row.startedAt,
+			updatedAt: row.updatedAt,
+		})),
 	now: () => new Date().toISOString(),
 };
 

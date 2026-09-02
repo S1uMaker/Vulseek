@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { db } from "@vulseek/server/db";
 import {
+	messages,
 	scanJobs,
 	type TaskAgentProfileSnapshot,
 	type taskStatusEnum,
@@ -18,12 +19,7 @@ import {
 	or,
 	sql,
 } from "drizzle-orm";
-import {
-	analysisSchema,
-	triageSchema,
-	verificationSchema,
-} from "../artifacts/contracts/domain-object.contract";
-import { computePatchedTaskCost, computeTaskCost } from "../cost";
+
 import {
 	getOrchHuntRunningTaskPresentation,
 	getResearchRunningTaskPresentation,
@@ -31,26 +27,25 @@ import {
 	RUNNING_TASK_VIEW_STATUSES,
 	type RunningTaskStage,
 } from "../running-task-stage";
-import { createShortTaskId, createTaskIdForDispatchKey } from "../task-id";
+import { createShortTaskId, createTaskIdForSource } from "../task-id";
 import type {
 	AnalysisResult,
 	TriageResult,
 	VerificationResult,
 } from "../types";
+import { findCandidateByIdWithResultsRepo } from "./candidate-list.repo";
 import {
-	type CandidateProjectionResultStage,
-	upsertCandidateResultProjectionTx,
-} from "./candidate-result-projection.repo";
+	applyCandidateStageResultTx,
+	type CandidateResultStage,
+} from "./candidate-result.repo";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
-import { buildTaskStatusTransitionPatch } from "./task-status-transition";
 import {
 	ALL_TASK_EXECUTION_STATUSES,
 	getAllowedJobStatusesForTaskTransition,
 	type ScanJobExecutionStatus,
 	type TaskExecutionStatus,
 } from "./task-status-policy";
-
-const CANDIDATE_PRODUCER_STAGE_NAMES = new Set(["scan-target"]);
+import { buildTaskStatusTransitionPatch } from "./task-status-transition";
 
 export type TaskStatusTransaction = Parameters<
 	Parameters<typeof db.transaction>[0]
@@ -84,10 +79,10 @@ export class ScanJobExecutionNotAllowedError extends Error {
 	}
 }
 
-const resolveCandidateProjectionResultStage = async (
+const resolveCandidateResultStage = async (
 	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
 	task: typeof tasks.$inferSelect,
-): Promise<CandidateProjectionResultStage | undefined> => {
+): Promise<CandidateResultStage | undefined> => {
 	const row = await tx
 		.select({ snapshot: scanJobs.scanPipelineDefinitionSnapshot })
 		.from(scanJobs)
@@ -126,26 +121,6 @@ const resolveCandidateProjectionResultStage = async (
 		: undefined;
 };
 
-const findProducerTaskIdForCandidateDescendantTask = async (
-	task: typeof tasks.$inferSelect,
-) => {
-	let currentTask: typeof tasks.$inferSelect | null = task;
-	const seenTaskIds = new Set<string>();
-	while (currentTask) {
-		if (seenTaskIds.has(currentTask.taskId)) {
-			return null;
-		}
-		seenTaskIds.add(currentTask.taskId);
-		if (CANDIDATE_PRODUCER_STAGE_NAMES.has(currentTask.stageName)) {
-			return currentTask.taskId;
-		}
-		currentTask = currentTask.parentTaskId
-			? await findTaskByIdRepo(currentTask.parentTaskId).catch(() => null)
-			: null;
-	}
-	return null;
-};
-
 const tokenUsageKeys = [
 	"inputTokens",
 	"outputTokens",
@@ -155,25 +130,17 @@ const tokenUsageKeys = [
 	"cachedWriteTokens",
 ] as const;
 
-const taskCostUsageKeys = [
-	"inputTokens",
-	"outputTokens",
-	"cachedReadTokens",
-	"cachedWriteTokens",
-] as const;
-
 type TaskTokenUsageKey = (typeof tokenUsageKeys)[number];
-type TaskRecord = typeof tasks.$inferSelect;
 
 const hasTokenUsagePatch = (patch: Partial<typeof tasks.$inferSelect>) =>
 	tokenUsageKeys.some((key) => key in patch);
 
-const hasTaskCostPatch = (patch: Partial<typeof tasks.$inferSelect>) =>
-	taskCostUsageKeys.some((key) => key in patch) || "agentProfile" in patch;
-
 const requiresTaskUsageTransaction = (
 	patch: Partial<typeof tasks.$inferSelect>,
-) => hasTokenUsagePatch(patch) || "agentProfile" in patch;
+) =>
+	hasTokenUsagePatch(patch) ||
+	"estimatedCost" in patch ||
+	"agentProfile" in patch;
 
 const toTokenCount = (value: number | null | undefined) =>
 	typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -222,6 +189,33 @@ const applyScanJobTokenUsageDelta = async (
 		.where(eq(scanJobs.scanJobId, scanJobId));
 };
 
+export const syncScanJobTokenUsageFromTasksRepo = async (scanJobId: string) => {
+	const [totals] = await db
+		.select({
+			inputTokens: sql<number>`coalesce(sum(${tasks.inputTokens}), 0)`,
+			outputTokens: sql<number>`coalesce(sum(${tasks.outputTokens}), 0)`,
+			thoughtTokens: sql<number>`coalesce(sum(${tasks.thoughtTokens}), 0)`,
+			totalTokens: sql<number>`coalesce(sum(${tasks.totalTokens}), 0)`,
+			cachedReadTokens: sql<number>`coalesce(sum(${tasks.cachedReadTokens}), 0)`,
+			cachedWriteTokens: sql<number>`coalesce(sum(${tasks.cachedWriteTokens}), 0)`,
+			estimatedCost: sql<number>`coalesce(sum(${tasks.estimatedCost}), 0)`,
+		})
+		.from(tasks)
+		.where(eq(tasks.scanJobId, scanJobId));
+	await db
+		.update(scanJobs)
+		.set({
+			inputTokens: Number(totals?.inputTokens ?? 0),
+			outputTokens: Number(totals?.outputTokens ?? 0),
+			thoughtTokens: Number(totals?.thoughtTokens ?? 0),
+			totalTokens: Number(totals?.totalTokens ?? 0),
+			cachedReadTokens: Number(totals?.cachedReadTokens ?? 0),
+			cachedWriteTokens: Number(totals?.cachedWriteTokens ?? 0),
+			estimatedCost: Number(totals?.estimatedCost ?? 0),
+		})
+		.where(eq(scanJobs.scanJobId, scanJobId));
+};
+
 const applyScanJobEstimatedCostDelta = async (
 	tx: typeof db,
 	scanJobId: string,
@@ -238,162 +232,16 @@ const applyScanJobEstimatedCostDelta = async (
 		.where(eq(scanJobs.scanJobId, scanJobId));
 };
 
-const calculateTaskCost = (
-	task: Pick<
-		TaskRecord,
-		| "inputTokens"
-		| "outputTokens"
-		| "cachedReadTokens"
-		| "cachedWriteTokens"
-		| "agentProfile"
-	>,
-) =>
-	computeTaskCost({
-		inputTokens: task.inputTokens,
-		outputTokens: task.outputTokens,
-		cachedReadTokens: task.cachedReadTokens,
-		cachedWriteTokens: task.cachedWriteTokens,
-		agentProfile: task.agentProfile,
-	});
-
-const calculatePatchedTaskCost = (
-	task: TaskRecord,
-	patch: Partial<TaskRecord>,
-) => computePatchedTaskCost(task, patch);
-
-const buildAnalysisTaskResultView = async (
-	task: typeof tasks.$inferSelect,
-): Promise<AnalysisResult | null> => {
-	const parsedOutput = analysisSchema.safeParse(task.output);
-	if (!parsedOutput.success) {
-		return null;
-	}
-
-	const vulnerabilityCandidateId =
-		await readCandidateIdFromTaskInputArtifact(task);
-	if (!vulnerabilityCandidateId) {
-		return null;
-	}
-	const producerTaskId =
-		await findProducerTaskIdForCandidateDescendantTask(task);
-	if (!producerTaskId) {
-		return null;
-	}
-
-	return {
-		taskId: task.taskId,
-		scanJobId: task.scanJobId,
-		vulnerabilityCandidateId,
-		producerTaskId,
-		result: parsedOutput.data.result,
-		confidence: parsedOutput.data.confidence,
-		score: parsedOutput.data.score,
-		reportPath: parsedOutput.data.reportPath,
-		runtimeSeconds: parsedOutput.data.runtimeSeconds,
-		threadId: task.threadId,
-		summary: parsedOutput.data.summary,
-		createdAt: task.createdAt,
-		updatedAt: task.updatedAt,
-		status: parsedOutput.data.status ?? task.status,
-	};
-};
-
-const buildVerificationTaskResultView = async (
-	task: typeof tasks.$inferSelect,
-): Promise<VerificationResult | null> => {
-	const parsedOutput = verificationSchema.safeParse(task.output);
-	if (!parsedOutput.success) {
-		return null;
-	}
-
-	const vulnerabilityCandidateId =
-		await readCandidateIdFromTaskInputArtifact(task);
-	if (!vulnerabilityCandidateId) {
-		return null;
-	}
-	const producerTaskId =
-		await findProducerTaskIdForCandidateDescendantTask(task);
-	if (!producerTaskId) {
-		return null;
-	}
-
-	return {
-		taskId: task.taskId,
-		scanJobId: task.scanJobId,
-		vulnerabilityCandidateId,
-		producerTaskId,
-		result: parsedOutput.data.result,
-		confidence: parsedOutput.data.confidence,
-		score: parsedOutput.data.score,
-		reportPath: parsedOutput.data.reportPath,
-		runtimeSeconds: parsedOutput.data.runtimeSeconds,
-		threadId: task.threadId,
-		summary: parsedOutput.data.summary,
-		createdAt: task.createdAt,
-		updatedAt: task.updatedAt,
-		status: parsedOutput.data.status ?? task.status,
-	};
-};
-
-const buildTriageTaskResultView = async (
-	task: typeof tasks.$inferSelect,
-): Promise<TriageResult | null> => {
-	const parsedOutput = triageSchema.safeParse(task.output);
-	if (!parsedOutput.success) {
-		return null;
-	}
-
-	const vulnerabilityCandidateId =
-		await readCandidateIdFromTaskInputArtifact(task);
-	if (!vulnerabilityCandidateId) {
-		return null;
-	}
-	const producerTaskId =
-		await findProducerTaskIdForCandidateDescendantTask(task);
-	if (!producerTaskId) {
-		return null;
-	}
-
-	return {
-		taskId: task.taskId,
-		scanJobId: task.scanJobId,
-		vulnerabilityCandidateId,
-		producerTaskId,
-		result: parsedOutput.data.result,
-		disqualifier: parsedOutput.data.disqualifier,
-		disqualifierReason: parsedOutput.data.disqualifierReason,
-		securityClassification: parsedOutput.data.securityClassification,
-		isSecurityIssue: parsedOutput.data.isSecurityIssue,
-		impactType: parsedOutput.data.impactType,
-		cvssVector: parsedOutput.data.cvssVector,
-		cvssScore: parsedOutput.data.cvssScore,
-		cvssSeverity: parsedOutput.data.cvssSeverity,
-		exploitability: parsedOutput.data.exploitability,
-		isExploitable: parsedOutput.data.isExploitable,
-		commonTriggerConditions: parsedOutput.data.commonTriggerConditions,
-		hardeningOrRobustness: parsedOutput.data.hardeningOrRobustness,
-		epssProbability30d: parsedOutput.data.epssProbability30d,
-		epssSource: parsedOutput.data.epssSource,
-		confidence: null,
-		score: parsedOutput.data.cvssScore,
-		reportPath: parsedOutput.data.reportPath,
-		runtimeSeconds: parsedOutput.data.runtimeSeconds,
-		threadId: task.threadId,
-		summary: parsedOutput.data.summary,
-		createdAt: task.createdAt,
-		updatedAt: task.updatedAt,
-		status: parsedOutput.data.status ?? task.status,
-	};
-};
-
 export const createTaskRepo = async (input: {
 	taskId?: string;
 	scanJobId: string;
-	vulnerabilityCandidateId?: string | null;
-	parentTaskId?: string | null;
 	name: string;
 	stageName: string;
-	dispatchKey?: string | null;
+	lifecycle?: "turn" | "goal";
+	sourceMessageId?: string | null;
+	sourceEdgeName?: string | null;
+	sourceItemIndex?: number | null;
+	rerunOfTaskId?: string | null;
 	status?: (typeof taskStatusEnum.enumValues)[number];
 	priority?: number | null;
 	attempt?: number;
@@ -403,18 +251,14 @@ export const createTaskRepo = async (input: {
 	threadId?: string | null;
 	runtimeMode?: typeof tasks.$inferSelect.runtimeMode;
 	forkedFromTaskId?: string | null;
-	forkedFromThreadId?: string | null;
-	input?: typeof tasks.$inferSelect.input;
-	output?: typeof tasks.$inferSelect.output;
 	inputTokens?: number | null;
 	outputTokens?: number | null;
 	thoughtTokens?: number | null;
 	totalTokens?: number | null;
 	cachedReadTokens?: number | null;
 	cachedWriteTokens?: number | null;
+	estimatedCost?: number | null;
 	errorMessage?: string | null;
-	exitReason?: typeof tasks.$inferSelect.exitReason;
-	exitNote?: string | null;
 	stageGroupInstanceId?: string | null;
 	startedAt?: string | null;
 	completedAt?: string | null;
@@ -441,11 +285,22 @@ export const createTaskRepo = async (input: {
 		if (!allowedJobStatuses.includes(job.status)) {
 			throw new ScanJobExecutionNotAllowedError(input.scanJobId, job.status);
 		}
-		if (input.dispatchKey) {
+		if (
+			input.sourceMessageId &&
+			input.sourceEdgeName &&
+			input.sourceItemIndex != null &&
+			!input.rerunOfTaskId
+		) {
 			const existing = await tx
 				.select()
 				.from(tasks)
-				.where(eq(tasks.dispatchKey, input.dispatchKey))
+				.where(
+					and(
+						eq(tasks.sourceMessageId, input.sourceMessageId),
+						eq(tasks.sourceEdgeName, input.sourceEdgeName),
+						eq(tasks.sourceItemIndex, input.sourceItemIndex),
+					),
+				)
 				.limit(1)
 				.then((rows) => rows[0] || null);
 			if (existing) {
@@ -458,49 +313,47 @@ export const createTaskRepo = async (input: {
 			try {
 				created = await tx
 					.insert(tasks)
-				.values({
-					taskId:
-						input.taskId ||
-						(input.dispatchKey
-							? createTaskIdForDispatchKey(input.dispatchKey)
-							: createShortTaskId()),
-					scanJobId: input.scanJobId,
-					vulnerabilityCandidateId: input.vulnerabilityCandidateId ?? null,
-					parentTaskId: input.parentTaskId ?? null,
-					name: input.name,
-					stageName: input.stageName,
-					dispatchKey: input.dispatchKey ?? null,
-					status: input.status ?? "pending",
-					priority: input.priority ?? null,
-					attempt: input.attempt ?? 0,
-					agentProfile: input.agentProfile ?? null,
-					containerName: input.containerName ?? null,
-					containerIndex: input.containerIndex ?? null,
-					threadId: input.threadId ?? null,
-					runtimeMode: input.runtimeMode ?? "new_session",
-					forkedFromTaskId: input.forkedFromTaskId ?? null,
-					forkedFromThreadId: input.forkedFromThreadId ?? null,
-					input: input.input ?? null,
-					output: input.output ?? null,
-					inputTokens: input.inputTokens ?? null,
-					outputTokens: input.outputTokens ?? null,
-					thoughtTokens: input.thoughtTokens ?? null,
-					totalTokens: input.totalTokens ?? null,
-					cachedReadTokens: input.cachedReadTokens ?? null,
-					cachedWriteTokens: input.cachedWriteTokens ?? null,
-					estimatedCost: calculateTaskCost({
+					.values({
+						taskId:
+							input.taskId ||
+							(input.sourceMessageId &&
+							input.sourceEdgeName &&
+							input.sourceItemIndex != null &&
+							!input.rerunOfTaskId
+								? createTaskIdForSource({
+										sourceMessageId: input.sourceMessageId,
+										sourceEdgeName: input.sourceEdgeName,
+										sourceItemIndex: input.sourceItemIndex,
+									})
+								: createShortTaskId()),
+						scanJobId: input.scanJobId,
+						name: input.name,
+						stageName: input.stageName,
+						lifecycle: input.lifecycle ?? "turn",
+						sourceMessageId: input.sourceMessageId ?? null,
+						sourceEdgeName: input.sourceEdgeName ?? null,
+						sourceItemIndex: input.sourceItemIndex ?? null,
+						rerunOfTaskId: input.rerunOfTaskId ?? null,
+						status: input.status ?? "pending",
+						priority: input.priority ?? null,
+						attempt: input.attempt ?? 0,
+						agentProfile: input.agentProfile ?? null,
+						containerName: input.containerName ?? null,
+						containerIndex: input.containerIndex ?? null,
+						threadId: input.threadId ?? null,
+						runtimeMode: input.runtimeMode ?? "new_session",
+						forkedFromTaskId: input.forkedFromTaskId ?? null,
 						inputTokens: input.inputTokens ?? null,
 						outputTokens: input.outputTokens ?? null,
+						thoughtTokens: input.thoughtTokens ?? null,
+						totalTokens: input.totalTokens ?? null,
 						cachedReadTokens: input.cachedReadTokens ?? null,
 						cachedWriteTokens: input.cachedWriteTokens ?? null,
-						agentProfile: input.agentProfile ?? null,
-					}),
-					errorMessage: input.errorMessage ?? null,
-					exitReason: input.exitReason ?? null,
-					exitNote: input.exitNote ?? null,
-					stageGroupInstanceId: input.stageGroupInstanceId ?? null,
-					startedAt: input.startedAt ?? null,
-					completedAt: input.completedAt ?? null,
+						estimatedCost: input.estimatedCost ?? 0,
+						errorMessage: input.errorMessage ?? null,
+						stageGroupInstanceId: input.stageGroupInstanceId ?? null,
+						startedAt: input.startedAt ?? null,
+						completedAt: input.completedAt ?? null,
 					})
 					.returning();
 				lastError = null;
@@ -636,6 +489,7 @@ export type PendingTaskQueueMetadata = {
 	name: string;
 	stageName: string;
 	status: (typeof taskStatusEnum.enumValues)[number];
+	sourceEdgeName: string | null;
 	stageGroupInstanceId: string | null;
 };
 
@@ -649,6 +503,7 @@ export const listPendingTaskQueueMetadataByScanJobIdRepo = async (
 			name: tasks.name,
 			stageName: tasks.stageName,
 			status: tasks.status,
+			sourceEdgeName: tasks.sourceEdgeName,
 			stageGroupInstanceId: tasks.stageGroupInstanceId,
 		})
 		.from(tasks)
@@ -658,13 +513,12 @@ export const hasActiveCandidateAnalysisTaskRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
 }) => {
-	const [row] = await db
-		.select({ taskId: tasks.taskId })
+	const active = await db
+		.select()
 		.from(tasks)
 		.where(
 			and(
 				eq(tasks.scanJobId, input.scanJobId),
-				eq(tasks.vulnerabilityCandidateId, input.vulnerabilityCandidateId),
 				eq(tasks.stageName, "analyze-finding"),
 				inArray(tasks.status, [
 					"pending",
@@ -674,9 +528,16 @@ export const hasActiveCandidateAnalysisTaskRepo = async (input: {
 					"running",
 				]),
 			),
-		)
-		.limit(1);
-	return Boolean(row);
+		);
+	for (const task of active) {
+		const candidateId = await readCandidateIdFromTaskInputArtifact(task).catch(
+			() => null,
+		);
+		if (candidateId === input.vulnerabilityCandidateId) {
+			return true;
+		}
+	}
+	return false;
 };
 
 export const listTaskRuntimeIntervalsByScanJobIdRepo = async (
@@ -747,6 +608,7 @@ export const listRunningTaskRuntimeMetadataRepo = async (scanJobId: string) =>
 export type RunningStageTaskRepoRow = {
 	taskId: string;
 	stageName: string;
+	name: string;
 	title: string;
 	status: (typeof RUNNING_TASK_VIEW_STATUSES)[number];
 	startedAt: string | null;
@@ -761,6 +623,7 @@ export const listRunningTaskViewsByScanJobAndStageRepo = async (input: {
 		.select({
 			taskId: tasks.taskId,
 			stageName: tasks.stageName,
+			name: tasks.name,
 			title: tasks.name,
 			status: tasks.status,
 			startedAt: tasks.startedAt,
@@ -795,49 +658,22 @@ export type RunningTaskViewRepoRow = {
 export const listRunningTaskViewsByScanJobIdRepo = async (
 	scanJobId: string,
 ): Promise<RunningTaskViewRepoRow[]> => {
-	const activeStatuses = RUNNING_TASK_VIEW_STATUSES.map(
-		(status) => sql`${status}`,
-	);
-	const result = await db.execute(sql`
-		SELECT
-			t."taskId",
-			t."name",
-			t."stageName",
-			t."startedAt",
-			t."updatedAt",
-			vc."title" AS "candidateTitle",
-			vc."filePath" AS "candidateFilePath",
-			vc."line" AS "candidateLine",
-			vc."vulnerabilityType" AS "candidateVulnerabilityType",
-			t."input"->>'moduleName' AS "moduleName",
-			t."input"->>'moduleId' AS "moduleId",
-			t."input"->'module'->>'name' AS "moduleObjectName",
-			t."input"->'module'->>'moduleId' AS "moduleObjectId",
-			t."input"->>'targetName' AS "targetName",
-			t."input"->>'targetId' AS "targetId",
-			t."input"->'target'->>'targetName' AS "targetObjectName",
-			t."input"->'target'->>'targetId' AS "targetObjectId",
-			t."input"->>'functionName' AS "functionName",
-			t."input"->>'functionId' AS "functionId",
-			t."input"->'function'->>'functionName' AS "functionObjectName",
-			t."input"->'function'->>'functionId' AS "functionObjectId",
-			t."input"->>'filePath' AS "filePath",
-			t."input"->>'line' AS "line",
-			t."input"->'target'->>'filePath' AS "targetFilePath",
-			t."input"->'target'->>'line' AS "targetLine",
-			t."input"->'function'->>'filePath' AS "functionFilePath",
-			t."input"->'function'->>'line' AS "functionLine",
-			t."input"->'module'->>'name' AS "functionModuleName",
-			t."input"->'target'->>'moduleName' AS "targetModuleName",
-			t."input"->'function'->>'moduleName' AS "functionModuleNameNested"
-		FROM "tasks" t
-		LEFT JOIN "vulnerability_candidates" vc
-			ON vc."scanJobId" = t."scanJobId"
-			AND vc."vulnerabilityCandidateId" = t."vulnerabilityCandidateId"
-		WHERE t."scanJobId" = ${scanJobId}
-			AND t."status" IN (${sql.join(activeStatuses, sql`, `)})
-		ORDER BY t."updatedAt" DESC
-	`);
+	const result = await db
+		.select({
+			taskId: tasks.taskId,
+			name: tasks.name,
+			stageName: tasks.stageName,
+			startedAt: tasks.startedAt,
+			updatedAt: tasks.updatedAt,
+		})
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, scanJobId),
+				inArray(tasks.status, [...RUNNING_TASK_VIEW_STATUSES]),
+			),
+		)
+		.orderBy(desc(tasks.updatedAt), desc(tasks.taskId));
 
 	return result
 		.map((row) => {
@@ -1001,7 +837,7 @@ export const listTerminalTasksPageByScanJobIdRepo = async (input: {
 			name: tasks.name,
 			stageName: tasks.stageName,
 			status: tasks.status,
-			input: tasks.input,
+			lifecycle: tasks.lifecycle,
 			errorMessage: tasks.errorMessage,
 			startedAt: tasks.startedAt,
 			completedAt: tasks.completedAt,
@@ -1027,10 +863,12 @@ export const listTerminalTasksPageByScanJobIdRepo = async (input: {
 
 export const listChildTasksByParentTaskIdRepo = async (parentTaskId: string) =>
 	await db
-		.select()
+		.select({ task: tasks })
 		.from(tasks)
-		.where(eq(tasks.parentTaskId, parentTaskId))
-		.orderBy(desc(tasks.createdAt));
+		.innerJoin(messages, eq(tasks.sourceMessageId, messages.messageId))
+		.where(eq(messages.sourceTaskId, parentTaskId))
+		.orderBy(desc(tasks.createdAt))
+		.then((rows) => rows.map((row) => row.task));
 
 export const listCandidateDescendantTasksByProducerTaskIdRepo = async (input: {
 	producerTaskId: string;
@@ -1077,15 +915,17 @@ export const listChildTasksByParentTaskIdAndStageRepo = async (input: {
 	stageName: string;
 }) =>
 	await db
-		.select()
+		.select({ task: tasks })
 		.from(tasks)
+		.innerJoin(messages, eq(tasks.sourceMessageId, messages.messageId))
 		.where(
 			and(
-				eq(tasks.parentTaskId, input.parentTaskId),
+				eq(messages.sourceTaskId, input.parentTaskId),
 				eq(tasks.stageName, input.stageName),
 			),
 		)
-		.orderBy(desc(tasks.createdAt));
+		.orderBy(desc(tasks.createdAt))
+		.then((rows) => rows.map((row) => row.task));
 
 export const listTasksByScanJobAndStageRepo = async (input: {
 	scanJobId: string;
@@ -1159,94 +999,100 @@ export const transitionTaskStatusResultRepo = async (input: {
 		terminalRouteKey: input.terminalRouteKey,
 	});
 
-	return await db.transaction(async (tx): Promise<TaskStatusTransitionResult> => {
-		const job = await tx
-			.select({ status: scanJobs.status })
-			.from(scanJobs)
-			.where(eq(scanJobs.scanJobId, sql`(
+	return await db.transaction(
+		async (tx): Promise<TaskStatusTransitionResult> => {
+			const job = await tx
+				.select({ status: scanJobs.status })
+				.from(scanJobs)
+				.where(
+					eq(
+						scanJobs.scanJobId,
+						sql`(
 				select "scanJobId" from "tasks" where "taskId" = ${input.taskId}
-			)`))
-			.for("share")
-			.limit(1)
-			.then((rows) => rows[0] ?? null);
-		if (!job) {
-			return { outcome: "not_found", task: null, jobStatus: null };
-		}
-		if (!allowedJobStatuses.includes(job.status)) {
-			return {
-				outcome:
-					job.status === "paused" ? "job_paused" : "job_stopped",
-				task: null,
-				jobStatus: job.status,
-			};
-		}
-		const previous = await tx
-			.select()
-			.from(tasks)
-			.where(
-				and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)),
-			)
-			.limit(1)
-			.then((rows) => rows[0] || null);
-		if (!previous) {
-			const current = await tx
-				.select({ status: tasks.status })
-				.from(tasks)
-				.where(eq(tasks.taskId, input.taskId))
+			)`,
+					),
+				)
+				.for("share")
 				.limit(1)
 				.then((rows) => rows[0] ?? null);
-			return {
-				outcome: current ? "stale_task" : "not_found",
-				task: null,
-				jobStatus: job.status,
-			};
-		}
-		const rows = await tx
-			.update(tasks)
-			.set({
-				...patch,
-				...(hasTaskCostPatch(patch)
-					? { estimatedCost: calculatePatchedTaskCost(previous, patch) }
-					: {}),
-			})
-			.where(
-				and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)),
-			)
-			.returning();
-		const updatedTask = rows[0] || null;
-		if (!updatedTask) {
-			return {
-				outcome: "stale_task",
-				task: null,
-				jobStatus: job.status,
-			};
-		}
-		await applyScanJobTokenUsageDelta(
-			tx,
-			updatedTask.scanJobId,
-			tokenUsageDelta(previous, updatedTask),
-		);
-		await applyScanJobEstimatedCostDelta(
-			tx,
-			updatedTask.scanJobId,
-			previous.estimatedCost,
-			updatedTask.estimatedCost,
-		);
-		if (input.to === "completed" || input.to === "exited") {
-			const resultStage = await resolveCandidateProjectionResultStage(
+			if (!job) {
+				return { outcome: "not_found", task: null, jobStatus: null };
+			}
+			if (!allowedJobStatuses.includes(job.status)) {
+				return {
+					outcome: job.status === "paused" ? "job_paused" : "job_stopped",
+					task: null,
+					jobStatus: job.status,
+				};
+			}
+			const previous = await tx
+				.select()
+				.from(tasks)
+				.where(
+					and(
+						eq(tasks.taskId, input.taskId),
+						inArray(tasks.status, input.from),
+					),
+				)
+				.limit(1)
+				.then((rows) => rows[0] || null);
+			if (!previous) {
+				const current = await tx
+					.select({ status: tasks.status })
+					.from(tasks)
+					.where(eq(tasks.taskId, input.taskId))
+					.limit(1)
+					.then((rows) => rows[0] ?? null);
+				return {
+					outcome: current ? "stale_task" : "not_found",
+					task: null,
+					jobStatus: job.status,
+				};
+			}
+			const rows = await tx
+				.update(tasks)
+				.set({
+					...patch,
+				})
+				.where(
+					and(
+						eq(tasks.taskId, input.taskId),
+						inArray(tasks.status, input.from),
+					),
+				)
+				.returning();
+			const updatedTask = rows[0] || null;
+			if (!updatedTask) {
+				return {
+					outcome: "stale_task",
+					task: null,
+					jobStatus: job.status,
+				};
+			}
+			await applyScanJobTokenUsageDelta(
 				tx,
-				updatedTask,
+				updatedTask.scanJobId,
+				tokenUsageDelta(previous, updatedTask),
 			);
-			await upsertCandidateResultProjectionTx(
+			await applyScanJobEstimatedCostDelta(
 				tx,
-				updatedTask,
-				undefined,
-				resultStage,
+				updatedTask.scanJobId,
+				previous.estimatedCost,
+				updatedTask.estimatedCost,
 			);
-		}
-		await input.afterUpdate?.(tx, updatedTask);
-		return { outcome: "updated", task: updatedTask, jobStatus: job.status };
-	});
+			if (input.to === "completed" || input.to === "exited") {
+				const resultStage = await resolveCandidateResultStage(tx, updatedTask);
+				await applyCandidateStageResultTx(
+					tx,
+					updatedTask,
+					undefined,
+					resultStage,
+				);
+			}
+			await input.afterUpdate?.(tx, updatedTask);
+			return { outcome: "updated", task: updatedTask, jobStatus: job.status };
+		},
+	);
 };
 
 export const transitionTaskStatusRepo = async (input: {
@@ -1264,7 +1110,6 @@ export const transitionTaskStatusRepo = async (input: {
 	const result = await transitionTaskStatusResultRepo(input);
 	return result.task;
 };
-
 
 export const updateTaskRepo = async (
 	taskId: string,
@@ -1296,9 +1141,6 @@ export const updateTaskRepo = async (
 					.update(tasks)
 					.set({
 						...nextPatch,
-						...(hasTaskCostPatch(patch)
-							? { estimatedCost: calculatePatchedTaskCost(previous, patch) }
-							: {}),
 					})
 					.where(eq(tasks.taskId, taskId))
 					.returning();
@@ -1393,15 +1235,13 @@ export const bindTaskRuntimeRepo = async (input: {
 		agentProfile: input.agentProfile,
 	});
 
-export const storeTaskInputRepo = async (
-	taskId: string,
-	input: typeof tasks.$inferSelect.input,
-) => await updateTaskRepo(taskId, { input });
+export const storeTaskInputRepo = async (_taskId: string, _input: unknown) => {
+	throw new Error("tasks.input has been removed; reconstruct from Message");
+};
 
-export const storeTaskOutputRepo = async (
-	taskId: string,
-	output: typeof tasks.$inferSelect.output,
-) => await updateTaskRepo(taskId, { output });
+export const storeMessageRepo = async (_taskId: string, _output: unknown) => {
+	throw new Error("tasks.output has been removed; submit a Message");
+};
 
 export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 	const updated = await db.transaction(async (tx) => {
@@ -1423,10 +1263,7 @@ export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 			.then((rows) => rows[0] ?? null);
 		if (!job) return null;
 		if (job.status !== "running" && job.status !== "pending") {
-			throw new ScanJobExecutionNotAllowedError(
-				previous.scanJobId,
-				job.status,
-			);
+			throw new ScanJobExecutionNotAllowedError(previous.scanJobId, job.status);
 		}
 		const rows = await tx
 			.update(tasks)
@@ -1438,7 +1275,6 @@ export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 				containerName: null,
 				containerIndex: null,
 				threadId: null,
-				output: null,
 				inputTokens: null,
 				outputTokens: null,
 				thoughtTokens: null,
@@ -1502,10 +1338,7 @@ export const requeueTaskRepo = async (taskId: string) => {
 			.then((rows) => rows[0] ?? null);
 		if (!job) return null;
 		if (job.status !== "running") {
-			throw new ScanJobExecutionNotAllowedError(
-				previous.scanJobId,
-				job.status,
-			);
+			throw new ScanJobExecutionNotAllowedError(previous.scanJobId, job.status);
 		}
 		const rows = await tx
 			.update(tasks)
@@ -1517,7 +1350,6 @@ export const requeueTaskRepo = async (taskId: string) => {
 				containerName: null,
 				containerIndex: null,
 				threadId: null,
-				output: null,
 				inputTokens: null,
 				outputTokens: null,
 				thoughtTokens: null,
@@ -1558,134 +1390,37 @@ export const requeueTaskRepo = async (taskId: string) => {
 	return updated;
 };
 
-export const listAnalysisResultsByScanJobIdRepo = async (
-	scanJobId: string,
-): Promise<AnalysisResult[]> => {
-	const analysisTasks = await listTasksByScanJobAndStageRepo({
-		scanJobId,
-		stageName: "analyze-finding",
+const loadCandidateResults = async (input: {
+	scanJobId: string;
+	vulnerabilityCandidateId: string;
+	producerTaskId?: string | null;
+}) =>
+	await findCandidateByIdWithResultsRepo({
+		scanJobId: input.scanJobId,
+		vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+		producerTaskId: input.producerTaskId ?? undefined,
 	});
-	return (
-		await Promise.all(analysisTasks.map(buildAnalysisTaskResultView))
-	).filter((item): item is AnalysisResult => Boolean(item));
-};
-
-export const listVerificationResultsByScanJobIdRepo = async (
-	scanJobId: string,
-): Promise<VerificationResult[]> => {
-	const verificationTasks = await listTasksByScanJobAndStageRepo({
-		scanJobId,
-		stageName: "verify-finding",
-	});
-	return (
-		await Promise.all(verificationTasks.map(buildVerificationTaskResultView))
-	).filter((item): item is VerificationResult => Boolean(item));
-};
-
-export const listTriageResultsByScanJobIdRepo = async (
-	scanJobId: string,
-): Promise<TriageResult[]> => {
-	const triageTasks = await listTasksByScanJobAndStageRepo({
-		scanJobId,
-		stageName: "triage-finding",
-	});
-	return (await Promise.all(triageTasks.map(buildTriageTaskResultView))).filter(
-		(item): item is TriageResult => Boolean(item),
-	);
-};
 
 export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
 	producerTaskId?: string | null;
-}): Promise<AnalysisResult | null> => {
-	if (input.producerTaskId) {
-		const candidateTasks =
-			await listCandidateDescendantTasksByProducerTaskIdRepo({
-				producerTaskId: input.producerTaskId,
-				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-			});
-		for (const task of candidateTasks) {
-			if (task.stageName !== "analyze-finding") {
-				continue;
-			}
-			const result = await buildAnalysisTaskResultView(task);
-			if (result?.vulnerabilityCandidateId === input.vulnerabilityCandidateId) {
-				return result;
-			}
-		}
-		return null;
-	}
-
-	return (
-		(await listAnalysisResultsByScanJobIdRepo(input.scanJobId)).find(
-			(result) =>
-				result.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
-		) || null
-	);
-};
+}): Promise<AnalysisResult | null> =>
+	(await loadCandidateResults(input))?.latestAnalysisResult ?? null;
 
 export const findLatestVerificationResultByCandidateIdRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
 	producerTaskId?: string | null;
-}): Promise<VerificationResult | null> => {
-	if (input.producerTaskId) {
-		const candidateTasks =
-			await listCandidateDescendantTasksByProducerTaskIdRepo({
-				producerTaskId: input.producerTaskId,
-				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-			});
-		for (const task of candidateTasks) {
-			if (task.stageName !== "verify-finding") {
-				continue;
-			}
-			const result = await buildVerificationTaskResultView(task);
-			if (result?.vulnerabilityCandidateId === input.vulnerabilityCandidateId) {
-				return result;
-			}
-		}
-		return null;
-	}
-
-	return (
-		(await listVerificationResultsByScanJobIdRepo(input.scanJobId)).find(
-			(result) =>
-				result.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
-		) || null
-	);
-};
+}): Promise<VerificationResult | null> =>
+	(await loadCandidateResults(input))?.latestVerificationResult ?? null;
 
 export const findLatestTriageResultByCandidateIdRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
 	producerTaskId?: string | null;
-}): Promise<TriageResult | null> => {
-	if (input.producerTaskId) {
-		const candidateTasks =
-			await listCandidateDescendantTasksByProducerTaskIdRepo({
-				producerTaskId: input.producerTaskId,
-				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-			});
-		for (const task of candidateTasks) {
-			if (task.stageName !== "triage-finding") {
-				continue;
-			}
-			const result = await buildTriageTaskResultView(task);
-			if (result?.vulnerabilityCandidateId === input.vulnerabilityCandidateId) {
-				return result;
-			}
-		}
-		return null;
-	}
-
-	return (
-		(await listTriageResultsByScanJobIdRepo(input.scanJobId)).find(
-			(result) =>
-				result.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
-		) || null
-	);
-};
+}): Promise<TriageResult | null> =>
+	(await loadCandidateResults(input))?.latestTriageResult ?? null;
 
 export const countTasksByScanJobAndStatusRepo = async (scanJobId: string) =>
 	await db
@@ -1752,19 +1487,6 @@ export const cancelOpenTasksByScanJobIdRepo = async (
 				),
 			)
 			.returning();
-		await tx
-			.update(tasks)
-			.set({
-				downstreamDispatchStatus: "completed",
-				downstreamDispatchedAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
-			})
-			.where(
-				and(
-					eq(tasks.scanJobId, scanJobId),
-					inArray(tasks.downstreamDispatchStatus, ["pending", "dispatching"]),
-				),
-			)
 		return canceled;
 	});
 
@@ -1781,12 +1503,11 @@ export const countTasksByScanJobStageAndStatusRepo = async (
 		.where(eq(tasks.scanJobId, scanJobId))
 		.groupBy(tasks.stageName, tasks.status);
 
-
 /**
  * V3 loop-safety: atomically claim one task slot against the job's persisted
- * `maxTasks` / `deadlineAt` budget. The counter lives on scan_jobs so worker
- * restarts and retries cannot reset it. Jobs without `maxTasks` (legacy
- * scanType runs) are unlimited and pass through untouched.
+ * `maxTasks` / `deadlineAt` / `tokenBudget` limits. The counter lives on
+ * scan_jobs so worker restarts and retries cannot reset it. Jobs without
+ * `maxTasks` (legacy scanType runs) are unlimited and pass through untouched.
  *
  * Throws `ScanJobBudgetExceededError` when the budget is exhausted; the
  * caller stops dispatching and the worker marks the job failed with a
@@ -1795,12 +1516,14 @@ export const countTasksByScanJobStageAndStatusRepo = async (
 export class ScanJobBudgetExceededError extends Error {
 	constructor(
 		public readonly scanJobId: string,
-		public readonly reason: "task_limit" | "duration_limit",
+		public readonly reason: "task_limit" | "duration_limit" | "token_budget",
 	) {
 		super(
 			reason === "task_limit"
 				? `Scan job ${scanJobId} exceeded its task limit`
-				: `Scan job ${scanJobId} exceeded its duration limit`,
+				: reason === "token_budget"
+					? `Scan job ${scanJobId} exceeded its token usage budget`
+					: `Scan job ${scanJobId} exceeded its duration limit`,
 		);
 		this.name = "ScanJobBudgetExceededError";
 	}
@@ -1825,6 +1548,10 @@ const consumeScanJobTaskBudgetWithExecutor = async (
 					sql`${scanJobs.deadlineAt} is null`,
 					sql`${scanJobs.deadlineAt} > ${now}`,
 				),
+				or(
+					sql`${scanJobs.tokenBudget} is null`,
+					sql`${scanJobs.totalTokens} < ${scanJobs.tokenBudget}`,
+				),
 			),
 		)
 		.returning({ taskCount: scanJobs.taskCount });
@@ -1840,17 +1567,23 @@ const consumeScanJobTaskBudgetWithExecutor = async (
 			maxTasks: scanJobs.maxTasks,
 			taskCount: scanJobs.taskCount,
 			deadlineAt: scanJobs.deadlineAt,
+			tokenBudget: scanJobs.tokenBudget,
+			totalTokens: scanJobs.totalTokens,
 		})
 		.from(scanJobs)
 		.where(eq(scanJobs.scanJobId, scanJobId))
 		.limit(1)
 		.then((rows) => rows[0]);
-	const reason: "task_limit" | "duration_limit" =
+	const reason: "task_limit" | "duration_limit" | "token_budget" =
 		scanJob &&
-		scanJob.maxTasks != null &&
-		scanJob.taskCount >= scanJob.maxTasks
-			? "task_limit"
-			: "duration_limit";
+		scanJob.tokenBudget != null &&
+		scanJob.totalTokens >= scanJob.tokenBudget
+			? "token_budget"
+			: scanJob &&
+					scanJob.maxTasks != null &&
+					scanJob.taskCount >= scanJob.maxTasks
+				? "task_limit"
+				: "duration_limit";
 	await executor
 		.update(scanJobs)
 		.set({ terminationReason: reason })

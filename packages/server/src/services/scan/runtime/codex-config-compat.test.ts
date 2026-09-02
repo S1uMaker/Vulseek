@@ -72,4 +72,15 @@ test("applyCodexRuntimeConfigToml lets exec inherit VULSEEK env including TOKEN 
 	assert.match(config, /inherit = "all"/);
 	assert.match(config, /ignore_default_excludes = true/);
 	assert.match(config, /goals = true/);
+	assert.match(config, /mcp_oauth_credentials_store = "file"/);
+});
+
+test("applyCodexRuntimeConfigToml keeps an explicit MCP OAuth credential store", () => {
+	const config = applyCodexRuntimeConfigToml(
+		['mcp_oauth_credentials_store = "keyring"', 'model = "gpt-5.4-mini"'].join(
+			"\n",
+		),
+	);
+	assert.match(config, /mcp_oauth_credentials_store = "keyring"/);
+	assert.doesNotMatch(config, /mcp_oauth_credentials_store = "file"/);
 });

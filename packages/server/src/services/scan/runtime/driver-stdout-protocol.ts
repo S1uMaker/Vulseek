@@ -10,12 +10,20 @@ export type DriverTaskEvent = DriverStdoutEvent & {
 	stopReason?: string;
 };
 
+export type DriverTurnDoneEvent = DriverStdoutEvent & {
+	type: "turn_done";
+	threadId?: string | null;
+	taskId?: string | null;
+	turnIndex?: number;
+};
+
 export type ParsedDriverStdout = {
 	events: DriverStdoutEvent[];
 	latestActivity: unknown | null;
 	activityRevision: number;
 	activityEvents: Array<{ revision: number; activity: unknown }>;
 	latestUsage: unknown | null;
+	latestTurnDone: DriverTurnDoneEvent | null;
 	latestTask: DriverTaskEvent | null;
 	latestLog: DriverStdoutEvent | null;
 	exitCode: number | null;
@@ -27,6 +35,7 @@ const EVENT_TYPES = new Set([
 	"thread",
 	"activity",
 	"usage",
+	"turn_done",
 	"task_start",
 	"task_done",
 	"log",
@@ -49,6 +58,7 @@ export const parseDriverStdout = (content: string): ParsedDriverStdout => {
 		activityRevision: 0,
 		activityEvents: [],
 		latestUsage: null,
+		latestTurnDone: null,
 		latestTask: null,
 		latestLog: null,
 		exitCode: null,
@@ -79,6 +89,9 @@ export const parseDriverStdout = (content: string): ParsedDriverStdout => {
 				break;
 			case "usage":
 				parsed.latestUsage = value.usage ?? null;
+				break;
+			case "turn_done":
+				parsed.latestTurnDone = value as DriverTurnDoneEvent;
 				break;
 			case "task_start":
 			case "task_done":

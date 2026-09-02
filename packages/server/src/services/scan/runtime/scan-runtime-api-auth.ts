@@ -1,5 +1,4 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { getVulseekServiceName } from "../../settings";
 
 const TOKEN_ENCODING = "hex" as const;
 type RuntimeEnvironment = Record<string, string | undefined>;
@@ -21,7 +20,10 @@ export const resolveScanRuntimeApiUrl = (
 	if (explicit) {
 		return explicit.replace(/\/+$/, "");
 	}
-	const serviceName = env.VULSEEK_SERVICE_NAME?.trim() || getVulseekServiceName();
+	const serviceName =
+		env.VULSEEK_SERVICE_NAME?.trim() ||
+		process.env.VULSEEK_SERVICE_NAME ||
+		"vulseek";
 	return `http://${serviceName}:3000`;
 };
 

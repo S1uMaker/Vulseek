@@ -1,11 +1,11 @@
 import {
-	buildCandidateProjectionPatch,
-	compareProjectionResultVersions,
+	buildCandidateResultPatch,
+	compareCandidateResultVersions,
 	getCandidateResultRank,
-} from "@vulseek/server/services/scan/persistence/candidate-result-projection";
+} from "@vulseek/server/services/scan/persistence/candidate-result";
 import { describe, expect, it } from "vitest";
 
-describe("candidate result projection", () => {
+describe("candidate stage results", () => {
 	it("assigns stable ranks for analysis and verification outcomes", () => {
 		expect(getCandidateResultRank("real_vulnerability")).toBe(4);
 		expect(getCandidateResultRank("likely_vulnerability")).toBe(3);
@@ -16,24 +16,22 @@ describe("candidate result projection", () => {
 
 	it("accepts a newer result and rejects a stale result", () => {
 		expect(
-			compareProjectionResultVersions(
+			compareCandidateResultVersions(
 				{ resultAt: "2026-07-13T10:00:01.000Z", taskId: "new" },
 				{ resultAt: "2026-07-13T10:00:00.000Z", taskId: "old" },
 			),
 		).toBeGreaterThan(0);
 		expect(
-			compareProjectionResultVersions(
+			compareCandidateResultVersions(
 				{ resultAt: "2026-07-13T10:00:00.000Z", taskId: "old" },
 				{ resultAt: "2026-07-13T10:00:01.000Z", taskId: "new" },
 			),
 		).toBeLessThan(0);
 	});
 
-	it("builds only the projection stage patch for a validated task output", () => {
+	it("builds only the candidate stage patch for a validated task output", () => {
 		expect(
-			buildCandidateProjectionPatch({
-				scanJobId: "job-1",
-				vulnerabilityCandidateId: "candidate-1",
+			buildCandidateResultPatch({
 				taskId: "task-1",
 				stageName: "verify-finding",
 				output: { id: "result-1", result: "likely" },
@@ -41,18 +39,29 @@ describe("candidate result projection", () => {
 			}),
 		).toEqual({
 			verificationTaskId: "task-1",
+			verificationMessageId: null,
 			verificationOutput: { id: "result-1", result: "likely" },
 			verificationResult: "likely",
 			verificationRank: 3,
 			verificationResultAt: "2026-07-13T10:00:00.000Z",
 		});
+		expect(
+			buildCandidateResultPatch({
+				taskId: "task-1",
+				messageId: "to-9",
+				stageName: "verify-finding",
+				output: { id: "result-1", result: "likely" },
+				resultAt: "2026-07-13T10:00:00.000Z",
+			}),
+		).toMatchObject({
+			verificationTaskId: "task-1",
+			verificationMessageId: "to-9",
+		});
 	});
 
-	it("normalizes legacy boolean verification results to strings", () => {
+	it("normalizes boolean verification results to strings", () => {
 		expect(
-			buildCandidateProjectionPatch({
-				scanJobId: "job-1",
-				vulnerabilityCandidateId: "candidate-1",
+			buildCandidateResultPatch({
 				taskId: "task-1",
 				stageName: "verify-finding",
 				output: { id: "result-1", result: true },

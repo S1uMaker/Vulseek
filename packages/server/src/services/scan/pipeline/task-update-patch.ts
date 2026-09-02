@@ -10,12 +10,8 @@ export type PipelineTaskUpdate = {
 		| "exited"
 		| "canceled";
 	errorMessage?: string;
-	exitReason?: "agent_exit" | "leader_exit" | null;
-	exitNote?: string | null;
 	containerName?: string;
 	threadId?: string;
-	output?: unknown;
-	vulnerabilityCandidateId?: string;
 };
 
 export const buildPipelineTaskUpdatePatch = (
@@ -24,16 +20,10 @@ export const buildPipelineTaskUpdatePatch = (
 ) => ({
 	...(patch.containerName ? { containerName: patch.containerName } : {}),
 	...(patch.threadId ? { threadId: patch.threadId } : {}),
-	...(patch.output !== undefined ? { output: patch.output } : {}),
-	...(patch.vulnerabilityCandidateId
-		? { vulnerabilityCandidateId: patch.vulnerabilityCandidateId }
-		: {}),
 	...(patch.status
 		? {
 				status: patch.status,
 				errorMessage: patch.errorMessage,
-				exitReason: patch.exitReason,
-				exitNote: patch.exitNote,
 				...(["launching", "launched", "starting", "running"].includes(
 					patch.status,
 				)

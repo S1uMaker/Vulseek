@@ -17,10 +17,10 @@ import {
 	listTaskRuntimeIntervalsByScanJobIdRepo,
 } from "../persistence/task.repo";
 import {
-	findCandidateProjectionPageRepo,
-	findCandidateProjectionByIdRepo,
-	listCandidateProjectionItemsByScanJobIdRepo,
-} from "../persistence/candidate-projection-list.repo";
+	findCandidatePageRepo,
+	findCandidateByIdWithResultsRepo,
+	listCandidateItemsByScanJobIdRepo,
+} from "../persistence/candidate-list.repo";
 import { buildCandidateResultSummary } from "../persistence/candidate-result-summary";
 import { listCandidateResultSummaryGroupsByScanJobIdRepo } from "../persistence/candidate-result-summary.repo";
 import type { Task } from "../types";
@@ -438,7 +438,7 @@ export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId 
 		sortKey: CandidateListSortKey;
 		sortDirection: CandidateListSortDirection;
 	}) => {
-		const page = await findCandidateProjectionPageRepo(input);
+		const page = await findCandidatePageRepo(input);
 		return {
 			...page,
 			items: await enrichCandidateHostPaths(page.items),
@@ -447,7 +447,7 @@ export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId 
 
 export const listVulnerabilityCandidatesWithProjectionByScanJobId = async (
 	scanJobId: string,
-) => await listCandidateProjectionItemsByScanJobIdRepo(scanJobId);
+) => await listCandidateItemsByScanJobIdRepo(scanJobId);
 
 export const findVulnerabilityCandidateById = async (
 	vulnerabilityCandidateId: string,
@@ -479,7 +479,7 @@ export const findVulnerabilityCandidateWithLatestAnalysisResultById =
 			(await findVulnerabilityCandidateByIdRepo(input.vulnerabilityCandidateId))
 				?.scanJobId;
 		const projectionCandidate = resolvedScanJobId
-			? await findCandidateProjectionByIdRepo({
+			? await findCandidateByIdWithResultsRepo({
 					vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 					scanJobId: resolvedScanJobId,
 					producerTaskId: input.producerTaskId,
@@ -503,7 +503,7 @@ const toLineageItem = (
 ): CandidateTaskLineageItem => ({
 	taskId: task.taskId,
 	scanJobId: task.scanJobId,
-	parentTaskId: task.parentTaskId,
+	parentTaskId: task.sourceMessageId,
 	stageName: task.stageName,
 	status: task.status,
 	name: task.name,
@@ -565,8 +565,16 @@ export const findCandidateTaskLineage = async (input: {
 			upstreamTasks.push(toLineageItem(currentTask, relation));
 			seenTaskIds.add(currentTask.taskId);
 		}
-		currentTask = currentTask.parentTaskId
-			? await findTaskByIdRepo(currentTask.parentTaskId).catch(() => null)
+		if (!currentTask.sourceMessageId) {
+			currentTask = null;
+			continue;
+		}
+		const { findMessageByIdRepo } = await import(
+			"../persistence/message.repo"
+		);
+		const source = await findMessageByIdRepo(currentTask.sourceMessageId);
+		currentTask = source
+			? await findTaskByIdRepo(source.sourceTaskId).catch(() => null)
 			: null;
 	}
 	upstreamTasks.reverse();

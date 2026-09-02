@@ -2071,7 +2071,7 @@ schemas:
         description: Why this surface is high-value for the GoalSpec versus alternatives. Used by later Surface rounds to avoid repeating dead zones.
         type: string
       goalPrompt:
-        description: Generate the goal prompt for the next stage (goal-hunt) on this surface. This is the Codex /goal body — outcome-heavy, path-light. Lock the hunt to this surface's scopeStatement and focusPaths. Tell Hunt to keep the goal active through a real investigation (multiple methods, end-to-end evidence) before writing output.json. Do not tell Hunt to stop at the first lead. Do not paste GoalSpec JSON or name a single tool.
+        description: Generate the goal prompt for the next stage (goal-hunt) on this surface. This is the Codex /goal body — outcome-heavy, path-light. Lock the hunt to this surface's scopeStatement and focusPaths. Tell Hunt to keep the goal active through a real investigation (multiple methods, end-to-end evidence) before submitting a Message. Do not tell Hunt to stop at the first lead. Do not paste GoalSpec JSON or name a single tool.
         type: string
         minLength: 1
     required:
@@ -2469,11 +2469,11 @@ stages:
         You are the Goal Surface planner for a tob-goal scan. Do not hunt and do not spawn subagents.
 
         Read /task/inputs/goal-spec.json and use it as the durable lens (attacker model, successCriteria, nonGoals, surfaceGuidance).
-        Read and write coverage at /lane/surface-coverage.json. /lane is the Surface lane directory and does not change between tasks; /task does. Write planner notes under /lane/. Write output.json under /task/.
+        Read and write coverage at /lane/surface-coverage.json. /lane is the Surface lane directory and does not change between tasks; /task does. Write planner notes under /lane/. Submit structured output with scan-runtime submit-message.
 
-        First turn (feedback is null): partition this repository into 2-8 non-overlapping vulnerability attack surfaces under that lens. Record every dispatched huntGoalId in /lane/surface-coverage.json with status dispatched. Write /task/output.json once, validate it, then mark the thread goal complete. Do not keep adding more huntGoals after that file is written.
+        First turn (feedback is null): partition this repository into 2-8 non-overlapping vulnerability attack surfaces under that lens. Record every dispatched huntGoalId in /lane/surface-coverage.json with status dispatched. Submit one Message, then mark the thread goal complete. Do not keep adding more huntGoals after that output is submitted.
 
-        On later turns: use the judge/dedup feedback in this prompt. If this turn has no feedback object, do not invent another first-pass partition. Close the judged huntGoalId with a short lesson from the verdict. Then decide the next direction yourself from that verdict plus already-covered ids/scopes. Emit exactly one new huntGoal that is not in the coverage file and is not a cosmetic rename of a closed surface. Append it as dispatched, write /lane/surface-coverage.json and /task/output.json, validate, then mark the thread goal complete.
+        On later turns: use the judge/dedup feedback in this prompt. If this turn has no feedback object, do not invent another first-pass partition. Close the judged huntGoalId with a short lesson from the verdict. Then decide the next direction yourself from that verdict plus already-covered ids/scopes. Emit exactly one new huntGoal that is not in the coverage file and is not a cosmetic rename of a closed surface. Append it as dispatched, write /lane/surface-coverage.json, submit-message, then mark the thread goal complete.
 
         Each huntGoal must include scopeStatement, focusPaths, and a goalPrompt for Hunt.
         Each hunt goalPrompt is outcome-heavy and path-light: what must be demonstrated, what is excluded, and that Hunt stops after one evidenced candidate.
@@ -2517,7 +2517,7 @@ stages:
 
         Standing Hunt rules:
         - This /goal stays active until you have one well-evidenced candidate. A first-pass read or a single sink guess is not done.
-        - Do not write /task/output.json or mark the thread goal complete until you have traced an end-to-end path and tried at least two distinct methods (for example manual source-to-sink plus Semgrep or CodeQL, or a second subsystem in the same surface).
+        - Do not submit a Message or mark the thread goal complete until you have traced an end-to-end path and tried at least two distinct methods (for example manual source-to-sink plus Semgrep or CodeQL, or a second subsystem in the same surface).
         - Change method when a line of inquiry dies. Do not emit a speculative candidate just to finish the turn.
         - After the candidate is written and validated, then mark the goal complete.
       prepareRepository: target

@@ -17,7 +17,7 @@ import {
 import { renderPromptTemplateString } from "./prompts/prompt-template";
 import { createJsonSchemaContract } from "./pipeline/scan-pipeline-schema-contracts";
 import {
-	buildStructuredOutputEnvelopeJsonSchema,
+	buildStructuredOutputJsonSchema,
 	buildStructuredOutputPromptSuffix,
 } from "./runtime/structured-output-schema";
 import { loadBuiltinPipelineTemplates } from "./pipeline/document-v3/builtin-pipelines";
@@ -198,7 +198,7 @@ test("Stage Graph prompt templates stay concise while delegating detail to skill
 		},
 	);
 	assert.match(repositoryPrompt, /repository-profile skill/);
-	assert.match(repositoryPrompt, /\/task\/output\.json/);
+	assert.match(repositoryPrompt, /submit-message/);
 	assert.match(repositoryPrompt, /Produce at least 4 modules/);
 	assert.doesNotMatch(repositoryPrompt, /attackerControlledInputs/);
 	assert.doesNotMatch(repositoryPrompt, /dangerousSinks/);
@@ -424,41 +424,26 @@ test("stage boundary manifests use task artifact paths instead of object lists",
 	);
 });
 
-test("structured output prompts delegate schema details to the validator skill", () => {
+test("structured output prompts delegate validation to submit-message", () => {
 	const suffix = buildStructuredOutputPromptSuffix(
-		repositoryProfileManifestSchema,
 		"/task/output.schema.json",
-		"/task/output.json",
 	);
-	assert.match(suffix, /read \/task\/output\.schema\.json/);
-	assert.match(suffix, /output-validator\/validate_output\.py/);
-	assert.match(suffix, /exactly three fields/);
-	assert.match(suffix, /route=null/);
+	assert.match(suffix, /Read \/task\/output\.schema\.json/);
+	assert.match(suffix, /submit-message/);
+	assert.match(suffix, /OUTPUT SUBMISSION/);
+	assert.match(suffix, /output data schema/);
+	assert.match(suffix, /multiple times/);
+	assert.match(suffix, /no discovery or other result.*schema-compatible empty object or array/);
+	assert.doesNotMatch(suffix, /validate-output/);
+	assert.doesNotMatch(suffix, /Runtime output protocol \(generated; do not duplicate/);
+	assert.doesNotMatch(suffix, /output-validator/);
+	assert.doesNotMatch(suffix, /Do not write `?\/?task\/output\.json/);
 	assert.doesNotMatch(suffix, /Task artifact JSON schemas/);
 	assert.doesNotMatch(suffix, /```json/);
 	assert.doesNotMatch(suffix, /runtimeDirectories/);
-
-	const persistentSuffix = buildStructuredOutputPromptSuffix(
-		scanTargetManifestSchema,
-		"/task/output.schema.json",
-		"/task/output.json",
-		undefined,
-		{ allowAgentExit: false },
-	);
-	assert.match(persistentSuffix, /set exit=false/);
-	assert.doesNotMatch(persistentSuffix, /exit=true only/);
-
-	const analysisExitSuffix = buildStructuredOutputPromptSuffix(
-		scanTargetManifestSchema,
-		"/task/output.schema.json",
-		"/task/output.json",
-		undefined,
-		{ allowAgentExit: true },
-	);
-	assert.match(analysisExitSuffix, /exit=true only/);
 });
 
-test("structured output schema carries route metadata and artifact schemas", () => {
+test("structured output schema contains only output data and definitions", () => {
 	const artifactContract = createJsonSchemaContract({
 		schemas: { Module: { type: "object", properties: { moduleId: { type: "string" } } } },
 		schema: {
@@ -472,16 +457,15 @@ test("structured output schema carries route metadata and artifact schemas", () 
 		},
 	});
 	const suffix = buildStructuredOutputPromptSuffix(
-		artifactContract,
 		"/task/output.schema.json",
-		"/task/output.json",
 	);
 
-	assert.match(suffix, /output-validator\/validate_output\.py/);
+	assert.match(suffix, /submit-message/);
+	assert.match(suffix, /schema-compatible empty object or array/);
 	assert.doesNotMatch(suffix, /moduleId/);
 	assert.doesNotMatch(suffix, /"\\$pathOf"/);
 
-	const schema = buildStructuredOutputEnvelopeJsonSchema(
+	const schema = buildStructuredOutputJsonSchema(
 		artifactContract,
 		[
 			{
@@ -492,20 +476,14 @@ test("structured output schema carries route metadata and artifact schemas", () 
 			},
 		],
 	) as Record<string, unknown>;
-	assert.deepEqual(schema["x-vulseek-routes"], [
-		{ key: "continue", description: "Continue reviewing the current item.", default: true },
-	]);
-	assert.deepEqual(schema["x-vulseek-artifacts"], [
-		{
-			route: "continue",
-			path: "output.modules[]",
-			kind: "path_list",
-			schemaRef: "#/definitions/vulseek_artifact_0",
-		},
-	]);
+	assert.equal(schema["x-vulseek-routes"], undefined);
+	assert.equal(schema["x-vulseek-artifacts"], undefined);
+	assert.equal(schema.route, undefined);
+	assert.equal(schema.exit, undefined);
+	assert.deepEqual(schema.anyOf, [artifactContract.schema]);
 });
 
-test("property descriptions survive schema normalization and output envelopes", () => {
+test("property descriptions survive schema normalization and output schemas", () => {
 	const contract = createJsonSchemaContract({
 		schemas: {
 			Finding: {
@@ -534,14 +512,12 @@ test("property descriptions survive schema normalization and output envelopes", 
 	);
 	assert.equal(normalizedTitle.description, "Short finding title.");
 
-	const envelope = buildStructuredOutputEnvelopeJsonSchema(contract) as Record<string, unknown>;
-	const envelopeProperties = envelope.properties as Record<string, unknown>;
-	const envelopeOutput = envelopeProperties.output as Record<string, unknown>;
-	const envelopeOutputProperties = envelopeOutput.properties as Record<string, unknown>;
-	const envelopeFinding = envelopeOutputProperties.finding as Record<string, unknown>;
-	const envelopeFindingProperties = envelopeFinding.properties as Record<string, unknown>;
-	const envelopeTitle = envelopeFindingProperties.title as Record<string, unknown>;
-	assert.equal(envelopeTitle.description, "Short finding title.");
+	const outputSchema = buildStructuredOutputJsonSchema(contract) as Record<string, unknown>;
+	const outputProperties = outputSchema.properties as Record<string, unknown>;
+	const outputFinding = outputProperties.finding as Record<string, unknown>;
+	const outputFindingProperties = outputFinding.properties as Record<string, unknown>;
+	const outputTitle = outputFindingProperties.title as Record<string, unknown>;
+	assert.equal(outputTitle.description, "Short finding title.");
 });
 
 test("analysis prompt removes fuzz routing", () => {

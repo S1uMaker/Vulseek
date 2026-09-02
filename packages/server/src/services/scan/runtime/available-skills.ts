@@ -6,7 +6,7 @@ export type AgentSkillCatalogEntry = {
 	description: string;
 };
 
-const resolveAgentsDirectory = async () => {
+export const resolveAgentsDirectory = async () => {
 	const candidates = [
 		path.resolve(process.cwd(), "agents"),
 		path.resolve(process.cwd(), "../../agents"),

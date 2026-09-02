@@ -10,7 +10,7 @@ import { startContainer } from "../runtime/run-single-turn-agent";
 import type { AgentProfileLike, ScanJob } from "../types";
 import type { StageContext } from "./full-scan-stage.runtime";
 
-export const DEFAULT_RUNTIME_SKILLS = ["output-validator"] as const;
+export const DEFAULT_RUNTIME_SKILLS = ["scan-runtime"] as const;
 
 export type AgentStageRuntime = {
 	agentProfile: AgentProfileLike | null;

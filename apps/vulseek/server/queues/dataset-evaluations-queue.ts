@@ -242,6 +242,8 @@ const processTrial = async (input: {
 					target: { type: "datasetTrial", trialId: input.trial.trialId },
 					pipelineId: input.evaluation.evaluation.pipelineId,
 					pipelineVersionId: input.evaluation.evaluation.pipelineVersionId,
+					pipelineProfileId:
+						input.evaluation.evaluation.pipelineProfileId ?? undefined,
 					title,
 					description,
 					scanRuntimeSettings:

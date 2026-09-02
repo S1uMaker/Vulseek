@@ -33,3 +33,30 @@ export const deletePipelineRuntime = <TRuntime>(
 	}
 	return registry.delete(key);
 };
+
+type WakeableRuntime = {
+	ctx: { scanJobId: string };
+	stopRequested?: boolean;
+	wakeSignal: { notify: () => void };
+};
+
+export const wakePipelineRuntimesForScanJob = (scanJobId: string) => {
+	let wokenRuntimes = 0;
+	for (const runtime of getPipelineRuntimeRegistry<WakeableRuntime>().values()) {
+		if (runtime.ctx.scanJobId !== scanJobId) continue;
+		runtime.wakeSignal.notify();
+		wokenRuntimes += 1;
+	}
+	return wokenRuntimes;
+};
+
+export const stopPipelineRuntimesForScanJob = (scanJobId: string) => {
+	let stoppedRuntimes = 0;
+	for (const runtime of getPipelineRuntimeRegistry<WakeableRuntime>().values()) {
+		if (runtime.ctx.scanJobId !== scanJobId) continue;
+		runtime.stopRequested = true;
+		runtime.wakeSignal.notify();
+		stoppedRuntimes += 1;
+	}
+	return stoppedRuntimes;
+};

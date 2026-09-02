@@ -1,10 +1,11 @@
-import type { scanJobs, tasks } from "@vulseek/server/db/schema";
+import type { messages, scanJobs, tasks } from "@vulseek/server/db/schema";
 import type {
 	Analysis,
 	Evidence,
 	Triage,
 	Verification,
 } from "./artifacts/contracts/domain-object.contract";
+
 export type {
 	Analysis,
 	Candidate,
@@ -42,10 +43,12 @@ export type ScanJob = Omit<
 	repositoryTaskStatus: typeof tasks.$inferSelect.status;
 };
 export type Task = typeof tasks.$inferSelect;
+export type Message = typeof messages.$inferSelect;
 export type VulnerabilityCandidate = {
 	vulnerabilityCandidateId: string;
 	scanJobId: string;
 	producerTaskId: string;
+	messageId: string | null;
 	producerStageName: string;
 	functionId: string | null;
 	title: string;
@@ -143,13 +146,12 @@ export type ScanCandidateQueueJob = {
 export type AgentProfileLike = {
 	agentProfileId: string;
 	name: string;
-	provider: "codex" | "claude_code";
+	provider: "codex" | "claude_code" | "grok_build";
 	authMode: "api_key" | "host_home";
 	homePath: string;
 	baseUrl: string;
 	apiKey: string;
 	model: string;
-	pricingProvider?: string | null;
 	thinkingLevel: string;
 	thinkingLevelEnabled: boolean;
 	envs: string;

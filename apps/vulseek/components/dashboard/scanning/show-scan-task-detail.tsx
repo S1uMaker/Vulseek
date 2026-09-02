@@ -917,13 +917,33 @@ export const ShowScanTaskDetail = ({
 													value={task.runtimeMode}
 												/>
 												<DetailField
+													label={scanT(t, "scan.field.lifecycle", "Lifecycle")}
+													value={task.lifecycle}
+												/>
+												<DetailField
 													label={scanT(
 														t,
-														"scan.field.parentTaskId",
-														"Parent Task ID",
+														"scan.field.sourceMessageId",
+														"Source Message",
 													)}
-													value={task.parentTaskId}
-													href={buildTaskHref(task.parentTaskId)}
+													value={task.sourceMessageId}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.sourceEdgeName",
+														"Source Edge",
+													)}
+													value={task.sourceEdgeName}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.rerunOfTaskId",
+														"Rerun Of Task ID",
+													)}
+													value={task.rerunOfTaskId}
+													href={buildTaskHref(task.rerunOfTaskId)}
 												/>
 												<DetailField
 													label={scanT(
@@ -933,14 +953,6 @@ export const ShowScanTaskDetail = ({
 													)}
 													value={task.forkedFromTaskId}
 													href={buildTaskHref(task.forkedFromTaskId)}
-												/>
-												<DetailField
-													label={scanT(
-														t,
-														"scan.field.forkedFromThreadId",
-														"Forked From Thread ID",
-													)}
-													value={task.forkedFromThreadId}
 												/>
 												<DetailField
 													label={scanT(
@@ -965,14 +977,10 @@ export const ShowScanTaskDetail = ({
 												<DetailField
 													label={scanT(
 														t,
-														"scan.field.exitReason",
-														"Exit Reason",
+														"scan.field.sourceItemIndex",
+														"Source Item Index",
 													)}
-													value={task.exitReason}
-												/>
-												<DetailField
-													label={scanT(t, "scan.field.exitNote", "Exit Note")}
-													value={task.exitNote}
+													value={task.sourceItemIndex}
 												/>
 												<DetailField
 													label={scanT(t, "scan.field.created", "Created")}
@@ -1085,12 +1093,54 @@ export const ShowScanTaskDetail = ({
 												/>
 												<JsonBlock
 													label={scanT(t, "scan.field.input", "Input")}
-													value={task.input}
+													value={data.reconstructedInput}
 												/>
-												<JsonBlock
-													label={scanT(t, "scan.field.output", "Output")}
-													value={task.output}
-												/>
+											</div>
+											<div className="mt-4 space-y-3">
+												<div className="text-sm font-medium">
+													{scanT(t, "scan.section.messages", "Task Outputs")}
+												</div>
+												{(data.messages?.items ?? []).length === 0 ? (
+													<div className="text-sm text-muted-foreground">
+														{scanT(
+															t,
+															"scan.messages.empty",
+															"No Messages yet",
+														)}
+													</div>
+												) : (
+													(data.messages?.items ?? []).map((item: {
+														messageId: string;
+														sequence: number;
+														routeKey: string | null;
+														status: string;
+														createdAt: string;
+														payload: unknown;
+													}) => (
+														<div
+															key={item.messageId}
+															className="rounded-lg border p-3"
+														>
+															<div className="mb-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+																<span>#{item.sequence}</span>
+																<span>
+																	{item.routeKey ??
+																		scanT(t, "scan.messages.noRoute", "no route")}
+																</span>
+																<span>{item.status}</span>
+																<span>{item.createdAt}</span>
+															</div>
+															<JsonBlock
+																label={scanT(
+																	t,
+																	"scan.field.payload",
+																	"Payload",
+																)}
+																value={item.payload}
+															/>
+														</div>
+													))
+												)}
 											</div>
 										</DetailSection>
 									</div>

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	getLaunchablePendingStageNames,
 	getPollableStageNames,
 	groupActiveTasksByStage,
 	type RuntimeLoopSnapshot,
@@ -14,17 +15,18 @@ const snapshot = (
 	activeTasksByStage: new Map(),
 	pendingTargets: [],
 	pendingTaskMetadata: [],
+	pendingMessageCountBySourceStage: new Map(),
 	stagePolicies: new Map(),
 	statusCounts: [],
 	...input,
 });
 
-test("does not poll any stage when the job has no pending tasks", () => {
+test("does not poll stages without pending Messages", () => {
 	assert.deepEqual(
 		getPollableStageNames(
 			snapshot({
 				stagePolicies: new Map([
-					["research-scope", { stageName: "research-scope", disabled: false, concurrency: 1 }],
+					["hunter", { stageName: "hunter", disabled: false, concurrency: 8 }],
 				]),
 			}),
 		),
@@ -32,26 +34,57 @@ test("does not poll any stage when the job has no pending tasks", () => {
 	);
 });
 
-test("polls only pending stages with available concurrency", () => {
+test("launches pending database tasks even when Redis has no Messages", () => {
+	assert.deepEqual(
+		getLaunchablePendingStageNames(
+			snapshot({
+				pendingTargets: [
+					{
+						taskId: "orch-root",
+						stageName: "orchestrator",
+						groupInstanceId: null,
+					},
+				],
+				stagePolicies: new Map([
+					[
+						"orchestrator",
+						{
+							stageName: "orchestrator",
+							disabled: false,
+							concurrency: 1,
+						},
+					],
+					[
+						"hunter",
+						{ stageName: "hunter", disabled: false, concurrency: 8 },
+					],
+				]),
+			}),
+		),
+		["orchestrator"],
+	);
+});
+
+test("polls stages with pending Messages and available concurrency", () => {
 	assert.deepEqual(
 		getPollableStageNames(
 			snapshot({
 				activeCountByStage: new Map([
-					["surface-map", 1],
-					["vulnerability-discovery", 1],
+					["hunter", 1],
+					["orchestrator", 1],
 				]),
-				pendingTargets: [
-					{ taskId: "one", stageName: "surface-map", groupInstanceId: null },
-					{ taskId: "two", stageName: "vulnerability-discovery", groupInstanceId: null },
-				],
+				pendingMessageCountBySourceStage: new Map([
+					["hunter", 4],
+					["orchestrator", 2],
+				]),
 				stagePolicies: new Map([
-					["surface-map", { stageName: "surface-map", disabled: false, concurrency: 1 }],
-					["vulnerability-discovery", { stageName: "vulnerability-discovery", disabled: false, concurrency: 8 }],
-					["track-review", { stageName: "track-review", disabled: false, concurrency: 1 }],
+					["hunter", { stageName: "hunter", disabled: false, concurrency: 8 }],
+					["orchestrator", { stageName: "orchestrator", disabled: false, concurrency: 1 }],
+					["verify-finding", { stageName: "verify-finding", disabled: false, concurrency: 1 }],
 				]),
 			}),
 		),
-		["vulnerability-discovery"],
+		["hunter"],
 	);
 });
 

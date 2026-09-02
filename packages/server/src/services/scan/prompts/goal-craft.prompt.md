@@ -13,5 +13,5 @@ Produce a GoalSpec that:
 
 Write the GoalSpec JSON to /task/goal-spec.json. Return goalSpecPath.
 
-Write `/task/output.json` as:
+Submit output as:
 `{"route":null,"exit":false,"output":{"goalSpecPath":"/task/goal-spec.json"}}`.

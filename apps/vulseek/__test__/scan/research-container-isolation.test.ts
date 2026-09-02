@@ -13,21 +13,25 @@ describe("Research task container isolation", () => {
 
 	test("adds task identity to Research container names", () => {
 		expect(
-			resolveStageContainerNameParts("research", "task-b", ["track-review"]),
+			resolveStageContainerNameParts("task-b", ["track-review"], false),
 		).toEqual(["track-review", "task-b"]);
 		expect(
-			resolveStageContainerNameParts("full_scan", "task-b", ["track-review"]),
+			resolveStageContainerNameParts("task-b", ["track-review"], true),
 		).toEqual(["track-review"]);
 	});
 
-	test("uses the stage goal flag instead of the stage name", () => {
-		expect(resolveStageReuseContainer("custom-stage", true, true)).toBe(false);
+	test("goal and per-task follow configured reuse instead of forcing isolation", () => {
+		expect(resolveStageReuseContainer("custom-stage", true, true)).toBe(true);
+		expect(
+			resolveStageReuseContainer("hunter", true, true, "per-task"),
+		).toBe(true);
+		expect(
+			resolveStageReuseContainer("hunter", false, true, "per-task"),
+		).toBe(false);
 		expect(resolveStageReuseContainer("goal-like-name", true, false)).toBe(true);
-		expect(
-			resolveStageContainerNameParts("custom-stage", "task-c", [], true),
-		).toEqual(["task-c"]);
-		expect(
-			resolveStageContainerNameParts("goal-like-name", "task-c", [], false),
-		).toEqual([]);
+		expect(resolveStageContainerNameParts("task-c", [], true)).toEqual([]);
+		expect(resolveStageContainerNameParts("task-c", [], false)).toEqual([
+			"task-c",
+		]);
 	});
 });

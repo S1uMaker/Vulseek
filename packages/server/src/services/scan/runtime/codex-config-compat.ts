@@ -52,5 +52,21 @@ export const ensureCodexShellEnvironmentPolicy = (configToml: string) => {
 	return source ? `${source}\n\n${block}` : block;
 };
 
+/**
+ * Scan sandboxes have no dbus/Secret Service. Codex still probes the OS
+ * keyring for MCP OAuth on HTTP MCP startup and warns. File store uses
+ * `$CODEX_HOME/.credentials.json` and skips that probe.
+ */
+export const ensureCodexMcpOAuthCredentialsStore = (configToml: string) => {
+	const source = (configToml || "").trimEnd();
+	if (/^\s*mcp_oauth_credentials_store\s*=/m.test(source)) {
+		return source;
+	}
+	const line = 'mcp_oauth_credentials_store = "file"';
+	return source ? `${line}\n${source}` : line;
+};
+
 export const applyCodexRuntimeConfigToml = (configToml: string) =>
-	ensureCodexShellEnvironmentPolicy(ensureCodexGoalsFeature(configToml));
+	ensureCodexShellEnvironmentPolicy(
+		ensureCodexGoalsFeature(ensureCodexMcpOAuthCredentialsStore(configToml)),
+	);

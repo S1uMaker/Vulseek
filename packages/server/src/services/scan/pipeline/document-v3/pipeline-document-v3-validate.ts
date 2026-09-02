@@ -372,6 +372,36 @@ export const validatePipelineDocumentV3 = (
 				),
 			);
 		}
+		if (
+			stage.runtime.inputDelivery === "poll" &&
+			!(stage.runtime.skills ?? []).includes("scan-runtime")
+		) {
+			diagnostics.push(
+				error(
+					"stage.poll_requires_scan_runtime",
+					`stage "${stageId}" uses inputDelivery poll but does not include the scan-runtime skill`,
+					{
+						path: ["stages", stageId, "runtime", "inputDelivery"],
+						entity: { type: "stage", id: stageId },
+					},
+				),
+			);
+		}
+		if (
+			stage.runtime.pollPrompt &&
+			stage.runtime.inputDelivery !== "poll"
+		) {
+			diagnostics.push(
+				error(
+					"stage.poll_prompt_requires_poll",
+					`stage "${stageId}" sets pollPrompt but inputDelivery is not poll`,
+					{
+						path: ["stages", stageId, "runtime", "pollPrompt"],
+						entity: { type: "stage", id: stageId },
+					},
+				),
+			);
+		}
 		for (const artifact of [
 			...(stage.inputArtifacts ?? []),
 			...(stage.outputArtifacts ?? []),

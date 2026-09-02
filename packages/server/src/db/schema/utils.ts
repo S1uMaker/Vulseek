@@ -1,4 +1,4 @@
-import { generatePassword } from "@vulseek/server/templates";
+import { generatePassword } from "../../templates";
 import { faker } from "@faker-js/faker";
 import { customAlphabet } from "nanoid";
 

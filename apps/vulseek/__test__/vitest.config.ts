@@ -17,12 +17,19 @@ export default defineConfig({
 		},
 	},
 	resolve: {
-		alias: {
-			"@": path.resolve(__dirname, ".."),
-			"@vulseek/server": path.resolve(
-				__dirname,
-				"../../../packages/server/src",
-			),
-		},
+		alias: [
+			{
+				find: "@",
+				replacement: path.resolve(__dirname, ".."),
+			},
+			{
+				find: /^@vulseek\/server\/(.*)$/,
+				replacement: `${path.resolve(__dirname, "../../../packages/server/src")}/$1`,
+			},
+			{
+				find: /^@vulseek\/server$/,
+				replacement: path.resolve(__dirname, "../../../packages/server/src"),
+			},
+		],
 	},
 });

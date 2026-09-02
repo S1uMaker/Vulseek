@@ -8,7 +8,7 @@ import {
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { nanoid } from "nanoid";
-import { scanJobs, tasks } from "./scan";
+import { messages, scanJobs, tasks } from "./scan";
 
 const timestamp = () => new Date().toISOString();
 
@@ -80,6 +80,9 @@ export const researchFindings = pgTable(
 			.notNull()
 			.references(() => researchTracks.trackId, { onDelete: "cascade" }),
 		producerTaskId: text("producerTaskId").references(() => tasks.taskId, {
+			onDelete: "set null",
+		}),
+		messageId: text("messageId").references(() => messages.messageId, {
 			onDelete: "set null",
 		}),
 		content: jsonb("content").$type<ResearchFindingContent>().notNull(),

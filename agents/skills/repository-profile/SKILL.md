@@ -33,7 +33,7 @@ Write these artifacts:
 
 - `/task/repository.json` — repository-level fields only; no module details
 - one module JSON file per module — required schema fields exactly; use `name`, not `title`
-- `/task/output.json` — path manifest only (`repository` and `modules` are artifact paths, not objects)
+- submit-message path manifest only (`repository` and `modules` are artifact paths, not objects)
 
 Use the injected schemas as the source of truth.
 

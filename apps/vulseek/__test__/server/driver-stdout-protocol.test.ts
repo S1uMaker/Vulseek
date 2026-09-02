@@ -15,6 +15,11 @@ describe("driver stdout protocol", () => {
 					usage: { inputTokens: 10, outputTokens: 4 },
 				}),
 				JSON.stringify({
+					type: "turn_done",
+					threadId: "thread-1",
+					turnIndex: 2,
+				}),
+				JSON.stringify({
 					type: "task_done",
 					taskId: "task-1",
 					status: "completed",
@@ -30,6 +35,11 @@ describe("driver stdout protocol", () => {
 			{ revision: 1, activity: { kind: "tool" } },
 		]);
 		expect(parsed.latestUsage).toEqual({ inputTokens: 10, outputTokens: 4 });
+		expect(parsed.latestTurnDone).toMatchObject({
+			type: "turn_done",
+			threadId: "thread-1",
+			turnIndex: 2,
+		});
 		expect(parsed.latestTask).toMatchObject({
 			type: "task_done",
 			taskId: "task-1",

@@ -3,10 +3,12 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Readable, Writable } from "node:stream";
+import { Readable, Transform, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-export const VULSEEK_ACP_DRIVER_VERSION = "2026-08-24-runtime-identity-env-1";
+export const VULSEEK_ACP_DRIVER_VERSION = "2026-09-01-runtime-notify-goal-watch";
+const SESSION_STEERING_METHOD = "_session/steering";
+const RUNTIME_NOTIFY_TYPE = "runtime_notify";
 const PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
 const SNAPSHOT_DEBOUNCE_MS = 150;
 const TERMINAL_TOOL_STATUSES = new Set([
@@ -19,7 +21,75 @@ const TERMINAL_TOOL_STATUSES = new Set([
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const asRecord = (value) =>
 	value && typeof value === "object" && !Array.isArray(value) ? value : {};
+const isRuntimeNotify = (value) =>
+	asRecord(value).type === RUNTIME_NOTIFY_TYPE;
+const runtimeNotifyPromptText = (notify) => {
+	const count = Number(asRecord(notify).messageCount);
+	return `Inbound message count changed to ${Number.isFinite(count) ? count : "unknown"}.`;
+};
 const asString = (value) => (typeof value === "string" ? value : "");
+const CLAUDE_REASONING_EFFORTS = new Set([
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+]);
+const CLAUDE_EFFORT_CONFIG_ID = "effort";
+
+export const mapClaudeReasoningEffort = (thinkingLevel) => {
+	const value = asString(thinkingLevel).trim().toLowerCase();
+	if (!value) return null;
+	if (CLAUDE_REASONING_EFFORTS.has(value)) return value;
+	if (value === "minimal") return "low";
+	if (value === "extra high" || value === "extra-high" || value === "highest") {
+		return "xhigh";
+	}
+	return "high";
+};
+
+const claudeEffortFromTaskInput = (taskInput) =>
+	taskInput?.provider === "claude"
+		? mapClaudeReasoningEffort(taskInput.thinkingLevel)
+		: null;
+
+const claudeSettingsEffort = (effort) => (effort === "max" ? "xhigh" : effort);
+
+const claudeEffortSessionMeta = (effort) => {
+	const persisted = claudeSettingsEffort(effort);
+	if (!persisted) return undefined;
+	return {
+		claudeCode: {
+			options: {
+				settings: {
+					effortLevel: persisted,
+				},
+			},
+		},
+	};
+};
+
+const hasClaudeEffortConfigOption = (configOptions) =>
+	Array.isArray(configOptions) &&
+	configOptions.some(
+		(option) => asRecord(option).id === CLAUDE_EFFORT_CONFIG_ID,
+	);
+
+const sessionSetConfigOptionMethod = () =>
+	acp.methods?.agent?.session?.setConfigOption || "session/set_config_option";
+
+const applyClaudeSessionEffort = async (ctx, sessionId, sessionResult, effort) => {
+	if (!effort || !sessionId || !hasClaudeEffortConfigOption(sessionResult?.configOptions)) {
+		return false;
+	}
+	await ctx.request(sessionSetConfigOptionMethod(), {
+		sessionId,
+		configId: CLAUDE_EFFORT_CONFIG_ID,
+		value: effort,
+	});
+	return true;
+};
+
 
 const resolveRuntimeIdentity = (taskInput) => ({
 	scanJobId:
@@ -51,31 +121,7 @@ const setRuntimeIdentityEnvironment = (taskInput) => {
 	return identity;
 };
 
-const pendingJsonWrites = new Map();
 const pendingProtocolWrites = new Map();
-
-const atomicWriteJson = async (filePath, value) => {
-	if (!filePath) return;
-	const previousWrite = pendingJsonWrites.get(filePath) || Promise.resolve();
-	const currentWrite = previousWrite.catch(() => {}).then(async () => {
-		await fs.mkdir(path.dirname(filePath), { recursive: true });
-		const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-		await fs.writeFile(
-			temporaryPath,
-			`${JSON.stringify(value, null, 2)}\n`,
-			"utf-8",
-		);
-		await fs.rename(temporaryPath, filePath);
-	});
-	pendingJsonWrites.set(filePath, currentWrite);
-	try {
-		await currentWrite;
-	} finally {
-		if (pendingJsonWrites.get(filePath) === currentWrite) {
-			pendingJsonWrites.delete(filePath);
-		}
-	}
-};
 
 const appendProtocolEvent = async (filePath, event) => {
 	if (!filePath) return;
@@ -218,50 +264,65 @@ const choosePermission = (params) => {
 		: { outcome: { outcome: "cancelled" } };
 };
 
-const SETTLED_ERROR_CODE = "SETTLED";
+const IDLE_WATCH = { current: null };
 
-const createSettledError = () => {
-	const error = new Error("ACP prompt settled");
-	error.code = SETTLED_ERROR_CODE;
-	return error;
+const bumpAgentAcpIdle = () => {
+	IDLE_WATCH.current?.bump();
 };
 
-const isSettledError = (error) =>
-	Boolean(error && error.code === SETTLED_ERROR_CODE);
-
-const withTimeout = async (promise, timeoutMs, onTimeout, signal) => {
+const withTimeout = async (
+	promise,
+	timeoutMs,
+	onTimeout,
+	timeoutMessage = `ACP prompt timed out after ${Math.round(timeoutMs / 1000)}s without agent response`,
+) => {
 	let timer;
-	let abort = null;
+	let finished = false;
+	let rejectIdle;
+	const timeoutError = new Error(timeoutMessage);
+	const clearTimer = () => {
+		if (timer) {
+			clearTimeout(timer);
+			timer = undefined;
+		}
+	};
+	const arm = () => {
+		if (finished) return;
+		clearTimer();
+		timer = setTimeout(() => {
+			void (async () => {
+				if (finished) return;
+				finished = true;
+				clearTimer();
+				await onTimeout().catch(() => {});
+				rejectIdle?.(timeoutError);
+			})();
+		}, Math.max(1, timeoutMs));
+	};
+	const watch = {
+		bump() {
+			arm();
+		},
+		clear() {
+			finished = true;
+			clearTimer();
+			if (IDLE_WATCH.current === watch) {
+				IDLE_WATCH.current = null;
+			}
+		},
+	};
+	IDLE_WATCH.current = watch;
 	try {
 		const candidates = [
 			promise,
 			new Promise((_, reject) => {
-				timer = setTimeout(async () => {
-					await onTimeout().catch(() => {});
-					reject(
-						new Error(
-							`ACP prompt timed out after ${Math.round(timeoutMs / 1000)}s`,
-						),
-					);
-				}, timeoutMs);
+				rejectIdle = reject;
+				arm();
 			}),
 		];
-		if (signal) {
-			candidates.push(
-				new Promise((_, reject) => {
-					abort = () => reject(createSettledError());
-					if (signal.aborted) {
-						abort();
-						return;
-					}
-					signal.addEventListener("abort", abort, { once: true });
-				}),
-			);
-		}
 		return await Promise.race(candidates);
 	} finally {
-		if (timer) clearTimeout(timer);
-		if (signal && abort) signal.removeEventListener("abort", abort);
+		watch.clear();
 	}
 };
 
@@ -277,72 +338,6 @@ const updateTaskAlias = async (input) => {
 const writeTaskEvent = async (input, event) =>
 	appendProtocolEvent(input.stdoutPath, event);
 
-const writeNullableOutput = async (input, stopReason) => {
-	if (!input.nullableOutput || stopReason !== "end_turn") return;
-	const exists = await fs
-		.stat(input.structuredOutputResultPathInContainer)
-		.then(() => true)
-		.catch(() => false);
-	if (!exists) {
-		await atomicWriteJson(input.structuredOutputResultPathInContainer, {
-			route: null,
-			exit: false,
-			output: null,
-		});
-	}
-};
-
-const hasStructuredOutputEnvelope = (value) =>
-	value &&
-	typeof value === "object" &&
-	!Array.isArray(value) &&
-	Object.prototype.hasOwnProperty.call(value, "route") &&
-	Object.prototype.hasOwnProperty.call(value, "exit") &&
-	Object.prototype.hasOwnProperty.call(value, "output");
-
-const inspectStructuredOutput = async (filePath) => {
-	if (!filePath) return { exists: false, validJson: false, validEnvelope: false };
-	try {
-		const value = JSON.parse(await fs.readFile(filePath, "utf-8"));
-		return { exists: true, validJson: true, validEnvelope: hasStructuredOutputEnvelope(value) };
-	} catch (error) {
-		const exists = await fs
-			.stat(filePath)
-			.then(() => true)
-			.catch(() => false);
-		return { exists, validJson: false, validEnvelope: false };
-	}
-};
-
-const waitForStructuredOutput = async (input, stopReason) => {
-	if (stopReason !== "end_turn" || !input.structuredOutputResultPathInContainer) {
-		return true;
-	}
-	const timeoutMs = Math.max(
-		0,
-		Number(input.structuredOutputGracePeriodMs ?? 2_000),
-	);
-	const deadline = Date.now() + timeoutMs;
-	do {
-		const inspection = await inspectStructuredOutput(
-			input.structuredOutputResultPathInContainer,
-		);
-		if (inspection.validEnvelope) return true;
-		if (Date.now() >= deadline) break;
-		await sleep(50);
-	} while (true);
-	return false;
-};
-
-const structuredOutputRecoveryPrompt = (input) =>
-	[
-		"The previous turn ended before the required structured output file was written.",
-		"Do not continue repository analysis and do not answer with prose.",
-		`Immediately write the complete JSON envelope to ${input.structuredOutputResultPathInContainer}.`,
-		`Use ${input.structuredOutputSchemaPathInContainer || "/task/output.schema.json"} as the source of truth, then reopen the file and validate it before ending this turn.`,
-		"Use the current task's required route, exit, and output values; do not invent or omit required fields.",
-	].join("\n");
-
 const assertCapability = (capabilities, name) => {
 	const session =
 		capabilities?.sessionCapabilities || capabilities?.session || {};
@@ -350,13 +345,210 @@ const assertCapability = (capabilities, name) => {
 		throw new Error(`ACP adapter does not support session/${name}`);
 };
 
-const hasGoalCapability = (initialized) => {
+const hasGoalV1Capability = (initialized) => {
 	const goal = asRecord(initialized?._meta).goal;
 	return (
 		goal?.version === 1 &&
 		goal?.controlMethod === "_session/goal" &&
 		Array.isArray(goal.actions)
 	);
+};
+
+const hasGrokGoalCommand = (initialized) => {
+	const commands = asRecord(initialized?._meta).availableCommands;
+	if (!Array.isArray(commands)) {
+		return false;
+	}
+	return commands.some((command) => asRecord(command).name === "goal");
+};
+
+const hasGoalCapability = (initialized) =>
+	hasGoalV1Capability(initialized) || hasGrokGoalCommand(initialized);
+
+const GROK_ACP_WIRE_LOG_PATH =
+	process.env.VULSEEK_ACP_WIRE_LOG || "/tmp/vulseek-acp-wire.jsonl";
+
+const GROK_SESSION_UPDATE_METHODS = new Set([
+	"session/update",
+	"_x.ai/session/update",
+	"x.ai/session/update",
+	"_x.ai/session_update",
+	"x.ai/session_update",
+	"_x.ai/session_notification",
+	"x.ai/session_notification",
+]);
+
+const ACP_SESSION_UPDATES = new Set([
+	"user_message_chunk",
+	"agent_message_chunk",
+	"agent_thought_chunk",
+	"tool_call",
+	"tool_call_update",
+	"plan",
+	"available_commands_update",
+	"current_mode_update",
+	"config_option_update",
+	"session_info_update",
+	"usage_update",
+]);
+
+const mapGrokGoalStatus = (status) => {
+	if (status === "completed" || status === "complete") {
+		return "complete";
+	}
+	if (status === "active" || status === "blocked") {
+		return status;
+	}
+	if (
+		status === "paused" ||
+		status === "user_paused" ||
+		status === "back_off_paused" ||
+		status === "no_progress_paused" ||
+		status === "infra_paused"
+	) {
+		return "paused";
+	}
+	if (status === "limited" || status === "budget_limited") {
+		return "limited";
+	}
+	return null;
+};
+
+const grokSessionId = (params, update) =>
+	params.sessionId ||
+	params.session_id ||
+	update.sessionId ||
+	update.session_id ||
+	null;
+
+const grokUpdateFromMessage = (message) => {
+	const params = asRecord(message?.params);
+	const nested = asRecord(params.update);
+	if (asString(nested.sessionUpdate)) {
+		return { params, update: nested };
+	}
+	if (asString(params.sessionUpdate)) {
+		return { params, update: params };
+	}
+	return { params, update: nested };
+};
+
+const rewriteAsSessionUpdate = (message, update) => {
+	const { params } = grokUpdateFromMessage(message);
+	const sessionId = grokSessionId(params, asRecord(params.update));
+	const meta = params._meta ?? params.meta;
+	return {
+		jsonrpc: "2.0",
+		method: "session/update",
+		params: {
+			...(sessionId ? { sessionId } : {}),
+			update,
+			...(meta !== undefined ? { _meta: meta } : {}),
+		},
+	};
+};
+
+const rewriteGrokAcpMessage = (message) => {
+	if (!GROK_SESSION_UPDATE_METHODS.has(message?.method)) {
+		return message;
+	}
+	const { update } = grokUpdateFromMessage(message);
+	const type = update.sessionUpdate;
+	if (type === "goal_updated") {
+		const status = mapGrokGoalStatus(update.status);
+		const objective = asString(update.objective).trim();
+		if (!status || !objective) {
+			return message;
+		}
+		return rewriteAsSessionUpdate(message, {
+			sessionUpdate: "session_info_update",
+			_meta: {
+				goal: {
+					objective,
+					status,
+					controlMethod: "_session/goal",
+				},
+			},
+		});
+	}
+	if (type === "turn_completed") {
+		return rewriteAsSessionUpdate(message, {
+			sessionUpdate: "session_info_update",
+			_meta: { turn: { status: "completed" } },
+		});
+	}
+	if (message.method !== "session/update" && ACP_SESSION_UPDATES.has(type)) {
+		return rewriteAsSessionUpdate(message, update);
+	}
+	return message;
+};
+
+const appendGrokAcpWireLog = (entry) => {
+	try {
+		fsSync.appendFileSync(GROK_ACP_WIRE_LOG_PATH, `${JSON.stringify(entry)}\n`);
+	} catch {
+		// Wire logging is diagnostic only; never block ACP.
+	}
+};
+
+const inspectGrokAcpLine = (line) => {
+	try {
+		const message = JSON.parse(line);
+		const { params, update } = grokUpdateFromMessage(message);
+		const rewritten = rewriteGrokAcpMessage(message);
+		bumpAgentAcpIdle();
+		appendGrokAcpWireLog({
+			ts: new Date().toISOString(),
+			jsonrpc: message.jsonrpc ?? null,
+			method: message.method ?? null,
+			id: Object.hasOwn(message, "id") ? message.id : null,
+			sessionId: grokSessionId(params, update),
+			sessionUpdate: update.sessionUpdate || null,
+			status: update.status ?? null,
+			stop_reason: update.stop_reason ?? update.stopReason ?? null,
+			rewrittenMethod: rewritten?.method ?? null,
+			rewrittenSessionUpdate:
+				asRecord(asRecord(rewritten?.params).update).sessionUpdate || null,
+		});
+		return JSON.stringify(rewritten);
+	} catch (error) {
+		appendGrokAcpWireLog({
+			ts: new Date().toISOString(),
+			parseError: String(error?.message || error),
+			prefix: line.slice(0, 180),
+		});
+		return line;
+	}
+};
+
+const createGrokAcpStdoutFilter = () => {
+	let buffer = "";
+	return new Transform({
+		transform(chunk, _encoding, callback) {
+			buffer += chunk.toString("utf8");
+			const lines = buffer.split("\n");
+			buffer = lines.pop() ?? "";
+			const rewritten = [];
+			for (const line of lines) {
+				if (!line.trim()) {
+					continue;
+				}
+				rewritten.push(inspectGrokAcpLine(line));
+			}
+			if (!rewritten.length) {
+				callback();
+				return;
+			}
+			callback(null, `${rewritten.join("\n")}\n`);
+		},
+		flush(callback) {
+			if (!buffer.trim()) {
+				callback();
+				return;
+			}
+			callback(null, `${inspectGrokAcpLine(buffer)}\n`);
+		},
+	});
 };
 
 const isNativeGoalPrompt = (prompt) => /^\s*\/goal(?:\s|$)/i.test(prompt);
@@ -368,74 +560,6 @@ const prefixNativeGoal = (prompt) => {
 	const trimmed = String(prompt ?? "").trim();
 	if (!trimmed) return trimmed;
 	return isNativeGoalPrompt(trimmed) ? trimmed : `/goal ${trimmed}`;
-};
-
-const createDeadline = (timeoutMs) => {
-	const deadline = Date.now() + Math.max(0, timeoutMs);
-	return () => Math.max(1, deadline - Date.now());
-};
-
-const hasValidOutputEnvelopeSync = (filePath) => {
-	if (!filePath) return false;
-	try {
-		return hasStructuredOutputEnvelope(
-			JSON.parse(fsSync.readFileSync(filePath, "utf-8")),
-		);
-	} catch {
-		return false;
-	}
-};
-
-const createGoalTurnSettlement = (hasOutputEnvelope) => {
-	let seenComplete = false;
-	let seenTurn = false;
-	let seenTask = false;
-	let settled = false;
-	let resolveFn = () => {};
-	const promise = new Promise((resolve) => {
-		resolveFn = resolve;
-	});
-	const trySettle = () => {
-		if (settled) return;
-		const hasEnvelope = Boolean(hasOutputEnvelope?.());
-		if (
-			!(
-				(seenComplete && seenTurn) ||
-				(seenComplete && seenTask) ||
-				(hasEnvelope && (seenComplete || seenTurn || seenTask))
-			)
-		) {
-			return;
-		}
-		settled = true;
-		resolveFn();
-	};
-	return {
-		promise,
-		onGoalStatus(status) {
-			if (status === "complete") {
-				seenComplete = true;
-				trySettle();
-				return;
-			}
-			if (
-				status === "active" ||
-				status === "paused" ||
-				status === "blocked" ||
-				status === "limited"
-			) {
-				seenComplete = false;
-			}
-		},
-		onTurnCompleted() {
-			seenTurn = true;
-			trySettle();
-		},
-		onTaskCompleted() {
-			seenTask = true;
-			trySettle();
-		},
-	};
 };
 
 const textPart = (text) => {
@@ -531,6 +655,28 @@ const run = async () => {
 			await handle.close();
 		}
 	};
+	const takeRuntimeNotifies = async () => {
+		await readAvailableInput();
+		const remaining = [];
+		const notifies = [];
+		while (pendingLines.length) {
+			const line = pendingLines.shift();
+			if (!line || !line.trim()) continue;
+			try {
+				const value = JSON.parse(line);
+				if (isRuntimeNotify(value)) {
+					notifies.push(value);
+					continue;
+				}
+			} catch {
+				remaining.push(line);
+				continue;
+			}
+			remaining.push(line);
+		}
+		pendingLines.push(...remaining);
+		return notifies;
+	};
 	const readNextTaskInput = async () => {
 		while (!stopRequested) {
 			await readAvailableInput();
@@ -539,6 +685,7 @@ const run = async () => {
 				if (!line || !line.trim()) continue;
 				try {
 					const value = JSON.parse(line);
+					if (isRuntimeNotify(value)) continue;
 					if (!value || typeof value !== "object" || Array.isArray(value)) {
 						throw new Error("task input must be a JSON object");
 					}
@@ -587,7 +734,10 @@ const run = async () => {
 		new URL(`file://${resolveNormalizerPath()}`).href
 	);
 	const normalizer = normalizerModule.createAgentEventNormalizer({
-		format: initialInput.provider === "claude" ? "claude-code" : "codex",
+		format:
+			initialInput.provider === "claude" || initialInput.provider === "grok"
+				? "claude-code"
+				: "codex",
 	});
 	const sessionIdRef = { current: "" };
 	const snapshots = createSnapshotWriter(activeInput, sessionIdRef);
@@ -595,20 +745,42 @@ const run = async () => {
 		initialInput.cwd,
 		...(initialInput.additionalDirectories || []),
 	].filter(Boolean);
+	const defaultGrokArgs = [
+		"agent",
+		"--always-approve",
+		"--no-leader",
+		...(initialInput.model ? ["--model", String(initialInput.model)] : []),
+		...(initialInput.thinkingLevel
+			? ["--reasoning-effort", String(initialInput.thinkingLevel)]
+			: []),
+		"stdio",
+	];
 	const command =
 		initialInput.adapterCommand ||
-		(initialInput.provider === "claude" ? "claude-agent-acp" : "codex-acp");
+		(initialInput.provider === "claude"
+			? "claude-agent-acp"
+			: initialInput.provider === "grok"
+				? "grok"
+				: "codex-acp");
+	const adapterArgs =
+		initialInput.adapterArgs ||
+		(initialInput.provider === "grok" && !initialInput.adapterCommand
+			? defaultGrokArgs
+			: []);
+	const adapterHomeEnv = initialInput.agentHomePathInContainer
+		? initialInput.provider === "claude"
+			? { CLAUDE_CONFIG_DIR: initialInput.agentHomePathInContainer }
+			: initialInput.provider === "grok"
+				? { GROK_HOME: initialInput.agentHomePathInContainer }
+				: { CODEX_HOME: initialInput.agentHomePathInContainer }
+		: {};
 	const adapterEnvironment = {
 		...process.env,
 		...(initialInput.adapterEnv || {}),
 		...runtimeIdentityEnvironment(initialIdentity),
-		...(initialInput.agentHomePathInContainer
-			? initialInput.provider === "claude"
-				? { CLAUDE_CONFIG_DIR: initialInput.agentHomePathInContainer }
-				: { CODEX_HOME: initialInput.agentHomePathInContainer }
-			: {}),
+		...adapterHomeEnv,
 	};
-	const child = spawn(command, initialInput.adapterArgs || [], {
+	const child = spawn(command, adapterArgs, {
 		stdio: ["pipe", "pipe", "pipe"],
 		env: adapterEnvironment,
 	});
@@ -625,12 +797,14 @@ const run = async () => {
 	);
 	let context = null;
 	let promptActive = false;
+	let notifyWatchActive = false;
 	let goalCapabilityAvailable = false;
 	let preservedGoalPrompt = null;
 	let lastGoalStatus = null;
+	let activeGoalCompletion = null;
 	let goalSetThisSession = false;
-	let goalTurnSettlement = null;
 	let promptTurnIndex = 0;
+	let agentTurnIndex = 0;
 	const cancel = async () => {
 		if (context && sessionIdRef.current && promptActive) {
 			await context.notify(acp.methods.agent.session.cancel, {
@@ -654,7 +828,7 @@ const run = async () => {
 
 	const stream = acp.ndJsonStream(
 		Writable.toWeb(child.stdin),
-		Readable.toWeb(child.stdout),
+		Readable.toWeb(child.stdout.pipe(createGrokAcpStdoutFilter())),
 	);
 	const client = acp
 		.client({ name: "vulseek-acp-driver", version: VULSEEK_ACP_DRIVER_VERSION })
@@ -684,18 +858,17 @@ const run = async () => {
 					continue;
 				}
 				if (event.kind === "turn") {
-					goalTurnSettlement?.onTurnCompleted();
 					await appendProtocolEvent(activeInput.stdoutPath, {
-						type: "log",
-						level: "debug",
-						source: "driver",
-						message: "turn_completed",
+						type: "turn_done",
+						threadId: sessionIdRef.current || null,
+						taskId: activeInput.taskId || null,
+						turnIndex: ++agentTurnIndex,
+						timestamp: new Date().toISOString(),
 					});
 					continue;
 				}
 				if (event.kind === "task") {
 					if (event.status === "completed") {
-						goalTurnSettlement?.onTaskCompleted();
 						await appendProtocolEvent(activeInput.stdoutPath, {
 							type: "log",
 							level: "debug",
@@ -711,9 +884,9 @@ const run = async () => {
 				if (!activity) continue;
 				if (event.kind === "goal") {
 					lastGoalStatus = event.goal?.status || null;
-					goalTurnSettlement?.onGoalStatus(lastGoalStatus);
-					// Do not replay or synthesize this update when a persistent
-					// driver switches to another task.
+					if (event.goal?.status === "complete") {
+						activeGoalCompletion?.markComplete();
+					}
 					await snapshots.immediate("running", activity);
 					continue;
 				}
@@ -734,28 +907,52 @@ const run = async () => {
 			throw new Error("ACP adapter does not advertise Goal v1 capability");
 		}
 		const openSession = async () => {
+			const effort = claudeEffortFromTaskInput(initialInput);
 			const common = {
 				cwd: initialInput.cwd,
 				mcpServers: initialInput.mcpServers || [],
 				additionalDirectories: initialInput.additionalDirectories || [],
+				...(effort ? { _meta: claudeEffortSessionMeta(effort) } : {}),
 			};
+			let sessionId;
+			let sessionResult = {};
 			if (initialInput.threadId) {
-				await ctx.request(acp.methods.agent.session.resume, {
+				sessionResult = await ctx.request(acp.methods.agent.session.resume, {
 					...common,
 					sessionId: initialInput.threadId,
 				});
-				return initialInput.threadId;
-			}
-			if (initialInput.sessionMode === "fork") {
+				sessionId = initialInput.threadId;
+			} else if (initialInput.sessionMode === "fork") {
 				assertCapability(initialized.agentCapabilities, "fork");
-				const forked = await ctx.request(acp.methods.agent.session.fork, {
+				sessionResult = await ctx.request(acp.methods.agent.session.fork, {
 					...common,
 					sessionId: initialInput.parentSessionId,
 				});
-				return forked.sessionId;
+				sessionId = sessionResult.sessionId;
+			} else {
+				sessionResult = await ctx.request(
+					acp.methods.agent.session.new,
+					common,
+				);
+				sessionId = sessionResult.sessionId;
 			}
-			const created = await ctx.request(acp.methods.agent.session.new, common);
-			return created.sessionId;
+			const applied = await applyClaudeSessionEffort(
+				ctx,
+				sessionId,
+				sessionResult,
+				effort,
+			);
+			if (effort) {
+				await appendProtocolEvent(initialInput.stdoutPath, {
+					type: "log",
+					level: "info",
+					source: "driver",
+					message: applied
+						? `claude_effort_set configId=${CLAUDE_EFFORT_CONFIG_ID} value=${effort}`
+						: `claude_effort_requested value=${effort} via_session_meta=true`,
+				});
+			}
+			return sessionId;
 		};
 		sessionIdRef.current = await openSession();
 		await appendProtocolEvent(initialInput.stdoutPath, {
@@ -789,13 +986,18 @@ const run = async () => {
 				kind: "prompt",
 				label: "Starting",
 			});
-			const requestPrompt = async (promptTextOrParts, timeoutMs, settleSignal) => {
-				const prompt = Array.isArray(promptTextOrParts)
+			let grokFollowUp = null;
+			const idleTimeoutMs = Number(
+				taskInput.promptTimeoutMs || PROMPT_TIMEOUT_MS,
+			);
+			const sendPrompt = async (promptTextOrParts, timeoutMs) => {
+				const promptParts = Array.isArray(promptTextOrParts)
 					? promptTextOrParts.filter(
 							(part) => part && typeof part.text === "string" && part.text.trim(),
 						)
 					: [{ type: "text", text: String(promptTextOrParts ?? "") }];
-				const promptText = prompt.map((part) => part.text).join("\n\n");
+				const promptText = promptParts.map((part) => part.text).join("\n\n");
+				const prompt = promptText ? [{ type: "text", text: promptText }] : [];
 				if (promptText.trim()) {
 					await appendProtocolEvent(taskInput.stdoutPath, {
 						type: "vulseek_prompt",
@@ -807,54 +1009,119 @@ const run = async () => {
 						text: promptText,
 					});
 				}
-				promptActive = true;
-				try {
-					const rpc = ctx.request(acp.methods.agent.session.prompt, {
-						sessionId: sessionIdRef.current,
-						prompt,
+				const rpc = ctx.request(acp.methods.agent.session.prompt, {
+					sessionId: sessionIdRef.current,
+					prompt,
+				});
+				void rpc.catch(() => {});
+				const response = await withTimeout(rpc, timeoutMs, cancel);
+				await snapshots.flush();
+				const usage = asRecord(response.usage);
+				if (Object.keys(usage).length) {
+					await appendProtocolEvent(taskInput.stdoutPath, {
+						type: "usage",
+						usage,
 					});
-					void rpc.catch(() => {});
-					const response = await withTimeout(
-						rpc,
-						timeoutMs,
-						cancel,
-						settleSignal,
-					);
-					await snapshots.flush();
-					const usage = asRecord(response.usage);
-					if (Object.keys(usage).length) {
-						await appendProtocolEvent(taskInput.stdoutPath, {
-							type: "usage",
-							usage,
-						});
-					}
-					return response;
-				} catch (error) {
-					if (isSettledError(error)) {
-						await appendProtocolEvent(taskInput.stdoutPath, {
-							type: "log",
-							level: "info",
-							source: "driver",
-							message: "goal_turn_settled",
-						});
-						await cancel().catch(() => {});
-						return { stopReason: "end_turn" };
-					}
-					await snapshots.immediate("error", {
-						kind: "error",
-						label: "Error",
-						detail: error.message,
-					});
-					await writeTaskEvent(taskInput, {
-						type: "task_done",
-						taskId: taskInput.taskId || null,
-						status: "failed",
-						error: error.message,
-					});
-					throw error;
-				} finally {
-					promptActive = false;
 				}
+				return response;
+			};
+			const applyRuntimeNotify = async (notify) => {
+				const text = runtimeNotifyPromptText(notify);
+				await appendProtocolEvent(taskInput.stdoutPath, {
+					type: "log",
+					level: "info",
+					source: "driver",
+					message: `runtime_notify messageCount=${asRecord(notify).messageCount} provider=${taskInput.provider || "codex"}`,
+				});
+				if (taskInput.provider === "grok") {
+					if (promptActive) {
+						await cancel();
+						return { followUp: text };
+					}
+					promptActive = true;
+					try {
+						await sendPrompt(text, idleTimeoutMs);
+					} finally {
+						promptActive = false;
+					}
+					return {};
+				}
+				if (!sessionIdRef.current) return {};
+				try {
+					const result = await ctx.request(SESSION_STEERING_METHOD, {
+						sessionId: sessionIdRef.current,
+						prompt: [{ type: "text", text }],
+					});
+					await appendProtocolEvent(taskInput.stdoutPath, {
+						type: "log",
+						level: "info",
+						source: "driver",
+						message: `runtime_notify_steered outcome=${asRecord(result).outcome || "ok"}`,
+					});
+				} catch (error) {
+					await appendProtocolEvent(taskInput.stdoutPath, {
+						type: "log",
+						level: "warn",
+						source: "driver",
+						message: `runtime_notify_steer_failed ${error instanceof Error ? error.message : String(error)}`,
+					});
+				}
+				return {};
+			};
+			const watchRuntimeNotifies = () => {
+				let stopped = false;
+				const loop = (async () => {
+					while (!stopped && notifyWatchActive && !stopRequested) {
+						const notifies = await takeRuntimeNotifies();
+						for (const notify of notifies) {
+							if (stopped || !notifyWatchActive) break;
+							const applied = await applyRuntimeNotify(notify);
+							if (applied.followUp) grokFollowUp = applied.followUp;
+						}
+						await sleep(50);
+					}
+				})();
+				return {
+					stop: async () => {
+						stopped = true;
+						await loop.catch(() => {});
+					},
+				};
+			};
+			const requestPrompt = async (promptTextOrParts, timeoutMs) => {
+				let nextPrompt = promptTextOrParts;
+				while (!stopRequested) {
+					grokFollowUp = null;
+					promptActive = true;
+					try {
+						const response = await sendPrompt(nextPrompt, timeoutMs);
+						if (
+							taskInput.provider === "grok" &&
+							grokFollowUp &&
+							response.stopReason === "cancelled"
+						) {
+							nextPrompt = grokFollowUp;
+							continue;
+						}
+						return response;
+					} catch (error) {
+						await snapshots.immediate("error", {
+							kind: "error",
+							label: "Error",
+							detail: error.message,
+						});
+						await writeTaskEvent(taskInput, {
+							type: "task_done",
+							taskId: taskInput.taskId || null,
+							status: "failed",
+							error: error.message,
+						});
+						throw error;
+					} finally {
+						promptActive = false;
+					}
+				}
+				throw new Error("ACP prompt cancelled because the driver is stopping");
 			};
 
 			if (taskInput.initialGoalPrompt && !preservedGoalPrompt) {
@@ -874,96 +1141,76 @@ const run = async () => {
 			if (resolvedGoal.recordFirst && resolvedGoal.recordedInitial) {
 				preservedGoalPrompt = resolvedGoal.recordedInitial;
 			}
-			if (resolvedGoal.resetStatus) {
-				goalSetThisSession = true;
-				lastGoalStatus = null;
-			}
-			const remainingMs = createDeadline(
-				Number(taskInput.promptTimeoutMs || PROMPT_TIMEOUT_MS),
-			);
-			const settlement = taskInput.goalEnabled
-				? createGoalTurnSettlement(() =>
-						hasValidOutputEnvelopeSync(
-							taskInput.structuredOutputResultPathInContainer,
-						),
-					)
-				: null;
-			goalTurnSettlement = settlement;
-			const settleController = new AbortController();
-			if (settlement) {
-				void settlement.promise.then(() => {
-					if (!settleController.signal.aborted) settleController.abort();
-				});
-			}
-			let response = await requestPrompt(
-				resolvedGoal.parts,
-				remainingMs(),
-				settlement ? settleController.signal : undefined,
-			);
-			if (settlement && response.stopReason !== "cancelled") {
-				await withTimeout(settlement.promise, remainingMs(), cancel);
-				if (promptActive) await cancel().catch(() => {});
-				response = { ...response, stopReason: "end_turn" };
-			}
-			goalTurnSettlement = null;
-			let structuredOutputExists = await waitForStructuredOutput(
-				taskInput,
-				response.stopReason,
-			);
-			const recoveryAttempts = taskInput.nullableOutput
-				? 0
-				: Math.max(0, Number(taskInput.structuredOutputRecoveryAttempts ?? 1));
-			for (let attempt = 1; !structuredOutputExists && attempt <= recoveryAttempts; attempt += 1) {
-				await appendProtocolEvent(taskInput.stdoutPath, {
-					type: "log",
-					level: "warn",
-					source: "driver",
-					message: "structured output recovery prompt",
-					diagnostics: { attempt, maxAttempts: recoveryAttempts },
-				});
-				await snapshots.immediate("running", {
-					kind: "writing",
-					label: "Writing required output",
-				});
-				response = await requestPrompt(
-					structuredOutputRecoveryPrompt(taskInput),
-					remainingMs(),
-				);
-				structuredOutputExists = await waitForStructuredOutput(
-					taskInput,
-					response.stopReason,
-				);
-			}
-			if (!structuredOutputExists && !taskInput.nullableOutput) {
-				const message = "ACP prompt completed without required output.json";
-				await appendProtocolEvent(taskInput.stdoutPath, {
-					type: "log",
-					level: "error",
-					source: "driver",
-					message,
-					diagnostics: {
-						taskId: taskInput.taskId || null,
-						stopReason: response.stopReason,
-						outputPath: taskInput.structuredOutputResultPathInContainer,
-						gracePeriodMs: Number(taskInput.structuredOutputGracePeriodMs ?? 2_000),
-					},
-				});
+				if (resolvedGoal.resetStatus) {
+					goalSetThisSession = true;
+					lastGoalStatus = null;
+				}
+				const goalCompletion = taskInput.goalEnabled
+					? (() => {
+						let resolveCompletion;
+						let completed = false;
+						const promise = new Promise((resolve) => {
+							resolveCompletion = resolve;
+						});
+						return {
+							promise,
+							get completed() {
+								return completed;
+							},
+							markComplete() {
+								if (completed) return;
+								completed = true;
+								resolveCompletion();
+							},
+						};
+					})()
+					: null;
+				activeGoalCompletion = goalCompletion;
+				notifyWatchActive = true;
+				const watcher = watchRuntimeNotifies();
+				let response;
+				try {
+					response = await requestPrompt(resolvedGoal.parts, idleTimeoutMs);
+					if (goalCompletion && response.stopReason !== "cancelled") {
+						try {
+							while (
+								!goalCompletion.completed &&
+								!stopRequested &&
+								taskInput.provider === "grok" &&
+								grokFollowUp
+							) {
+								const text = grokFollowUp;
+								grokFollowUp = null;
+								response = await requestPrompt(text, idleTimeoutMs);
+							}
+							if (!goalCompletion.completed) {
+								await withTimeout(
+									goalCompletion.promise,
+									idleTimeoutMs,
+									async () => {},
+									`Goal did not reach complete after the prompt returned within ${Math.round(idleTimeoutMs / 1000)}s`,
+								);
+							}
+						} catch (error) {
+							await snapshots.immediate("error", {
+								kind: "error",
+								label: "Error",
+								detail: error.message,
+							});
+							await writeTaskEvent(taskInput, {
+								type: "task_done",
+								taskId: taskInput.taskId || null,
+								status: "failed",
+								error: error.message,
+							});
+							throw error;
+						}
+					}
+				} finally {
+					notifyWatchActive = false;
+					await watcher.stop();
+				}
 				await writeTaskEvent(taskInput, {
-					type: "task_done",
-					taskId: taskInput.taskId || null,
-					status: "failed",
-					error: message,
-					stopReason: response.stopReason,
-				});
-				await snapshots.immediate("error", {
-					kind: "error",
-					label: "Missing structured output",
-					detail: message,
-				});
-				throw new Error(message);
-			}
-			await writeNullableOutput(taskInput, response.stopReason);
-			await writeTaskEvent(taskInput, {
 				type: "task_done",
 				taskId: taskInput.taskId || null,
 				status: response.stopReason === "cancelled" ? "cancelled" : "completed",
@@ -971,11 +1218,12 @@ const run = async () => {
 			});
 			const finalStatus =
 				response.stopReason === "cancelled" ? "cancelled" : "completed";
-			await snapshots.immediate(finalStatus, {
+				await snapshots.immediate(finalStatus, {
 				kind: finalStatus,
-				label: finalStatus === "completed" ? "Completed" : "Cancelled",
-			});
-		};
+					label: finalStatus === "completed" ? "Completed" : "Cancelled",
+				});
+				activeGoalCompletion = null;
+			};
 
 		await runTask(initialInput);
 		while (initialInput.persistent) {

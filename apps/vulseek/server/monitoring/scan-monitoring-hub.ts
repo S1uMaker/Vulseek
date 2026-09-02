@@ -4,7 +4,6 @@ import {
 	findAgentTaskRuntimeByTaskId,
 	findRunningAgentTaskRuntimesByScanJobId,
 	listRunningScanJobsByOrganizationId,
-	parseAgentUsageSnapshot,
 	driverStdoutTailReader,
 } from "@vulseek/server";
 
@@ -213,7 +212,12 @@ class TaskSampler {
 			const protocol = await driverStdoutTailReader.read(
 				this.runtime.stdoutPath,
 			);
-			const usage = parseAgentUsageSnapshot(protocol.latestUsage);
+			const occupancy =
+				protocol.latestUsage &&
+				typeof protocol.latestUsage === "object" &&
+				typeof (protocol.latestUsage as { used?: unknown }).used === "number"
+					? (protocol.latestUsage as { used: number }).used
+					: 0;
 			const container = this.runtime.containerName
 				? {
 						containerId: this.runtime.containerName,
@@ -230,8 +234,8 @@ class TaskSampler {
 				taskKind: this.runtime.taskKind,
 				container,
 				metrics,
-				totalTokens: usage.totalTokens,
-				cachedReadTokens: usage.cachedReadTokens,
+				totalTokens: occupancy,
+				cachedReadTokens: 0,
 			};
 			for (const listener of this.listeners) listener(this.snapshot);
 		} finally {

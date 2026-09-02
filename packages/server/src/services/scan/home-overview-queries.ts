@@ -17,6 +17,7 @@ type OrganizationJobRow = {
 	createdAt: string;
 	target: string;
 	targetKind: "application" | "compose";
+	pipelineProfileName: string | null;
 	projectId: string;
 	environmentId: string;
 	serviceId: string;
@@ -32,6 +33,11 @@ const organizationJobsCte = (organizationId: string) => sql`
 			sj."createdAt",
 			COALESCE(NULLIF(a."name", ''), NULLIF(a."appName", ''), 'Application') AS "target",
 			'application'::text AS "targetKind",
+			(
+				SELECT spp."name"
+				FROM "scan_pipeline_profiles" spp
+				WHERE spp."pipelineProfileId" = sj."pipelineProfileId"
+			) AS "pipelineProfileName",
 			p."projectId",
 			e."environmentId",
 			a."applicationId" AS "serviceId"
@@ -51,6 +57,11 @@ const organizationJobsCte = (organizationId: string) => sql`
 			sj."createdAt",
 			COALESCE(NULLIF(c."name", ''), NULLIF(c."appName", ''), 'Compose') AS "target",
 			'compose'::text AS "targetKind",
+			(
+				SELECT spp."name"
+				FROM "scan_pipeline_profiles" spp
+				WHERE spp."pipelineProfileId" = sj."pipelineProfileId"
+			) AS "pipelineProfileName",
 			p."projectId",
 			e."environmentId",
 			c."composeId" AS "serviceId"
@@ -101,9 +112,9 @@ export const getScanHomeSummary = async (organizationId: string) => {
 		),
 		organization_candidates AS (
 			SELECT COUNT(*)::int AS "securityIssueCount"
-			FROM "candidate_result_projections" crp
-			INNER JOIN organization_jobs oj ON oj."scanJobId" = crp."scanJobId"
-			WHERE crp."triageResult" = 'security_issue'
+			FROM "vulnerability_candidates" vc
+			INNER JOIN organization_jobs oj ON oj."scanJobId" = vc."scanJobId"
+			WHERE vc."triageResult" = 'security_issue'
 		)
 		SELECT
 			op."projectCount",
@@ -116,12 +127,14 @@ export const getScanHomeSummary = async (organizationId: string) => {
 		LEFT JOIN organization_jobs oj ON TRUE
 		GROUP BY op."projectCount", os."subjectCount", oc."securityIssueCount"
 	`);
-	const row = result[0] as {
-		projectCount: number;
-		subjectCount: number;
-		totalTokens: number | string;
-		securityIssueCount: number;
-	} | undefined;
+	const row = result[0] as
+		| {
+				projectCount: number;
+				subjectCount: number;
+				totalTokens: number | string;
+				securityIssueCount: number;
+		  }
+		| undefined;
 	return {
 		projectCount: Number(row?.projectCount || 0),
 		subjectCount: Number(row?.subjectCount || 0),
@@ -158,11 +171,11 @@ export const getScanHomeActivity = async (input: {
 			GROUP BY vc."scanJobId"
 		),
 		security_issue_counts AS (
-			SELECT crp."scanJobId", COUNT(*)::int AS "securityIssueCount"
-			FROM "candidate_result_projections" crp
-			INNER JOIN activity_jobs aj ON aj."scanJobId" = crp."scanJobId"
-			WHERE crp."triageResult" = 'security_issue'
-			GROUP BY crp."scanJobId"
+			SELECT vc."scanJobId", COUNT(*)::int AS "securityIssueCount"
+			FROM "vulnerability_candidates" vc
+			INNER JOIN activity_jobs aj ON aj."scanJobId" = vc."scanJobId"
+			WHERE vc."triageResult" = 'security_issue'
+			GROUP BY vc."scanJobId"
 		)
 		SELECT
 			TO_CHAR((aj."createdAt"::timestamptz AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD') AS date,
@@ -231,6 +244,7 @@ export const getScanHomeWorkload = async (organizationId: string) => {
 			title: value.title,
 			target: value.target,
 			targetKind: value.targetKind,
+			pipelineProfileName: value.pipelineProfileName?.trim() || null,
 			projectId: value.projectId,
 			environmentId: value.environmentId,
 			serviceId: value.serviceId,

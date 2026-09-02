@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { JsonEditor } from "./json-editor";
+import { McpMultiSelect } from "./mcp-multi-select";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { SchemaReferenceField } from "./workbench/workbench-fields";
 
@@ -202,6 +203,16 @@ const StageInspector = ({
 						onChange={(skills) =>
 							updateRuntime({
 								skills: skills.length > 0 ? skills : undefined,
+							})
+						}
+					/>
+				</Field>
+				<Field label="MCP">
+					<McpMultiSelect
+						value={stage.runtime.mcp}
+						onChange={(mcp) =>
+							updateRuntime({
+								mcp: mcp.length > 0 ? mcp : undefined,
 							})
 						}
 					/>

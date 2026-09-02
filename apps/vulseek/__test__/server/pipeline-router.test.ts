@@ -335,6 +335,7 @@ describe("runtimeCatalog", () => {
 			expect.arrayContaining(["goal-craft", "goal-hunt", "codeql"]),
 		);
 		expect(catalog.skills.every((skill) => skill.name.length > 0)).toBe(true);
+		expect(Array.isArray(catalog.mcp)).toBe(true);
 	});
 });
 

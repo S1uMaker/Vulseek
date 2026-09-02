@@ -4,7 +4,6 @@ const mocks = vi.hoisted(() => ({
 	closeConnection: vi.fn(),
 	ensureLegacyDrizzleBaseline: vi.fn(),
 	migrate: vi.fn(),
-	backfillCandidateResultProjections: vi.fn(),
 	backfillScanPipelineDefinitionSnapshots: vi.fn(),
 	backfillScanJobCosts: vi.fn(),
 }));
@@ -24,14 +23,6 @@ vi.mock("drizzle-orm/postgres-js/migrator", () => ({
 vi.mock("@/server/db/legacy-drizzle-baseline", () => ({
 	ensureLegacyDrizzleBaseline: mocks.ensureLegacyDrizzleBaseline,
 }));
-
-vi.mock(
-	"@vulseek/server/services/scan/persistence/candidate-result-projection-backfill",
-	() => ({
-		backfillCandidateResultProjections:
-			mocks.backfillCandidateResultProjections,
-	}),
-);
 
 vi.mock(
 	"@vulseek/server/services/scan/persistence/scan-job-cost-backfill",
@@ -58,11 +49,6 @@ describe("migration", () => {
 	it("rethrows the original migration error and closes the connection", async () => {
 		const error = new Error("migration failed");
 		mocks.ensureLegacyDrizzleBaseline.mockResolvedValue(undefined);
-		mocks.backfillCandidateResultProjections.mockResolvedValue({
-			processedCount: 0,
-			skippedCount: 0,
-			skippedTasks: [],
-		});
 		mocks.backfillScanJobCosts.mockResolvedValue({
 			processedCount: 0,
 			skippedCount: 0,
@@ -78,24 +64,24 @@ describe("migration", () => {
 		expect(mocks.closeConnection).toHaveBeenCalledTimes(1);
 	});
 
-	it("runs projection backfill after the SQL migrations", async () => {
+	it("runs remaining backfills after the SQL migrations", async () => {
 		mocks.ensureLegacyDrizzleBaseline.mockResolvedValue(undefined);
 		mocks.migrate.mockResolvedValue(undefined);
-		mocks.backfillCandidateResultProjections.mockResolvedValue({
-			processedCount: 2,
-			skippedCount: 1,
-			skippedTasks: [],
-		});
 		mocks.backfillScanJobCosts.mockResolvedValue({
 			processedCount: 0,
 			skippedCount: 0,
 			skippedTasks: [],
 		});
+		mocks.backfillScanPipelineDefinitionSnapshots.mockResolvedValue({
+			processedCount: 0,
+			updatedCount: 0,
+		});
 
 		await migration();
 
-		expect(mocks.backfillCandidateResultProjections).toHaveBeenCalledTimes(1);
-		expect(mocks.backfillScanPipelineDefinitionSnapshots).toHaveBeenCalledTimes(1);
+		expect(mocks.backfillScanPipelineDefinitionSnapshots).toHaveBeenCalledTimes(
+			1,
+		);
 		expect(mocks.backfillScanJobCosts).toHaveBeenCalledTimes(1);
 		expect(mocks.closeConnection).toHaveBeenCalledTimes(1);
 	});
