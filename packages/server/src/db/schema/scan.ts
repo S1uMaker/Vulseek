@@ -19,13 +19,13 @@ import { z } from "zod";
 import { organization } from "./account";
 import { applications } from "./application";
 import { compose } from "./compose";
+import { projects } from "./project";
 import {
 	buildDefaultEvaluateConfig,
 	type EvaluateConfig,
 	type ScanRuntimeSettings,
 	ScanRuntimeSettingsSchema,
 } from "./shared";
-
 export type TaskAgentProfileSnapshot = {
 	agentProfileId: string | null;
 	name: string | null;
@@ -793,6 +793,105 @@ export const scanEvaluateResults = pgTable(
 	}),
 );
 
+export const scanLedgerEntryTypeEnum = pgEnum("scanLedgerEntryType", [
+	"source",
+	"sink",
+	"gate",
+	"connector",
+	"impact",
+	"hypothesis",
+]);
+export const scanLedgerVerdictEnum = pgEnum("scanLedgerVerdict", [
+	"unknown",
+	"supported",
+	"refuted",
+	"contested",
+]);
+export const scanLedgerStateEnum = pgEnum("scanLedgerState", [
+	"untracked",
+	"discovered",
+	"assigned",
+	"investigating",
+	"partial",
+	"covered",
+	"blocked",
+]);
+
+export const scanLedgerFunctionStateEnum = pgEnum("scanLedgerFunctionState", [
+	"discovered",
+	"assigned",
+	"investigating",
+	"partial",
+	"covered",
+	"verified",
+	"blocked",
+]);
+
+export const scanLedgerEntries = pgTable(
+	"scan_ledger_entries",
+	{
+		id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+		organizationId: text("organizationId")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		applicationId: text("applicationId").references(
+			() => applications.applicationId,
+			{ onDelete: "cascade" },
+		),
+		composeId: text("composeId").references(() => compose.composeId, {
+			onDelete: "cascade",
+		}),
+		projectId: text("projectId").references(() => projects.projectId, {
+			onDelete: "cascade",
+		}),
+		sourceJobId: text("sourceJobId").notNull(),
+		repoId: text("repoId").notNull(),
+		snapshotId: text("snapshotId").notNull(),
+		file: text("file").notNull(),
+		functionName: text("functionName").notNull(),
+		line: integer("line").notNull(),
+		endLine: integer("endLine"),
+		state: scanLedgerFunctionStateEnum("state")
+			.notNull()
+			.default("discovered"),
+		primitives: jsonb("primitives")
+			.$type<import("./ledger-json").LedgerPrimitive[]>()
+			.notNull()
+			.default(sql`'[]'::jsonb`),
+		revision: integer("revision").notNull().default(1),
+		createdBy: text("createdBy").notNull(),
+		updatedBy: text("updatedBy").notNull(),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		orgRepoSnapshotIndex: index("scan_ledger_entries_org_repo_snapshot_idx").on(
+			table.organizationId,
+			table.repoId,
+			table.snapshotId,
+		),
+		functionIdentity: uniqueIndex(
+			"scan_ledger_entries_function_identity_idx",
+		).on(
+			table.organizationId,
+			table.repoId,
+			table.snapshotId,
+			table.file,
+			table.functionName,
+		),
+		functionStateIndex: index("scan_ledger_entries_function_state_idx").on(
+			table.state,
+		),
+		applicationSnapshotIndex: index(
+			"scan_ledger_entries_app_snapshot_idx",
+		).on(table.applicationId, table.snapshotId),
+	}),
+);
+
 export const candidateTags = pgTable("candidate_tags", {
 	name: text("name").notNull().primaryKey(),
 	createdAt: text("createdAt")
@@ -828,7 +927,34 @@ export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 	candidateMetadata: many(candidateMetadata),
 	vulnerabilityCandidates: many(vulnerabilityCandidates),
 	evaluateResults: many(scanEvaluateResults),
+	ledgerEntries: many(scanLedgerEntries),
 }));
+
+export const scanLedgerEntriesRelations = relations(
+	scanLedgerEntries,
+	({ one }) => ({
+		organization: one(organization, {
+			fields: [scanLedgerEntries.organizationId],
+			references: [organization.id],
+		}),
+		application: one(applications, {
+			fields: [scanLedgerEntries.applicationId],
+			references: [applications.applicationId],
+		}),
+		compose: one(compose, {
+			fields: [scanLedgerEntries.composeId],
+			references: [compose.composeId],
+		}),
+		project: one(projects, {
+			fields: [scanLedgerEntries.projectId],
+			references: [projects.projectId],
+		}),
+		sourceJob: one(scanJobs, {
+			fields: [scanLedgerEntries.sourceJobId],
+			references: [scanJobs.scanJobId],
+		}),
+	}),
+);
 
 export const scanPipelinesRelations = relations(
 	scanPipelines,

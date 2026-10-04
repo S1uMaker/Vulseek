@@ -1,14 +1,16 @@
-import { describe, expect, it } from "vitest";
 import {
 	collectJobTabDiagnostics,
 	collectPipelineDiagnostics,
 	compilePipelineDocumentV3,
 	hasBlockingDiagnostics,
-	parsePipelineDocumentV3,
+	jobTabsFromSnapshot,
+	LEDGER_PRIMITIVES_TAB,
 	type PipelineDocumentV3,
 	type PipelineJobTab,
+	parsePipelineDocumentV3,
 } from "@vulseek/server/services/scan/pipeline/document-v3";
 import { loadBuiltinPipelineTemplates } from "@vulseek/server/services/scan/pipeline/document-v3/builtin-pipelines";
+import { describe, expect, it } from "vitest";
 
 const tab = (overrides: Partial<PipelineJobTab> = {}): PipelineJobTab => ({
 	id: "findings",
@@ -46,9 +48,73 @@ describe("collectJobTabDiagnostics", () => {
 				dataSource: "research-tracks",
 			}),
 		]);
-		expect(diagnostics.some((item) => item.code === "presentation.incompatible_renderer")).toBe(
-			true,
-		);
+		expect(
+			diagnostics.some(
+				(item) => item.code === "presentation.incompatible_renderer",
+			),
+		).toBe(true);
+	});
+});
+
+describe("ledger job tab catalog", () => {
+	it("exposes the database ID as the first sortable column", () => {
+		expect(LEDGER_PRIMITIVES_TAB.columns[0]).toBe("id");
+		expect(
+			collectJobTabDiagnostics([
+				{
+					...LEDGER_PRIMITIVES_TAB,
+					defaultSort: { field: "id", direction: "asc" },
+				},
+			]),
+		).toEqual([]);
+	});
+	it("includes state as a column and enum filter", () => {
+		expect(LEDGER_PRIMITIVES_TAB.columns).toContain("state");
+		expect(LEDGER_PRIMITIVES_TAB.filters).toContain("state");
+	});
+
+	it("adds state to legacy explicit Ledger tabs", () => {
+		const [ledger] = jobTabsFromSnapshot({
+			presentation: {
+				jobTabs: [
+					{
+						id: "ledger",
+						label: "Ledger",
+						renderer: "entity-table",
+						dataSource: "ledger-primitives",
+						columns: ["type", "verdict", "statement"],
+						filters: ["type", "verdict"],
+						detail: "ledger-primitive",
+					},
+				],
+			},
+		});
+		expect(ledger?.columns).toEqual([
+			"id",
+			"title",
+			"type",
+			"state",
+			"verdict",
+			"primitiveCount",
+		]);
+		expect(ledger?.filters).toEqual(["type", "state", "verdict"]);
+	});
+
+	it("accepts the orch-hunt Ledger tab", () => {
+		expect(
+			collectJobTabDiagnostics([
+				{
+					id: "ledger",
+					label: "Ledger",
+					renderer: "entity-table",
+					dataSource: "ledger-primitives",
+					columns: ["type", "state", "verdict", "statement", "file", "line"],
+					filters: ["type", "state", "verdict"],
+					defaultSort: { field: "createdAt", direction: "desc" },
+					detail: "ledger-primitive",
+				},
+			]),
+		).toEqual([]);
 	});
 });
 
@@ -78,6 +144,7 @@ describe("compiled presentation", () => {
 					runtime: {
 						kind: "agent",
 						prompt: "go",
+						inputDelivery: "prompt",
 						prepareRepository: "none",
 						includePolicy: false,
 						plugins: [],
@@ -115,11 +182,10 @@ describe("built-in pipeline presentation", () => {
 			const parsed = parsePipelineDocumentV3(template.yaml);
 			expect(parsed.document).not.toBeNull();
 			const diagnostics = collectPipelineDiagnostics(parsed.document!);
-			expect(hasBlockingDiagnostics([...parsed.diagnostics, ...diagnostics])).toBe(
-				false,
-			);
+			expect(
+				hasBlockingDiagnostics([...parsed.diagnostics, ...diagnostics]),
+			).toBe(false);
 			expect(parsed.document?.presentation?.jobTabs.length).toBeGreaterThan(0);
 		}
 	});
 });
-

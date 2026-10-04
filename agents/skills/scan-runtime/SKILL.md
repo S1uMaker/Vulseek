@@ -28,7 +28,7 @@ authentication or request problem rather than a transient network failure.
 Query remaining downstream dispatch capacity before emitting fan-out work:
 
 ```bash
-python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/query_scan_runtime.py" \
+python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/scan_runtime.py" \
   downstream-capacity [--to-stage STAGE]
 ```
 
@@ -42,7 +42,7 @@ Examples:
 Query active tasks for any pipeline stage:
 
 ```bash
-python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/query_scan_runtime.py" \
+python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/scan_runtime.py" \
   running-tasks --stage STAGE
 ```
 
@@ -55,7 +55,7 @@ task statuses are `launching`, `launched`, `starting`, and `running`. An empty
 Poll completed Messages from a downstream stage:
 
 ```bash
-python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/query_scan_runtime.py" \
+python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/scan_runtime.py" \
   stage-outputs --stage STAGE
 ```
 
@@ -69,7 +69,7 @@ Take **this stage's waiting inbound Messages** (not another stage's outputs).
 Pass the current stage name. For Orchestrator that is `--stage orchestrator`:
 
 ```bash
-python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/query_scan_runtime.py" \
+python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/scan_runtime.py" \
   poll-messages --stage STAGE
 ```
 
@@ -79,13 +79,16 @@ does not replay items from earlier polls. Each item includes
 `messageId`, `edgeName`, `name`, `status`, `sourceEdgeName`, and reconstructed
 `input` (for Hunter follow-up: `name` and `feedback`). You may only poll your
 own stage queue. An empty array while downstream tasks are still `running` is
-the wait state, not a hang. `running-tasks` timestamps often stay unchanged
+the Orchestrator's wait state, not a hang. `running-tasks` timestamps often stay unchanged
 during a run. `query-messages` only peeks; use `poll-messages` to consume.
+A Hunter does not poll. Its only handoff is `submit-message`; it does not
+call `running-tasks`, `stage-outputs`, or `poll-messages`, and it does not
+wait for a downstream stage.
 
 After using an item's input, complete it so any leftover queue entry is dropped:
 
 ```bash
-python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/query_scan_runtime.py" \
+python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/scan_runtime.py" \
   complete-messages --message-id MESSAGE_ID
 ```
 
@@ -105,7 +108,7 @@ failure returns a non-zero command status and no output is inserted. Optional
 submission idempotent:
 
 ```bash
-python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/query_scan_runtime.py" \
+python3 "$VULSEEK_AGENT_HOME/skills/scan-runtime/scan_runtime.py" \
   submit-message [--route KEY] [--submission-key KEY] < result.json
 ```
 

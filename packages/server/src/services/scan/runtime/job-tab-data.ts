@@ -17,7 +17,14 @@ import {
 } from "../persistence/tob-goal-list.repo";
 import { findTobGoalCandidateRepo } from "../persistence/tob-goal-candidate.repo";
 import { findTobGoalFindingRepo } from "../persistence/tob-goal-finding.repo";
+import {
+	findLedgerEntryByIdRepo,
+	listLedgerEntriesPageRepo,
+	type FunctionCoverageState,
+	type LedgerEntryRow,
+} from "../persistence/ledger.repo";
 import { resolveCompiledDefinition } from "../api/pipeline-runs";
+import { ledgerEntryIdQuerySchema } from "./ledger-schema";
 import {
 	JOB_TAB_DATA_SOURCE_CATALOG,
 	jobTabsFromSnapshot,
@@ -135,6 +142,80 @@ const flattenCandidate = (row: Record<string, unknown>) => ({
 	vulnerabilityType: row.vulnerabilityType ?? null,
 });
 
+const LEDGER_TYPES = [
+	"source",
+	"sink",
+	"gate",
+	"connector",
+	"impact",
+	"hypothesis",
+] as const;
+const LEDGER_VERDICTS = [
+	"unknown",
+	"supported",
+	"refuted",
+	"contested",
+];
+const LEDGER_STATES: FunctionCoverageState[] = [
+	"discovered",
+	"assigned",
+	"investigating",
+	"partial",
+	"covered",
+	"verified",
+	"blocked",
+];
+
+const pickEnumValues = <T extends string>(
+	values: string[] | undefined,
+	allowed: readonly T[],
+): T[] =>
+	(values ?? []).filter((value): value is T =>
+		(allowed as readonly string[]).includes(value),
+	);
+
+const flattenLedger = (row: LedgerEntryRow) => {
+	return {
+		id: row.id,
+		type: "function",
+		state: row.state,
+		verdict: null,
+		title: row.functionName,
+		statement: row.file,
+		file: row.file,
+		line: row.line,
+		endLine: row.endLine,
+		functionName: row.functionName,
+		sourceJobId: row.sourceJobId,
+		primitiveCount: row.primitives?.length ?? 0,
+		revision: row.revision,
+		primitives: row.primitives,
+		createdBy: row.createdBy,
+		updatedBy: row.updatedBy,
+		createdAt: row.createdAt,
+		updatedAt: row.updatedAt,
+		repoId: row.repoId,
+		snapshotId: row.snapshotId,
+	};
+};
+
+const ledgerInJobScope = (
+	row: LedgerEntryRow,
+	job: {
+		applicationId: string | null;
+		composeId: string | null;
+		scanJobId: string;
+	},
+) => {
+	if (job.applicationId) {
+		return row.applicationId === job.applicationId;
+	}
+	if (job.composeId) {
+		return row.composeId === job.composeId;
+	}
+	return row.sourceJobId === job.scanJobId;
+};
+
 const flattenFinding = (row: Record<string, unknown>) => {
 	const content = asRecord(row.content);
 	const location = asRecord(content.location);
@@ -152,7 +233,7 @@ const flattenFinding = (row: Record<string, unknown>) => {
 export const queryJobTabData = async (
 	input: JobTabListInput,
 ): Promise<JobTabListResult> => {
-	const { tab } = await requireTab(input);
+	const { job, tab } = await requireTab(input);
 	const catalog = JOB_TAB_DATA_SOURCE_CATALOG[tab.dataSource];
 	const page = Math.max(1, input.page ?? 1);
 	const pageSize = Math.max(1, Math.min(100, input.pageSize ?? 20));
@@ -310,6 +391,44 @@ export const queryJobTabData = async (
 		};
 	}
 
+	if (source === "ledger-primitives") {
+		const states = pickEnumValues(filters.state, LEDGER_STATES);
+		const result = await listLedgerEntriesPageRepo({
+			scope: {
+				applicationId: job.applicationId,
+				composeId: job.composeId,
+			},
+			snapshotId:
+				job.commitSha && job.commitSha.trim()
+					? job.commitSha
+					: `job:${job.scanJobId}`,
+			sourceJobId:
+				job.applicationId || job.composeId ? undefined : job.scanJobId,
+			states,
+			query,
+			sortField,
+			sortDirection: input.sortDirection ?? tab.defaultSort?.direction ?? "desc",
+			page,
+			pageSize,
+		});
+		return {
+			tab,
+			items: result.items.map((item) => ({
+				// Shared table navigation uses strings; values.id remains numeric.
+				id: String(item.id),
+				values: pickValues(flattenLedger(item), columns),
+			})),
+			total: result.total,
+			page: result.page,
+			pageSize: result.pageSize,
+			filterOptions: {
+				type: [...LEDGER_TYPES],
+				state: [...LEDGER_STATES],
+				verdict: [...LEDGER_VERDICTS],
+			},
+		};
+	}
+
 	if (source === "tob-goal-candidates") {
 		const result = await listTobGoalCandidatesPageRepo({
 			scanJobId: input.scanJobId,
@@ -341,34 +460,41 @@ export const queryJobTabData = async (
 		};
 	}
 
-	const result = await listTobGoalFindingsPageRepo({
-		scanJobId: input.scanJobId,
-		page,
-		pageSize,
-		query,
-		status: csv(filters.status),
-		huntGoalId: csv(filters.huntGoalId),
+	if (source === "tob-goal-findings") {
+		const result = await listTobGoalFindingsPageRepo({
+			scanJobId: input.scanJobId,
+			page,
+			pageSize,
+			query,
+			status: csv(filters.status),
+			huntGoalId: csv(filters.huntGoalId),
+		});
+		return {
+			tab,
+			items: result.items.map((item) => ({
+				id: item.findingId,
+				values: pickValues(
+					{
+						title: item.title,
+						status: item.status,
+						huntGoalId: item.huntGoalId,
+						summary: item.summary,
+						updatedAt: item.updatedAt,
+					},
+					columns,
+				),
+			})),
+			total: result.total,
+			page: result.page,
+			pageSize: result.pageSize,
+			filterOptions: result.filterOptions,
+		};
+	}
+
+	throw new TRPCError({
+		code: "BAD_REQUEST",
+		message: `Unsupported job tab data source "${source}"`,
 	});
-	return {
-		tab,
-		items: result.items.map((item) => ({
-			id: item.findingId,
-			values: pickValues(
-				{
-					title: item.title,
-					status: item.status,
-					huntGoalId: item.huntGoalId,
-					summary: item.summary,
-					updatedAt: item.updatedAt,
-				},
-				columns,
-			),
-		})),
-		total: result.total,
-		page: result.page,
-		pageSize: result.pageSize,
-		filterOptions: result.filterOptions,
-	};
 };
 
 export const queryJobTabDetail = async (input: {
@@ -376,7 +502,7 @@ export const queryJobTabDetail = async (input: {
 	tabId: string;
 	itemId: string;
 }) => {
-	const { tab } = await requireTab(input);
+	const { job, tab } = await requireTab(input);
 	if (!tab.detail) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
@@ -447,6 +573,20 @@ export const queryJobTabDetail = async (input: {
 			throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
 		}
 		return { tab, id: input.itemId, fields: item, raw: item };
+	}
+	if (tab.detail === "ledger-primitive") {
+		const entryId = ledgerEntryIdQuerySchema.safeParse(input.itemId);
+		if (!entryId.success) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "Invalid ledger entry id",
+			});
+		}
+		const item = await findLedgerEntryByIdRepo(entryId.data);
+		if (!item || !ledgerInJobScope(item, job)) {
+			throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
+		}
+		return { tab, id: input.itemId, fields: flattenLedger(item), raw: item };
 	}
 	if (tab.detail === "tob-goal-candidate") {
 		const item = await findTobGoalCandidateRepo({

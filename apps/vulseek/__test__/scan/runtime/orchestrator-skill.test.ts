@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const execFileAsync = promisify(execFile);
 const skillPath = join(
 	dirname(fileURLToPath(import.meta.url)),
-	"../../../../../agents/skills/orchestrator/orchestrator.py",
+	"../../../../../agents/skills/orch-hunt-ppl/orchestrator.py",
 );
 
 type MockRequest = {
@@ -193,7 +193,7 @@ describe("orchestrator Python CLI", () => {
 		});
 		servers.push(api);
 		const { stdout } = await runSkill([
-			"get_hunter_feedback",
+			"get_critic_feedback",
 			"--api-url",
 			api.url,
 			"--token",
@@ -227,7 +227,7 @@ describe("orchestrator Python CLI", () => {
 		});
 		servers.push(api);
 		const { stdout } = await runSkill([
-			"get_hunter_feedback",
+			"get_critic_feedback",
 			"--api-url",
 			api.url,
 			"--token",
@@ -236,7 +236,7 @@ describe("orchestrator Python CLI", () => {
 		expect(JSON.parse(stdout)).toEqual({ ok: true, feedback: [] });
 	});
 
-	it("submits hunts within available slots and appends the hunter footer", async () => {
+	it("submits hunts within available slots without adding protocol instructions to goalPrompt", async () => {
 		const requests: MockRequest[] = [];
 		const api = await startMockApi((req) => {
 			requests.push(req);
@@ -291,11 +291,8 @@ describe("orchestrator Python CLI", () => {
 		);
 		expect(submitted.output.huntTasks).toHaveLength(1);
 		expect(submitted.output.huntTasks[0].name).toBe("#1 xmlrpc-auth");
-		expect(submitted.output.huntTasks[0].goalPrompt).toContain(
+		expect(submitted.output.huntTasks[0].goalPrompt).toBe(
 			"Hunt XML-RPC authz.",
-		);
-		expect(submitted.output.huntTasks[0].goalPrompt).toContain(
-			"scan-runtime submit-message command",
 		);
 		expect(submitted.output.candidates).toEqual([]);
 		expect(stdout).toContain("to-spawn");
@@ -354,7 +351,6 @@ describe("orchestrator Python CLI", () => {
 	});
 
 	const sampleCandidate = {
-		id: "L1",
 		functionId: null,
 		title: "Unauth pingback SSRF",
 		description: "Blind SSRF via pingback.ping",
@@ -405,8 +401,44 @@ describe("orchestrator Python CLI", () => {
 			requests.find((item) => item.url?.includes("messages"))?.body ?? "{}",
 		);
 		expect(submitted.output.huntTasks).toEqual([]);
-		expect(submitted.output.candidates).toEqual([sampleCandidate]);
+		expect(submitted.output.candidates).toHaveLength(1);
+		expect(submitted.output.candidates[0]).toMatchObject(sampleCandidate);
+		expect(submitted.output.candidates[0].id).toMatch(/^candidate-[0-9a-f]{6}$/);
 		expect(stdout).toContain("to-cand");
+	});
+
+	it("overwrites agent-supplied candidate ids", async () => {
+		const requests: MockRequest[] = [];
+		const api = await startMockApi((req) => {
+			requests.push(req);
+			if (req.url?.includes("messages")) {
+				return {
+					status: 201,
+					body: {
+						ok: true,
+						message: { messageId: "to-overwrite", sequence: 9 },
+					},
+				};
+			}
+			return { status: 404, body: { ok: false } };
+		});
+		servers.push(api);
+		await runSkillWithStdin(
+			[
+				skillPath,
+				"submit_candidate",
+				"--api-url",
+				api.url,
+				"--token",
+				"test-token",
+			],
+			JSON.stringify({ candidates: [{ ...sampleCandidate, id: "L1" }] }),
+		);
+		const submitted = JSON.parse(
+			requests.find((item) => item.url?.includes("messages"))?.body ?? "{}",
+		);
+		expect(submitted.output.candidates[0].id).toMatch(/^candidate-[0-9a-f]{6}$/);
+		expect(submitted.output.candidates[0].id).not.toBe("L1");
 	});
 
 	it("accepts submit-candidate as an alias", async () => {
@@ -452,6 +484,31 @@ describe("orchestrator Python CLI", () => {
 			),
 		).rejects.toMatchObject({
 			stderr: expect.stringContaining("does not take hunters"),
+		});
+	});
+
+	it("does not expose ledger commands on orchestrator.py", async () => {
+		await expect(
+			runSkill([
+				"list_primitives",
+				"--api-url",
+				"http://127.0.0.1:9",
+				"--token",
+				"t",
+			]),
+		).rejects.toMatchObject({
+			stderr: expect.stringMatching(/invalid choice|unrecognized/i),
+		});
+		await expect(
+			runSkill([
+				"upsert_primitive",
+				"--api-url",
+				"http://127.0.0.1:9",
+				"--token",
+				"t",
+			]),
+		).rejects.toMatchObject({
+			stderr: expect.stringMatching(/invalid choice|unrecognized/i),
 		});
 	});
 });

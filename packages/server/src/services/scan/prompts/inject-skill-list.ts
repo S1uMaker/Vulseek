@@ -27,9 +27,9 @@ export const formatSkillListPromptSection = (skills: readonly string[]) => {
 };
 
 /**
- * Inject the stage's selected skills into the generated prompt.
- * Skills already referenced by their SKILL.md path are left out to avoid
- * duplicating the hand-written full/delta skill instructions.
+ * Inject the stage's selected skills after the authored prompt and before
+ * OUTPUT SUBMISSION / policy footers (those are appended later as protocol).
+ * Skills already referenced by their SKILL.md path are left out.
  */
 export const injectSkillListIntoPrompt = (
 	prompt: string,
@@ -41,5 +41,5 @@ export const injectSkillListIntoPrompt = (
 	if (missing.length === 0) return prompt;
 	const section = formatSkillListPromptSection(missing);
 	const trimmed = prompt.trim();
-	return trimmed ? `${section}\n\n${trimmed}` : section;
+	return trimmed ? `${trimmed}\n\n${section}` : section;
 };

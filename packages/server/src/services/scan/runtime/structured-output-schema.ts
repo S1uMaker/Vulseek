@@ -118,7 +118,7 @@ export const buildStructuredOutputPromptSuffix = (
 		return `- ${item.routeKey}${suffix}${description ? `: ${description}` : ""}`;
 	});
 	const skillDirectory = "$VULSEEK_AGENT_HOME/skills/scan-runtime";
-	const skillCommand = `python3 "${skillDirectory}/query_scan_runtime.py"`;
+	const skillCommand = `python3 "${skillDirectory}/scan_runtime.py"`;
 	return [
 		"",
 		"OUTPUT SUBMISSION:",

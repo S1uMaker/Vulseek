@@ -19,6 +19,7 @@ export const JOB_TAB_DATA_SOURCES = [
 	"exploit-chains",
 	"tob-goal-candidates",
 	"tob-goal-findings",
+	"ledger-primitives",
 ] as const;
 export const JOB_TAB_DETAILS = [
 	"vulnerability-candidate",
@@ -28,6 +29,7 @@ export const JOB_TAB_DETAILS = [
 	"exploit-chain",
 	"tob-goal-candidate",
 	"tob-goal-finding",
+	"ledger-primitive",
 ] as const;
 
 export type JobTabRenderer = (typeof JOB_TAB_RENDERERS)[number];
@@ -143,6 +145,40 @@ export const JOB_TAB_DATA_SOURCE_CATALOG: Record<
 		filters: ["status", "huntGoalId"],
 		details: ["tob-goal-finding"],
 	},
+	"ledger-primitives": {
+		label: "Ledger",
+		renderers: ["entity-table"],
+		fields: [
+			"id",
+			"title",
+			"type",
+			"state",
+			"verdict",
+			"statement",
+			"primitiveCount",
+			"file",
+			"line",
+			"revision",
+			"updatedAt",
+			"createdAt",
+		],
+		sortable: [
+			"id",
+			"createdAt",
+			"updatedAt",
+			"title",
+			"type",
+			"state",
+			"verdict",
+			"statement",
+			"primitiveCount",
+			"file",
+			"line",
+			"revision",
+		],
+		filters: ["type", "state", "verdict"],
+		details: ["ledger-primitive"],
+	},
 };
 
 const tabIdSchema = z
@@ -252,6 +288,28 @@ export const RESEARCH_JOB_TABS: PipelineJobTab[] = [
 		detail: "exploit-chain",
 	},
 ];
+
+export const LEDGER_PRIMITIVES_TAB: PipelineJobTab = {
+	id: "ledger",
+	label: "Ledger",
+	renderer: "entity-table",
+	dataSource: "ledger-primitives",
+	columns: [
+		"id",
+		"title",
+		"type",
+		"state",
+		"verdict",
+		"primitiveCount",
+		"file",
+		"line",
+		"revision",
+		"updatedAt",
+	],
+	filters: ["type", "state", "verdict"],
+	defaultSort: { field: "updatedAt", direction: "desc" },
+	detail: "ledger-primitive",
+};
 
 export const TOB_GOAL_JOB_TABS: PipelineJobTab[] = [
 	{
@@ -376,9 +434,15 @@ export const collectJobTabDiagnostics = (
 };
 
 type CompiledStageLike = {
+	id?: string;
+	name?: string;
 	effects?: Array<{ type?: string }>;
 	runtime?: { plugins?: string[] };
 };
+
+const isOrchestratorStage = (stage: CompiledStageLike) =>
+	stage.id === "orchestrator" ||
+	stage.name?.trim().toLowerCase() === "orchestrator";
 
 export const inferJobTabsFromStages = (
 	stages: CompiledStageLike[],
@@ -386,7 +450,9 @@ export const inferJobTabsFromStages = (
 	let research = false;
 	let tobGoal = false;
 	let candidates = false;
+	let ledger = false;
 	for (const stage of stages) {
+		if (isOrchestratorStage(stage)) ledger = true;
 		for (const effect of stage.effects ?? []) {
 			if (effect.type === "research-registry") research = true;
 			if (effect.type === "tob-goal-registry") tobGoal = true;
@@ -415,7 +481,81 @@ export const inferJobTabsFromStages = (
 	if (research) push(RESEARCH_JOB_TABS);
 	if (tobGoal) push(TOB_GOAL_JOB_TABS);
 	if (candidates) push([VULNERABILITY_CANDIDATES_TAB]);
+	if (ledger) push([LEDGER_PRIMITIVES_TAB]);
 	return tabs;
+};
+
+const normalizeSnapshotStages = (stages: unknown): CompiledStageLike[] => {
+	if (Array.isArray(stages)) {
+		return stages as CompiledStageLike[];
+	}
+	if (stages && typeof stages === "object") {
+		return Object.entries(stages as Record<string, CompiledStageLike>).map(
+			([id, stage]) => ({ ...stage, id: stage.id ?? id }),
+		);
+	}
+	return [];
+};
+
+const withLedgerState = (
+	values: string[],
+	defaults: readonly string[],
+) => {
+	const normalized = values.length > 0 ? values : [...defaults];
+	if (normalized.includes("state")) return normalized;
+	const typeIndex = normalized.indexOf("type");
+	if (typeIndex < 0) return ["state", ...normalized];
+	return [
+		...normalized.slice(0, typeIndex + 1),
+		"state",
+		...normalized.slice(typeIndex + 1),
+	];
+};
+
+const withLedgerTitle = (values: string[], defaults: readonly string[]) => {
+	const normalized = values.length > 0 ? values : [...defaults];
+	return normalized.includes("title") ? normalized : ["title", ...normalized];
+};
+
+const withPrimitiveCount = (values: string[]) => {
+	const replaced = values.map((column) =>
+		column === "statement" ? "primitiveCount" : column,
+	);
+	const seen = new Set<string>();
+	return replaced.filter((column) => {
+		if (seen.has(column)) return false;
+		seen.add(column);
+		return true;
+	});
+};
+
+const normalizeLedgerTab = (tab: PipelineJobTab): PipelineJobTab => {
+	if (tab.dataSource !== "ledger-primitives") return tab;
+	return {
+		...tab,
+		columns: withPrimitiveCount([
+			"id",
+			...withLedgerTitle(
+				withLedgerState(tab.columns, LEDGER_PRIMITIVES_TAB.columns).filter(
+					(column) => column !== "id",
+				),
+				LEDGER_PRIMITIVES_TAB.columns,
+			),
+		]),
+		filters: withLedgerState(tab.filters, LEDGER_PRIMITIVES_TAB.filters),
+	};
+};
+
+const mergeInferredJobTabs = (
+	declared: PipelineJobTab[],
+	inferred: PipelineJobTab[],
+) => {
+	const normalizedDeclared = declared.map(normalizeLedgerTab);
+	const seen = new Set(normalizedDeclared.map((tab) => tab.id));
+	return [
+		...normalizedDeclared,
+		...inferred.filter((tab) => tab.id === "ledger" && !seen.has(tab.id)),
+	];
 };
 
 export const jobTabsFromSnapshot = (snapshot: unknown): PipelineJobTab[] => {
@@ -424,13 +564,11 @@ export const jobTabsFromSnapshot = (snapshot: unknown): PipelineJobTab[] => {
 	}
 	const record = snapshot as {
 		presentation?: { jobTabs?: PipelineJobTab[] };
-		stages?: Array<{
-			effects?: Array<{ type?: string }>;
-			runtime?: { plugins?: string[] };
-		}>;
+		stages?: unknown;
 	};
+	const inferred = inferJobTabsFromStages(normalizeSnapshotStages(record.stages));
 	if (Array.isArray(record.presentation?.jobTabs)) {
-		return record.presentation.jobTabs;
+		return mergeInferredJobTabs(record.presentation.jobTabs, inferred);
 	}
-	return inferJobTabsFromStages(record.stages ?? []);
+	return inferred;
 };

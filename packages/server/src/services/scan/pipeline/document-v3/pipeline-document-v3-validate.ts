@@ -374,12 +374,14 @@ export const validatePipelineDocumentV3 = (
 		}
 		if (
 			stage.runtime.inputDelivery === "poll" &&
-			!(stage.runtime.skills ?? []).includes("scan-runtime")
+			!(stage.runtime.skills ?? []).includes("scan-runtime") &&
+			!(stage.runtime.skills ?? []).includes("orchestrator") &&
+			!(stage.runtime.skills ?? []).includes("orch-hunt-ppl")
 		) {
 			diagnostics.push(
 				error(
 					"stage.poll_requires_scan_runtime",
-					`stage "${stageId}" uses inputDelivery poll but does not include the scan-runtime skill`,
+					`stage "${stageId}" uses inputDelivery poll but does not include the scan-runtime or orchestrator skill`,
 					{
 						path: ["stages", stageId, "runtime", "inputDelivery"],
 						entity: { type: "stage", id: stageId },

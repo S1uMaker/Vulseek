@@ -126,8 +126,5 @@ export const resolveStageRuntimePrompt = async (
 		ctx.scanJobId,
 		ctx.stageName,
 	).getSkills();
-	return injectSkillListIntoPrompt(rendered, [
-		...(skills ?? []),
-		...DEFAULT_RUNTIME_SKILLS,
-	]);
+	return injectSkillListIntoPrompt(rendered, skills ?? []);
 };

@@ -31,6 +31,7 @@ export * from "./registry";
 export * from "./research";
 export * from "./rollbacks";
 export * from "./scan";
+export * from "./ledger-json";
 export * from "./tob-goal";
 export * from "./schedule";
 export * from "./security";

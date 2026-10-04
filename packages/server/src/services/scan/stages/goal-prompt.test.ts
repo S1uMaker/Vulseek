@@ -44,6 +44,15 @@ test("prefixNativeGoal does not double the /goal marker", () => {
 	assert.equal(prefixNativeGoal("/goal already set"), "/goal already set");
 });
 
+test("prefixNativeGoal still prefixes when goal appears after the start", () => {
+	const orch = "You write each hunter goalPrompt. Do not prefix it with /goal.";
+	assert.equal(prefixNativeGoal(orch), `/goal ${orch}`);
+	assert.equal(
+		prefixNativeGoal("Work toward the goal"),
+		"/goal Work toward the goal",
+	);
+});
+
 test("Surface re-entry is a continuation, not a new /goal", () => {
 	const turn = resolveGoalStagePrompt({
 		renderedPrompt: surfacePrompt,

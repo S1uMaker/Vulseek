@@ -67,7 +67,12 @@ export const compilePipelineDocumentV3 = (
 	presentation: {
 		jobTabs: document.presentation
 			? document.presentation.jobTabs
-			: inferJobTabsFromStages(Object.values(document.stages)),
+			: inferJobTabsFromStages(
+					Object.entries(document.stages).map(([id, stage]) => ({
+						...stage,
+						id,
+					})),
+				),
 	},
 	schemas: document.schemas,
 	stages: Object.entries(document.stages).map(([id, stage]) => ({

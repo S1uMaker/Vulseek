@@ -37,4 +37,24 @@ describe("jobTabsFromSnapshot", () => {
 	it("infers no business tabs for an empty pipeline", () => {
 		expect(jobTabsFromSnapshot({ stages: [] })).toEqual([]);
 	});
+
+	it("appends Ledger when an orchestrator stage is present", () => {
+		expect(
+			jobTabsFromSnapshot({
+				presentation: {
+					jobTabs: [
+						{
+							id: "candidates",
+							label: "Candidates",
+							renderer: "candidate-results",
+							dataSource: "vulnerability-candidates",
+							columns: ["title"],
+							filters: [],
+						},
+					],
+				},
+				stages: [{ id: "orchestrator", name: "Orchestrator" }],
+			}).map((tab) => tab.id),
+		).toEqual(["candidates", "ledger"]);
+	});
 });

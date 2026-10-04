@@ -24,6 +24,7 @@ export * from "./services/scan/runtime/downstream-capacity";
 export * from "./services/scan/runtime/running-tasks";
 export * from "./services/scan/runtime/stage-outputs";
 export * from "./services/scan/runtime/poll-messages";
+export * from "./services/scan/runtime/ledger";
 export * from "./services/scan/pipeline/stage-input-delivery";
 export * from "./services/scan/runtime/scan-runtime-api-auth";
 export * from "./services/scan/runtime/submit-message";

@@ -29,6 +29,29 @@ presentation:
         field: createdAt
         direction: desc
       detail: vulnerability-candidate
+    - id: ledger
+      label: Ledger
+      renderer: entity-table
+      dataSource: ledger-primitives
+      columns:
+        - id
+        - title
+        - type
+        - state
+        - verdict
+        - primitiveCount
+        - file
+        - line
+        - revision
+        - updatedAt
+      filters:
+        - type
+        - state
+        - verdict
+      defaultSort:
+        field: updatedAt
+        direction: desc
+      detail: ledger-primitive
 schemas:
   evidence:
     type: object
@@ -170,6 +193,7 @@ schemas:
     properties:
       id:
         type: string
+        description: Assigned by submit_candidate as candidate-<6 hex>. Do not set this in the agent payload.
       functionId:
         type: [string, "null"]
       title:
@@ -356,18 +380,19 @@ schemas:
         type: string
         minLength: 1
         description: >-
-          Lock one falsifiable primitive. Outcome-heavy and path-light: what
-          must be proved, what is excluded, and that this hunt stops after the
-          primitive (a missing unauthenticated entry may be the gap). Do not
-          prefix with /goal, do not write the hunter submit footer, do not say
-          "audit all", and do not ask the hunter to find a full RCE.
+          Research ask written by the Orchestrator. For a function task,
+          include its exact code location; for a chain task, include the chain
+          Ledger entry, every material function and location, and the required
+          point-to-line analysis. For a Ledger follow-up, cite relevant entries
+          and gaps. Do not prefix with /goal or write the Hunter submit footer.
 stages:
   orchestrator:
     name: Orchestrator
     description: >-
-      Slice the repository by primitive, keep a ledger, dispatch huntTasks,
-      compose chains, and submit candidates only when entry → primitive(s) →
-      sink → impact is complete.
+      Use reconnaissance-level code reading and the Ledger to choose neutral
+      function or call-chain scopes, dispatch Hunter tasks, compose chains,
+      and submit candidates only when an unauthenticated or pre-auth
+      high-severity chain of primitives is complete.
     role: scan
     group: orch-hunt
     concurrency: 1
@@ -385,25 +410,26 @@ stages:
       inputDelivery: poll
       messageNotification: true
       skills:
-        - scan-runtime
-        - orchestrator
+        - orch-hunt-ppl
       mcp:
         - securitycontext
       outputSuffix: omit
       pollPrompt: |
-        Inbound hunter notify means take get_hunter_feedback now. If availableSlots > 0, spawn_hunters. An empty result is not a hang.
+        On each notify, take get_critic_feedback once and read the critic review. Incomplete reviews and refused verification are redispatched; a Hunter covered row is not coverage until the critic marks it verified. Use a bounded frontier pass for undispatched rows, concrete partial gaps, and selected file/function/title matches. An active Hunter owns only its stated goalPrompt scope. Combine justified gaps with new code directions, prepare the complete eligible batch, and use one spawn_hunters call.
       prompt: |
-        You are the Orchestrator for a high-severity vulnerability research scan. You dispatch Hunters; you are not a Hunter. Do not chase a single sink file yourself. Follow $VULSEEK_AGENT_HOME/skills/orchestrator/SKILL.md.
+        You are the Orchestrator for a high-severity vulnerability research scan. You dispatch Hunters; you are not a Hunter. Follow $VULSEEK_AGENT_HOME/skills/orch-hunt-ppl/orchestrator.md for coverage, Ledger use, goalPrompt construction, and dispatch. Ledger CLI and fields: $VULSEEK_AGENT_HOME/skills/orch-hunt-ppl/hunt-ledger.md. Variant and patch heuristics: $VULSEEK_AGENT_HOME/skills/orch-hunt-ppl/variant-analysis/SKILL.md and $VULSEEK_AGENT_HOME/skills/orch-hunt-ppl/post-patch-validation/SKILL.md.
 
-        Slice work by primitive (sink, gate, smuggle/desync, privilege upgrade). The first wave must not send every hunter after unauthenticated RCE. Each hunter goalPrompt locks one falsifiable primitive: outcome-heavy and path-light. Do not prefix goalPrompt with /goal and do not write the hunter submit footer.
+        Expand coverage from individual functions to call chains. Read code at reconnaissance level to identify entry points, handlers, material functions, and control, data, or authority relationships. Query the Ledger by exact functionName, file, and title, then inspect statements, locations, evidence, gaps, and links. A code-grounded chain may be dispatched before independent function hunts; independent function hunts are not a prerequisite; create or reuse one neutral chain Ledger proposition. A chain mention, title, or covered row never proves local function coverage.
 
-        Use Security Context MCP to slice primitives from past fixes and current-tree variant leads. A known CVE is a map, not a candidate, unless the chain is still live in this tree. Do not idle-wait for context builds while hunter slots are open.
+        Write every Hunter goalPrompt as a neutral, code-grounded investigation brief. Keep it concise and scope-oriented. For a function task, name the exact file and function, then require a complete review with the necessary surrounding context. For a chain task, describe only the ordered code-grounded steps and their observed control, data, authority, or reachability relationships; do not enumerate the implementing functions or prescribe a vulnerability direction—the Hunter must locate the implementations in the current source tree. For a Ledger follow-up, cite the chain entryId and summarize the steps to reconstruct or verify; do not copy prior function mappings, detailed hypotheses, or detailed Ledger contents. Keep detailed analysis methods in the Hunter skill. Keep each goalPrompt at or below 4,000 characters, targeting 3,900 or fewer.
 
-        When inbound hunter feedback or a notify arrives, take it with get_hunter_feedback, record the primitive in the /lane ledger, open a connector hunt for any remaining gap, and call submit_candidate only when entry → primitive(s) → sink → impact is evidenced at file:line. A sink that exists but is gated is an asset, not a candidate.
+        On every decision, take feedback once when available and read all cited Ledger rows. Inspect undispatched discovered/untracked rows, partial rows with concrete gaps, and selected file/function/title matches without repeatedly dumping covered rows. An active Hunter owns only its stated scope. Read local code before spawning when no undispatched row exists, regardless of available slots; use variant-analysis and post-patch-validation as search heuristics.
 
-        If availableSlots > 0, spawn_hunters immediately to fill slots, then read locally. Local reads are only to write the next primitive briefs or to check a submitted chain. Do not idle-wait and do not deep-dive while slots are open.
+        Prepare as many independent, code-grounded function or chain briefs as available slots justify. Hunters create and update function and chain Ledger propositions: record exact paths in evidence or gaps, keep the Ledger flat, and do not create function placeholders or rows for routine pass-throughs. Dispatch the complete batch in a single spawn_hunters call; do not serialize valid work, duplicate active scope, or invent filler. Require direct, path-specific code evidence.
 
-        Job success is an original unauthenticated high-CVSS chain (remote RCE or equivalent). Not finding a complete RCE is not a stop condition and is not a Hunter success condition. Do not write exploit PoCs. Do not run a full admin-create / write-file exploit chain.
+        Continue from critic feedback, Ledger gaps, and new code directions. Hunter output does not return here directly. An empty queue, a Hunter covered row, a safe example, or no qualifying candidate does not prove coverage. Call update_goal({status: "complete"}) only after no Hunter or critic task is in flight and the skill's completion audit finds no undispatched work, actionable gap, or missing local/connection analysis.
+
+        Use submit_candidate only when an original high-severity unauthenticated or pre-authentication chain is supported from entry through primitives to sink and impact. A single sink or gate is insufficient. Do not write exploit PoCs or run a full admin-create / write-file exploit chain.
       prepareRepository: target
       includePolicy: true
       plugins: []
@@ -433,8 +459,9 @@ stages:
   hunter:
     name: Hunter
     description: >-
-      Nail one falsifiable primitive and report the gap. Returns name +
-      feedback. Hunter does not submit candidates or declare exhaustion.
+      Analyze an assigned function or Ledger call-chain gap from all relevant
+      security angles and report the research result. Returns name + feedback.
+      Hunter does not submit candidates or declare exhaustion.
     role: scan
     group: orch-hunt
     concurrency: 8
@@ -448,7 +475,10 @@ stages:
       reuseContainer: true
       cwd: /workspace/repo
       inputDelivery: prompt
+      outputSuffix: omit
       skills:
+        - orch-hunt-ppl
+        - scan-runtime
         - codeql
         - semgrep
         - tree-sitter
@@ -457,14 +487,10 @@ stages:
       prompt: |
         {{goalPrompt}}
 
-        Assigned hunt name: {{name}}
-        When submitting Message, set name to this exact assigned hunt name (including the #<n> prefix) and put the research result in feedback.
-
-        Standing Hunt rules:
-        - This /goal stays active until this assigned primitive has evidence, including negative evidence such as a blocking gate at file:line. Do not prove a full unauthenticated RCE.
-        - Stay on the same primitive and change method at least once (for example manual source-to-sink plus Semgrep or CodeQL, or a sibling API).
-        - Do not emit a speculative RCE just to finish. Do not submit_candidate. Do not declare exhaustion. Do not write a PoC. Do not run a full admin-create / write-file exploit chain.
-        - feedback must be short markdown with these blocks: primitive type (sink / gate / smuggle-or-desync / privilege-upgrade), location (file:line + symbol), proved (one or more facts), gap (which primitive is still needed to reach an unauthenticated entry or the impact).
+        Follow $VULSEEK_AGENT_HOME/skills/orch-hunt-ppl/hunter.md.
+        Ledger: $VULSEEK_AGENT_HOME/skills/orch-hunt-ppl/hunt-ledger.md.
+        Do not set function state to verified. Your only handoff is submit-message. Do not wait for the critic or any downstream result.
+        The goalPrompt is a route. Record every function you analyze as its own Ledger row. Do not put that function into another row's locations or evidence.
       prepareRepository: target
       includePolicy: false
       plugins: []
@@ -484,10 +510,9 @@ stages:
           type: string
           minLength: 1
           description: >-
-            Short markdown research result. Must include primitive type
-            (sink / gate / smuggle-or-desync / privilege-upgrade), location
-            (file:line + symbol), proved facts, and the remaining gap. Do not
-            declare exhaustion.
+            Research result as a string. Summarize material findings and
+            unresolved questions as useful; no fixed feedback format is
+            required. Do not declare exhaustion.
       required:
         - name
         - feedback
@@ -500,6 +525,76 @@ stages:
     promptValues:
       name: $input.name
       goalPrompt: $input.goalPrompt
+  critic:
+    name: Critic
+    description: >-
+      Review one Hunter result against its goalPrompt and the Ledger rows it
+      changed. Mark a covered function verified only when the work is complete
+      and the primitives are correct. Submit the review to the Orchestrator
+      with submit-message.
+    role: scan
+    group: orch-hunt
+    concurrency: 8
+    maxConcurrency: 8
+    disableable: false
+    goal: false
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      inputDelivery: prompt
+      outputSuffix: omit
+      skills:
+        - orch-hunt-ppl
+        - scan-runtime
+      prompt: |
+        Review hunt {{name}}.
+        goalPrompt:
+        {{goalPrompt}}
+        hunterFeedback:
+        {{feedback}}
+
+        Follow $VULSEEK_AGENT_HOME/skills/orch-hunt-ppl/critic.md.
+        Ledger: $VULSEEK_AGENT_HOME/skills/orch-hunt-ppl/hunt-ledger.md.
+        Your only handoff is submit-message. A chat reply is not a submission.
+        A function that appears only as locations or evidence on another row, and has no row of its own, is incomplete.
+      prepareRepository: target
+      includePolicy: false
+      plugins: []
+    outputSchema:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        completeness:
+          type: string
+          enum: [complete, incomplete]
+        feedback:
+          type: string
+          minLength: 1
+        verifiedFunctionIds:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+      required:
+        - name
+        - completeness
+        - feedback
+        - verifiedFunctionIds
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    taskName: "Critic: $input.name"
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues:
+      name: $input.name
+      goalPrompt: $input.goalPrompt
+      feedback: $input.feedback
   verify-finding:
     name: Verify Finding
     description: Fact-check a candidate's paths, claims, and evidence.
@@ -673,15 +768,27 @@ edges:
     input:
       name: $item.name
       goalPrompt: $item.goalPrompt
-  - id: hunter-to-orchestrator
-    name: hunter-to-orchestrator
+  - id: hunter-to-critic
+    name: hunter-to-critic
     from: hunter
+    to: critic
+    fork: false
+    mode: map
+    input:
+      name: $output.name
+      goalPrompt: $input.goalPrompt
+      feedback: $output.feedback
+  - id: critic-to-orchestrator
+    name: critic-to-orchestrator
+    from: critic
     to: orchestrator
     fork: false
     mode: map
     input:
       name: $output.name
       feedback: $output.feedback
+      completeness: $output.completeness
+      verifiedFunctionIds: $output.verifiedFunctionIds
   - id: orchestrator-to-verify-finding
     name: orchestrator-to-verify-finding
     from: orchestrator

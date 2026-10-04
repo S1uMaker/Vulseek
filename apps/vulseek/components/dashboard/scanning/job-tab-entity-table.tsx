@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
-import { Loader2, Search } from "lucide-react";
 import type { PipelineJobTab } from "@vulseek/server/services/scan/pipeline/document-v3";
+import { Loader2, Search } from "lucide-react";
+import { useRouter } from "next/router";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -28,6 +29,7 @@ export const JobTabEntityTable = ({
 	);
 	const [filters, setFilters] = useState<Record<string, string[]>>({});
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const router = useRouter();
 
 	const list = api.scan.jobTabData.useQuery(
 		{
@@ -45,13 +47,14 @@ export const JobTabEntityTable = ({
 			refetchInterval: live ? 20_000 : false,
 		},
 	);
+	const isLedger = tab.dataSource === "ledger-primitives";
 	const detail = api.scan.jobTabDetail.useQuery(
 		{
 			scanJobId,
 			tabId: tab.id,
 			itemId: selectedId ?? "",
 		},
-		{ enabled: !!selectedId && Boolean(tab.detail) },
+		{ enabled: !!selectedId && Boolean(tab.detail) && !isLedger },
 	);
 
 	const columns = tab.columns.length ? tab.columns : ["title"];
@@ -63,10 +66,33 @@ export const JobTabEntityTable = ({
 
 	const filterOptions = list.data?.filterOptions ?? {};
 
+	const selectedItem = items.find((item) => item.id === selectedId);
 	const selectedTitle = useMemo(() => {
-		const match = items.find((item) => item.id === selectedId);
-		return String(match?.values.title ?? match?.values.name ?? selectedId ?? "");
-	}, [items, selectedId]);
+		const title = selectedItem?.values.title;
+		if (isLedger && typeof title === "string" && title.length > 0) {
+			return title;
+		}
+		const statement = selectedItem?.values.statement;
+		if (typeof statement === "string" && statement.length > 0) {
+			return statement;
+		}
+		const file = selectedItem?.values.file;
+		const line = selectedItem?.values.line;
+		if (typeof file === "string" && file.length > 0) {
+			return line == null ? file : `${file}:${line}`;
+		}
+		return String(
+			selectedItem?.values.title ??
+				selectedItem?.values.name ??
+				selectedId ??
+				"",
+		);
+	}, [selectedId, selectedItem]);
+
+	const openLedger = (functionId: string) => {
+		const path = router.asPath.split("?")[0]?.replace(/\/$/, "") ?? "";
+		void router.push(`${path}/ledger/${encodeURIComponent(functionId)}`);
+	};
 
 	return (
 		<div className="space-y-3">
@@ -76,7 +102,11 @@ export const JobTabEntityTable = ({
 					<Input
 						className="pl-8"
 						value={query}
-						placeholder={`Search ${tab.label.toLowerCase()}`}
+						placeholder={
+							tab.dataSource === "ledger-primitives"
+								? "Search function, file, or primitive"
+								: `Search ${tab.label.toLowerCase()}`
+						}
 						onChange={(event) => {
 							setPage(1);
 							setQuery(event.target.value);
@@ -96,10 +126,10 @@ export const JobTabEntityTable = ({
 							}));
 						}}
 					>
-						<option value="">{field}</option>
+						<option value="">All {formatColumnLabel(field)}</option>
 						{(filterOptions[field] ?? []).map((option) => (
 							<option key={option} value={option}>
-								{option}
+								{formatFilterOption(option)}
 							</option>
 						))}
 					</select>
@@ -110,7 +140,17 @@ export const JobTabEntityTable = ({
 					<thead className="bg-muted/40 text-left">
 						<tr>
 							{columns.map((column) => (
-								<th key={column} className="px-3 py-2 font-medium">
+								<th
+									key={column}
+									className="px-3 py-2 font-medium"
+									aria-sort={
+										sortField === column
+											? sortDirection === "asc"
+												? "ascending"
+												: "descending"
+											: undefined
+									}
+								>
 									<button
 										type="button"
 										className="hover:underline"
@@ -126,7 +166,7 @@ export const JobTabEntityTable = ({
 											setPage(1);
 										}}
 									>
-										{column}
+										{formatColumnLabel(column)}
 										{sortField === column
 											? sortDirection === "asc"
 												? " ↑"
@@ -158,10 +198,19 @@ export const JobTabEntityTable = ({
 								<tr
 									key={item.id}
 									className="cursor-pointer border-t hover:bg-muted/40"
-									onClick={() => setSelectedId(item.id)}
+									onClick={() =>
+										isLedger ? openLedger(item.id) : setSelectedId(item.id)
+									}
 								>
 									{columns.map((column) => (
-										<td key={column} className="max-w-xs truncate px-3 py-2">
+										<td
+											key={column}
+											className={
+												isLedger && column === "id"
+													? "whitespace-nowrap px-3 py-2 font-mono tabular-nums"
+													: "max-w-xs truncate px-3 py-2"
+											}
+										>
 											{formatCell(item.values[column])}
 										</td>
 									))}
@@ -195,7 +244,10 @@ export const JobTabEntityTable = ({
 					</Button>
 				</div>
 			</div>
-			<Sheet open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)}>
+			<Sheet
+				open={Boolean(selectedId) && !isLedger}
+				onOpenChange={(open) => !open && setSelectedId(null)}
+			>
 				<SheetContent className="overflow-y-auto sm:max-w-lg">
 					<SheetHeader>
 						<SheetTitle>{selectedTitle || "Detail"}</SheetTitle>
@@ -203,7 +255,11 @@ export const JobTabEntityTable = ({
 					<pre className="mt-4 whitespace-pre-wrap break-all rounded-md bg-muted/40 p-3 text-xs">
 						{detail.isLoading
 							? "Loading…"
-							: JSON.stringify(detail.data?.fields ?? detail.data?.raw ?? {}, null, 2)}
+							: JSON.stringify(
+									detail.data?.fields ?? detail.data?.raw ?? {},
+									null,
+									2,
+								)}
 					</pre>
 				</SheetContent>
 			</Sheet>
@@ -211,8 +267,19 @@ export const JobTabEntityTable = ({
 	);
 };
 
+const formatColumnLabel = (column: string) =>
+	column === "id"
+		? "ID"
+		: column
+				.replace(/([a-z])([A-Z])/g, "$1 $2")
+				.replace(/^./, (char) => char.toUpperCase());
+
+const formatFilterOption = (value: string) => value.replaceAll("_", " ");
+
 const formatCell = (value: unknown) => {
 	if (value == null || value === "") return "—";
 	if (typeof value === "object") return JSON.stringify(value);
 	return String(value);
 };
+
+

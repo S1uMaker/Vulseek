@@ -116,6 +116,20 @@ describe("compiled presentation.jobTabs", () => {
 		).toEqual(["candidates"]);
 	});
 
+	it("infers a Ledger tab from an orchestrator stage", () => {
+		const document = baseDocument();
+		document.stages.orchestrator = {
+			...document.stages.start!,
+			name: "Orchestrator",
+			effects: [{ type: "sync-candidates" }],
+		};
+		expect(
+			compilePipelineDocumentV3(document).presentation.jobTabs.map(
+				(tab) => tab.id,
+			),
+		).toEqual(["candidates", "ledger"]);
+	});
+
 	it("infers research and tob-goal tabs from effects", () => {
 		const research = baseDocument();
 		research.stages.start!.effects = [

@@ -57,10 +57,8 @@ export const isNativeGoalPrompt = (prompt: string) =>
 
 export const prefixNativeGoal = (prompt: string) => {
 	const trimmed = prompt.trim();
-	const withPrefix = isNativeGoalPrompt(trimmed)
-		? trimmed
-		: `/goal ${trimmed}`;
-	return withPrefix;
+	if (!trimmed) return trimmed;
+	return isNativeGoalPrompt(trimmed) ? trimmed : `/goal ${trimmed}`;
 };
 
 /** Feedback-only follow-up after the standing `/goal`. No extra wrapper text. */

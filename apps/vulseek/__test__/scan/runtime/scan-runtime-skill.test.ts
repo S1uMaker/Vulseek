@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const execFileAsync = promisify(execFile);
 const skillPath = join(
 	dirname(fileURLToPath(import.meta.url)),
-	"../../../../../agents/skills/scan-runtime/query_scan_runtime.py",
+	"../../../../../agents/skills/scan-runtime/scan_runtime.py",
 );
 
 const startMockApi = async (
@@ -389,5 +389,23 @@ describe("scan-runtime Python CLI", () => {
 				VULSEEK_STAGE_NAME: "orchestrator",
 			}),
 		).rejects.toThrow();
+	});
+
+	it("does not expose ledger commands", async () => {
+		await expect(
+			runSkill([
+				"list-ledger",
+				"--api-url",
+				"http://127.0.0.1:9",
+				"--token",
+				"t",
+			], {
+				VULSEEK_SCAN_JOB_ID: "job-1",
+				VULSEEK_TASK_ID: "orch-task",
+				VULSEEK_STAGE_NAME: "orchestrator",
+			}),
+		).rejects.toMatchObject({
+			stderr: expect.stringMatching(/invalid choice|unrecognized/i),
+		});
 	});
 });

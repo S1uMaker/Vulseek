@@ -24,7 +24,7 @@ test("formatSkillListPromptSection lists SKILL.md paths", () => {
 	assert.match(section, /`codeql`: \$VULSEEK_AGENT_HOME\/skills\/codeql\/SKILL\.md/);
 });
 
-test("injectSkillListIntoPrompt prepends missing skills and skips ones already named", () => {
+test("injectSkillListIntoPrompt appends missing skills and skips ones already named", () => {
 	const authored = [
 		"You are the Scan Target stage.",
 		"Use the installed skill named scan-target as your working method.",
@@ -38,7 +38,10 @@ test("injectSkillListIntoPrompt prepends missing skills and skips ones already n
 	assert.match(injected, /`codeql`:/);
 	assert.match(injected, /`semgrep`:/);
 	assert.equal((injected.match(/scan-target\/SKILL\.md/g) ?? []).length, 1);
-	assert.ok(injected.endsWith(authored));
+	assert.ok(injected.startsWith(authored));
+	assert.ok(
+		injected.indexOf(authored) < injected.indexOf("Use the installed skills"),
+	);
 });
 
 test("injectSkillListIntoPrompt is a no-op when every skill is already referenced", () => {
