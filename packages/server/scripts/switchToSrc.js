@@ -29,8 +29,12 @@ pkg.exports = {
 		import: "./src/constants/index.ts",
 		require: "./dist/constants.cjs.js",
 	},
+	"./templates": {
+		import: "./src/templates/index.ts",
+		require: "./dist/templates/index.cjs.js",
+	},
 };
 
 // Guardar los cambios en package.json
-fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2));
+fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
 console.log("Switched exports to use src for development");
