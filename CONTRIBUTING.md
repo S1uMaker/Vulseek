@@ -63,7 +63,7 @@ cp apps/vulseek/.env.example apps/vulseek/.env
 
 ## Requirements
 
-- [Docker](/GUIDES.md#docker)
+- [Docker](https://docs.docker.com/engine/install/)
 
 ### Setup
 

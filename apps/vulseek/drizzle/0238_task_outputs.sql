@@ -4,7 +4,7 @@ BEGIN
 	IF EXISTS (
 		SELECT 1
 		FROM "scan_jobs"
-		WHERE "status" IN ('pending', 'running', 'paused', 'finalizing')
+		WHERE "status"::text IN ('pending', 'running', 'paused', 'finalizing')
 	) THEN
 		RAISE EXCEPTION
 			'Cannot migrate to task_outputs while old-protocol jobs are still pending, running, paused, or finalizing; stop or cancel them first';

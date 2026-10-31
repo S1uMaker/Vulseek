@@ -189,7 +189,6 @@ redis-cli -p 26379
 
 - [快速开始](./QUICKSTART.dev.md)
 - [完整开发文档](./DEVELOPMENT.md)
-- [配置总结](./DEV_SETUP_SUMMARY.md)
 
 ---
 
