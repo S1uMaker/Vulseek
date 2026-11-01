@@ -6,9 +6,6 @@ import {
 	canRebuildCheckoutTools,
 	deleteScanJobForOrganization,
 	findApplicationById,
-	cancelScanTask,
-	canRebuildCheckoutTools,
-	findApplicationById,
 	findCandidateTaskLineage,
 	findCheckoutImageStatus,
 	findCheckoutStatus,
@@ -717,43 +714,55 @@ export const scanRouter = createTRPCRouter({
 
 			const cancellation = await cancelScanJob(input.scanJobId);
 			await Promise.all([
-					scansQueue
-						.getJob(`scan:${input.scanJobId}`)
-						.then((job) => job?.remove())
-						.catch((error) =>
-							console.warn(
-								"[scan-cancel] root queue cleanup failed",
-								JSON.stringify({ scanJobId: input.scanJobId, error: String(error) }),
-							),
+				scansQueue
+					.getJob(`scan:${input.scanJobId}`)
+					.then((job) => job?.remove())
+					.catch((error) =>
+						console.warn(
+							"[scan-cancel] root queue cleanup failed",
+							JSON.stringify({
+								scanJobId: input.scanJobId,
+								error: String(error),
+							}),
 						),
-					scansQueue
-						.getJob(`scan:retry:${input.scanJobId}`)
-						.then((job) => job?.remove())
-						.catch((error) =>
-							console.warn(
-								"[scan-cancel] retry queue cleanup failed",
-								JSON.stringify({ scanJobId: input.scanJobId, error: String(error) }),
-							),
+					),
+				scansQueue
+					.getJob(`scan:retry:${input.scanJobId}`)
+					.then((job) => job?.remove())
+					.catch((error) =>
+						console.warn(
+							"[scan-cancel] retry queue cleanup failed",
+							JSON.stringify({
+								scanJobId: input.scanJobId,
+								error: String(error),
+							}),
 						),
-					scansQueue
-						.getJob(`scan:retry-analysis:${input.scanJobId}`)
-						.then((job) => job?.remove())
-						.catch((error) =>
-							console.warn(
-								"[scan-cancel] analysis retry queue cleanup failed",
-								JSON.stringify({ scanJobId: input.scanJobId, error: String(error) }),
-							),
+					),
+				scansQueue
+					.getJob(`scan:retry-analysis:${input.scanJobId}`)
+					.then((job) => job?.remove())
+					.catch((error) =>
+						console.warn(
+							"[scan-cancel] analysis retry queue cleanup failed",
+							JSON.stringify({
+								scanJobId: input.scanJobId,
+								error: String(error),
+							}),
 						),
-					scansQueue
-						.getJob(`scan:retry-verification:${input.scanJobId}`)
-						.then((job) => job?.remove())
-						.catch((error) =>
-							console.warn(
-								"[scan-cancel] verification retry queue cleanup failed",
-								JSON.stringify({ scanJobId: input.scanJobId, error: String(error) }),
-							),
+					),
+				scansQueue
+					.getJob(`scan:retry-verification:${input.scanJobId}`)
+					.then((job) => job?.remove())
+					.catch((error) =>
+						console.warn(
+							"[scan-cancel] verification retry queue cleanup failed",
+							JSON.stringify({
+								scanJobId: input.scanJobId,
+								error: String(error),
+							}),
 						),
-				]);
+					),
+			]);
 
 			return cancellation;
 		}),
