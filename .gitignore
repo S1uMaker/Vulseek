@@ -75,3 +75,6 @@ agents/schemas/codex-app-server/
 /third_party/*
 !/third_party/deepsec
 tmp/ppl-visual-full.png
+
+# ZCode (AI tool) local session state
+/.zcode/
