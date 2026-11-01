@@ -20,7 +20,6 @@ import * as React from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
 import { PipelineProfilesView } from "@/components/dashboard/pipelines/pipeline-profiles-view";
-import { RunPipelineDialog } from "@/components/dashboard/pipelines/run-pipeline-dialog";
 import { PipelineWorkbench } from "@/components/dashboard/pipelines/workbench/pipeline-workbench";
 import type { YamlEditorHandle } from "@/components/dashboard/pipelines/yaml-editor";
 import {
@@ -574,12 +573,6 @@ const EditorPage = ({
 									>
 										Publish
 									</Button>
-									{data.currentVersion && !data.archivedAt ? (
-										<RunPipelineDialog
-											defaultPipelineId={pipelineId}
-											triggerClassName="h-8"
-										/>
-									) : null}
 									{data.archivedAt ? (
 										<Button
 											variant="outline"
@@ -637,12 +630,6 @@ const EditorPage = ({
 											<Copy className="size-3.5" />
 											Copy to draft
 										</Button>
-									) : null}
-									{data.currentVersion && !data.archivedAt ? (
-										<RunPipelineDialog
-											defaultPipelineId={pipelineId}
-											triggerClassName="h-8"
-										/>
 									) : null}
 									{canManage && (
 										<Button

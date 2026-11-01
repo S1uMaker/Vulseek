@@ -89,10 +89,11 @@ const PipelinesPage = ({
 
 	const rows = list.data ?? [];
 	const filtered = rows.filter((row) => {
-		if (activeFilters.length === 0) return true;
-		return activeFilters.some((filter) =>
-			filter === "archived" ? Boolean(row.archivedAt) : false,
-		);
+		const isArchived = Boolean(row.archivedAt);
+		const wantsArchived = activeFilters.includes("archived");
+		// Archived pipelines stay out of the default view; the Archived chip
+		// switches the list over to them.
+		return wantsArchived ? isArchived : !isArchived;
 	});
 
 	const toggleFilter = (value: string) => {
