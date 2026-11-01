@@ -1,5 +1,5 @@
 import { db } from "@vulseek/server/db";
-import { scanJobs, messages, tasks } from "@vulseek/server/db/schema";
+import { messages, scanJobs, tasks } from "@vulseek/server/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { resolveTerminalScanJobStatus } from "../state/scan-state-machine";
 import { closeOpenMessagesForJobRepo } from "./message.repo";
@@ -134,7 +134,14 @@ export const finalizeScanJobRepo = async (scanJobId: string) => {
 		.update(scanJobs)
 		.set({ status, finishedAt: new Date().toISOString() })
 		.where(
-			and(eq(scanJobs.scanJobId, scanJobId), eq(scanJobs.status, "finalizing")),
+			and(
+				eq(scanJobs.scanJobId, scanJobId),
+				// The root-terminal + no-open-tasks guards above are the real
+				// preconditions; accepting "running" here keeps settlement
+				// convergent even when the pipeline loop finishes before the
+				// running->finalizing transition lands.
+				inArray(scanJobs.status, ["finalizing", "running"]),
+			),
 		)
 		.returning({ status: scanJobs.status });
 	return updated?.status ?? null;
