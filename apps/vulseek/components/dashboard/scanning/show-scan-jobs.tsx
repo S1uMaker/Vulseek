@@ -1,6 +1,9 @@
+import { Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useTranslation } from "next-i18next";
+import { useState } from "react";
+import { toast } from "sonner";
 import {
 	CollectionSection,
 	CollectionView,
@@ -33,6 +36,13 @@ const JOBS_CONFIG: ListQueryConfig = {
 	defaultPageSize: 20,
 	pageSizes: [10, 20, 50],
 };
+
+const TERMINAL_SCAN_JOB_STATUSES = new Set([
+	"finished",
+	"partially_finished",
+	"failed",
+	"canceled",
+]);
 
 const JOB_STATUS_OPTIONS = [
 	{ value: "pending", label: "Pending" },
@@ -121,6 +131,39 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 	const query = type === "application" ? applicationQuery : composeQuery;
 	const jobs = query.data;
 
+	const utils = api.useUtils();
+	const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
+	const deleteJob = api.scan.delete.useMutation();
+	const handleDeleteJob = async (scanJobId: string) => {
+		if (
+			!window.confirm(
+				scanT(
+					t,
+					"scan.jobs.deleteConfirm",
+					"Delete this scan job and all of its tasks, messages, and candidates? This cannot be undone.",
+				),
+			)
+		) {
+			return;
+		}
+		setDeletingJobId(scanJobId);
+		try {
+			await deleteJob.mutateAsync({ scanJobId });
+			toast.success(scanT(t, "scan.jobs.deleted", "Scan job deleted"));
+			if (type === "application") {
+				await utils.scan.listByApplication.invalidate({ applicationId: id });
+			} else {
+				await utils.scan.listByCompose.invalidate({ composeId: id });
+			}
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Unable to delete scan job",
+			);
+		} finally {
+			setDeletingJobId(null);
+		}
+	};
+
 	return (
 		<CollectionSection
 			title={scanT(t, "scan.jobs.title", "Jobs")}
@@ -139,25 +182,25 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 					total: jobs?.total ?? 0,
 				}}
 				isLoading={query.isLoading && !jobs}
-					getRowId={(job) => job.scanJobId}
-					getRowLabel={(job) => formatJobTitle(job)}
-					onRowClick={(job) => {
-						void router.push(
-							"/dashboard/project/" +
-								projectId +
-								"/environment/" +
-								environmentId +
-								"/" +
-								routeSegment +
-								"/" +
-								type +
-								"/" +
-								id +
-								"/jobs/" +
-								job.scanJobId,
-						);
-					}}
-					searchValue={searchInput}
+				getRowId={(job) => job.scanJobId}
+				getRowLabel={(job) => formatJobTitle(job)}
+				onRowClick={(job) => {
+					void router.push(
+						"/dashboard/project/" +
+							projectId +
+							"/environment/" +
+							environmentId +
+							"/" +
+							routeSegment +
+							"/" +
+							type +
+							"/" +
+							id +
+							"/jobs/" +
+							job.scanJobId,
+					);
+				}}
+				searchValue={searchInput}
 				onSearchValueChange={setSearchInput}
 				searchPlaceholder={scanT(t, "scan.jobs.search", "Filter jobs...")}
 				filters={[
@@ -168,82 +211,106 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 					},
 				]}
 				emptyTitle={scanT(t, "scan.jobs.empty", "No jobs found")}
-					emptyDescription={scanT(
-						t,
-						"scan.jobs.emptyDescription",
-						"Create a scan to start monitoring pipeline runs for this {{type}}.",
-						{ type: formatResourceTypeLabel(t, type) },
-					)}
-					columns={[
-						{
-							id: "job",
-							header: "Job",
-							cell: ({ row }) => (
-								<Link
-									href={
-										"/dashboard/project/" +
-										projectId +
-										"/environment/" +
-										environmentId +
-										"/" +
-										routeSegment +
-										"/" +
-										type +
-										"/" +
-										id +
-										"/jobs/" +
-										row.original.scanJobId
-									}
-									className="font-medium text-foreground hover:underline"
-								>
-									{formatJobTitle(row.original)}
-								</Link>
-							),
-						},
-						{
-							id: "pipeline",
-							header: "Pipeline",
-							cell: ({ row }) => (
-								<span className="text-sm font-medium text-foreground">
-									{row.original.pipelineSlug || "-"}
-								</span>
-							),
-						},
-						{
-							id: "pipelineProfile",
-							header: scanT(t, "scan.field.pipelineProfile", "Profile"),
-							cell: ({ row }) => (
-								<span className="text-sm font-medium text-foreground">
-									{formatPipelineProfileLabel(t, row.original)}
-								</span>
-							),
-						},
-						{
-							id: "tokens",
-							header: "Tokens",
-							cell: ({ row }) => formatTokenUsage(t, row.original.totalTokens),
-						},
-						{
-							id: "createdAt",
-							header: "Created",
-							cell: ({ row }) => <DateTooltip date={row.original.createdAt} />,
-						},
-						{
-							id: "status",
-							header: "Status",
-							cell: ({ row }) => (
-								<StatusBadge
-									value={row.original.status}
-									label={formatScanJobStatusLabel(t, row.original.status)}
-								/>
-							),
-						},
-					]}
-					mobileRender={(job) => (
-					<RowListItem
-						asChild
-						className="group min-h-24 hover:bg-border"
-					>
+				emptyDescription={scanT(
+					t,
+					"scan.jobs.emptyDescription",
+					"Create a scan to start monitoring pipeline runs for this {{type}}.",
+					{ type: formatResourceTypeLabel(t, type) },
+				)}
+				columns={[
+					{
+						id: "job",
+						header: "Job",
+						cell: ({ row }) => (
+							<Link
+								href={
+									"/dashboard/project/" +
+									projectId +
+									"/environment/" +
+									environmentId +
+									"/" +
+									routeSegment +
+									"/" +
+									type +
+									"/" +
+									id +
+									"/jobs/" +
+									row.original.scanJobId
+								}
+								className="font-medium text-foreground hover:underline"
+							>
+								{formatJobTitle(row.original)}
+							</Link>
+						),
+					},
+					{
+						id: "pipeline",
+						header: "Pipeline",
+						cell: ({ row }) => (
+							<span className="text-sm font-medium text-foreground">
+								{row.original.pipelineSlug || "-"}
+							</span>
+						),
+					},
+					{
+						id: "pipelineProfile",
+						header: scanT(t, "scan.field.pipelineProfile", "Profile"),
+						cell: ({ row }) => (
+							<span className="text-sm font-medium text-foreground">
+								{formatPipelineProfileLabel(t, row.original)}
+							</span>
+						),
+					},
+					{
+						id: "tokens",
+						header: "Tokens",
+						cell: ({ row }) => formatTokenUsage(t, row.original.totalTokens),
+					},
+					{
+						id: "createdAt",
+						header: "Created",
+						cell: ({ row }) => <DateTooltip date={row.original.createdAt} />,
+					},
+					{
+						id: "status",
+						header: "Status",
+						cell: ({ row }) => (
+							<StatusBadge
+								value={row.original.status}
+								label={formatScanJobStatusLabel(t, row.original.status)}
+							/>
+						),
+					},
+					{
+						id: "actions",
+						header: "",
+						cell: ({ row }) => (
+							<button
+								type="button"
+								className="text-muted-foreground transition hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
+								disabled={
+									!TERMINAL_SCAN_JOB_STATUSES.has(row.original.status) ||
+									deletingJobId === row.original.scanJobId
+								}
+								title={
+									TERMINAL_SCAN_JOB_STATUSES.has(row.original.status)
+										? scanT(t, "scan.jobs.delete", "Delete")
+										: scanT(
+												t,
+												"scan.jobs.deleteNotTerminal",
+												"Stop or cancel the job before deleting it.",
+											)
+								}
+								aria-label={scanT(t, "scan.jobs.delete", "Delete")}
+								onClick={() => void handleDeleteJob(row.original.scanJobId)}
+							>
+								<Trash2 className="size-4" />
+							</button>
+						),
+					},
+				]}
+				mobileRender={(job) => (
+					<RowListItem asChild className="group min-h-24 hover:bg-border">
 						<Link
 							href={
 								"/dashboard/project/" +
@@ -260,29 +327,29 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 								job.scanJobId
 							}
 							className="min-w-0 flex-1 space-y-2 text-inherit no-underline"
-							>
-								<span className="block min-w-0 truncate text-sm font-medium leading-5 text-foreground sm:text-base">
-									{formatJobTitle(job)}
+						>
+							<span className="block min-w-0 truncate text-sm font-medium leading-5 text-foreground sm:text-base">
+								{formatJobTitle(job)}
+							</span>
+							<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
+								<span className="text-sm font-medium text-foreground">
+									{job.pipelineSlug || "-"}
 								</span>
-								<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
-									<span className="text-sm font-medium text-foreground">
-										{job.pipelineSlug || "-"}
-									</span>
-									<span className="text-sm font-medium text-foreground">
-										{formatPipelineProfileLabel(t, job)}
-									</span>
-									<span className="opacity-30" aria-hidden>
-										·
-									</span>
-									<span>{formatTokenUsage(t, job.totalTokens)}</span>
-									<span className="opacity-30" aria-hidden>
-										·
-									</span>
-									<span>
-										<DateTooltip date={job.createdAt} />
-									</span>
-								</div>
-								{job.description ? (
+								<span className="text-sm font-medium text-foreground">
+									{formatPipelineProfileLabel(t, job)}
+								</span>
+								<span className="opacity-30" aria-hidden>
+									·
+								</span>
+								<span>{formatTokenUsage(t, job.totalTokens)}</span>
+								<span className="opacity-30" aria-hidden>
+									·
+								</span>
+								<span>
+									<DateTooltip date={job.createdAt} />
+								</span>
+							</div>
+							{job.description ? (
 								<span className="line-clamp-2 break-all text-xs leading-5 text-muted-foreground">
 									{job.description}
 								</span>
@@ -300,7 +367,7 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 								className="h-5 shrink-0 self-start sm:self-auto"
 							/>
 						</Link>
-						</RowListItem>
+					</RowListItem>
 				)}
 			/>
 		</CollectionSection>

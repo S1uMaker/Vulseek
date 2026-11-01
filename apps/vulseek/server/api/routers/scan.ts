@@ -4,6 +4,10 @@ import {
 	cancelScanJob,
 	cancelScanTask,
 	canRebuildCheckoutTools,
+	deleteScanJobForOrganization,
+	findApplicationById,
+	cancelScanTask,
+	canRebuildCheckoutTools,
 	findApplicationById,
 	findCandidateTaskLineage,
 	findCheckoutImageStatus,
@@ -21,8 +25,6 @@ import {
 	findScanJobsByComposeIdPage,
 	findScanJobTerminalTasksPage,
 	findTaskById,
-	listMessagesPageBySourceTaskIdRepo,
-	reconstructTaskInput,
 	findTobGoalCandidateRepo,
 	findTobGoalFindingRepo,
 	findVulnerabilityCandidateById,
@@ -38,18 +40,20 @@ import {
 	listCandidateTags,
 	listExploitChainsPageRepo,
 	listExploitPrimitivesPageRepo,
+	listMessagesPageBySourceTaskIdRepo,
 	listResearchFindingsPageRepo,
 	listResearchTracksPageRepo,
 	listScanJobDirectory,
 	listScanTaskDirectory,
 	listTobGoalCandidatesPageRepo,
 	listTobGoalFindingsPageRepo,
+	pauseScanJob,
 	queryJobTabData,
 	queryJobTabDetail,
-	pauseScanJob,
 	readCandidateFileContent,
 	readScanJobFileContent,
 	readScanTaskFileContent,
+	reconstructTaskInput,
 	rerunScanTask,
 	resumeScanJob,
 	retryFailedScanJobTasks,
@@ -260,6 +264,25 @@ export const scanRouter = createTRPCRouter({
 	checkoutToolsBuildStatus: protectedProcedure
 		.input(z.object({ buildId: z.string().min(1) }).required())
 		.query(({ input }) => findCheckoutToolsBuildStatus(input.buildId)),
+
+	delete: protectedProcedure
+		.input(apiFindOneScanJob)
+		.mutation(async ({ input, ctx }) => {
+			if (ctx.user.role === "member") {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "Only owners and admins can delete scan jobs",
+				});
+			}
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			return deleteScanJobForOrganization({
+				scanJobId: input.scanJobId,
+				organizationId: ctx.session.activeOrganizationId,
+			});
+		}),
 
 	checkout: protectedProcedure
 		.input(apiCheckoutScanEnvironment)

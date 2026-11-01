@@ -81,6 +81,55 @@ export const ScanJobOverviewTab = ({
 	}, [scanJob?.note]);
 
 	const isNoteDirty = (scanJob?.note ?? "") !== noteDraft;
+
+	// Duration ticks every second while the job runs; terminal jobs freeze on
+	// their wall-clock runtime instead of waiting for the summary poll.
+	const [durationNow, setDurationNow] = useState(() => Date.now());
+	const isJobTerminal =
+		scanJob?.status === "finished" ||
+		scanJob?.status === "partially_finished" ||
+		scanJob?.status === "failed" ||
+		scanJob?.status === "canceled";
+	useEffect(() => {
+		if (isJobTerminal) return;
+		const timer = setInterval(() => setDurationNow(Date.now()), 1000);
+		return () => clearInterval(timer);
+	}, [isJobTerminal]);
+
+	const jobStartedAtMs = scanJob?.createdAt
+		? Date.parse(scanJob.createdAt)
+		: Number.NaN;
+	const jobFinishedAtMs = scanJob?.finishedAt
+		? Date.parse(scanJob.finishedAt)
+		: Number.NaN;
+	const durationSeconds = Number.isFinite(jobStartedAtMs)
+		? Math.max(
+				0,
+				Math.round(
+					((isJobTerminal && Number.isFinite(jobFinishedAtMs)
+						? jobFinishedAtMs
+						: durationNow) -
+						jobStartedAtMs) /
+						1000,
+				),
+			)
+		: (resultSummary?.taskTimeline.coveredSeconds ?? null);
+
+	// The results flow only means something for pipelines that actually run
+	// the analyze-finding/verify-finding stages; other pipelines would render
+	// a wall of zeros.
+	const snapshotStages = (
+		scanJob?.pipelineCompiledSnapshot as
+			| { stages?: Array<{ id: string }> }
+			| null
+			| undefined
+	)?.stages;
+	const hasResultFlowStages = Boolean(
+		snapshotStages?.some(
+			(stage) =>
+				stage.id === "analyze-finding" || stage.id === "verify-finding",
+		),
+	);
 	const canPauseScanJob =
 		scanJob?.status === "pending" || scanJob?.status === "running";
 	const canResumeScanJob = scanJob?.status === "paused";
@@ -254,42 +303,44 @@ export const ScanJobOverviewTab = ({
 							scanJob?.scanRuntimeSettings as ScanRuntimeSettingsDraft | null
 						}
 					/>
-					<Card className="bg-background">
-						<CardHeader>
-							<CardTitle className="text-xl">
-								{scanT(t, "scan.results.title", "Results")}
-							</CardTitle>
-							<CardDescription>
-								{scanT(
-									t,
-									"scan.results.description",
-									"Latest candidate results across analysis, verification, and triage.",
-								)}
-							</CardDescription>
-						</CardHeader>
-						<CardContent className="grid gap-4">
-							<div className="rounded-lg border p-3">
-								<div className="mb-3 flex items-center justify-between gap-3">
-									<div>
-										<div className="font-medium">
-											{scanT(t, "scan.results.flowTitle", "Candidate Flow")}
+					{hasResultFlowStages ? (
+						<Card className="bg-background">
+							<CardHeader>
+								<CardTitle className="text-xl">
+									{scanT(t, "scan.results.title", "Results")}
+								</CardTitle>
+								<CardDescription>
+									{scanT(
+										t,
+										"scan.results.description",
+										"Latest candidate results across analysis, verification, and triage.",
+									)}
+								</CardDescription>
+							</CardHeader>
+							<CardContent className="grid gap-4">
+								<div className="rounded-lg border p-3">
+									<div className="mb-3 flex items-center justify-between gap-3">
+										<div>
+											<div className="font-medium">
+												{scanT(t, "scan.results.flowTitle", "Candidate Flow")}
+											</div>
+											<div className="text-sm text-muted-foreground">
+												{scanT(
+													t,
+													"scan.results.flowDescription",
+													"Sankey-style flow from positive analysis results through verification and triage.",
+												)}
+											</div>
 										</div>
-										<div className="text-sm text-muted-foreground">
-											{scanT(
-												t,
-												"scan.results.flowDescription",
-												"Sankey-style flow from positive analysis results through verification and triage.",
-											)}
-										</div>
+										{isLoadingResultSummary ? (
+											<Loader2 className="size-4 animate-spin text-muted-foreground" />
+										) : null}
 									</div>
-									{isLoadingResultSummary ? (
-										<Loader2 className="size-4 animate-spin text-muted-foreground" />
-									) : null}
+									<ResultFlowChart summary={resultSummary} t={t} />
 								</div>
-								<ResultFlowChart summary={resultSummary} t={t} />
-							</div>
-						</CardContent>
-					</Card>
+							</CardContent>
+						</Card>
+					) : null}
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 						<div className="border rounded-lg p-3">
 							<div className="text-sm text-muted-foreground">
@@ -340,11 +391,7 @@ export const ScanJobOverviewTab = ({
 									</Link>
 								) : (
 									scanJob.pipelineProfileName?.trim() ||
-									scanT(
-										t,
-										"scan.pipeline.defaults",
-										"Pipeline defaults",
-									)
+									scanT(t, "scan.pipeline.defaults", "Pipeline defaults")
 								)}
 							</div>
 						</div>
@@ -361,13 +408,11 @@ export const ScanJobOverviewTab = ({
 								{scanT(t, "scan.field.duration", "Duration")}
 							</div>
 							<div className="font-medium tabular-nums">
-								{scanJob.timeBudgetSeconds != null
-									? `${formatDurationSeconds(
-											resultSummary?.taskTimeline.coveredSeconds,
-										)} / ${formatDurationSeconds(scanJob.timeBudgetSeconds)}`
-									: formatDurationSeconds(
-											resultSummary?.taskTimeline.coveredSeconds,
-										)}
+								{durationSeconds == null
+									? "-"
+									: scanJob.timeBudgetSeconds != null
+										? `${formatDurationSeconds(durationSeconds)} / ${formatDurationSeconds(scanJob.timeBudgetSeconds)}`
+										: formatDurationSeconds(durationSeconds)}
 							</div>
 						</div>
 						<div className="border rounded-lg p-3 md:col-span-2">
@@ -411,11 +456,7 @@ export const ScanJobOverviewTab = ({
 								</div>
 								<div>
 									<div className="text-sm text-muted-foreground">
-										{scanT(
-											t,
-											"scan.field.thoughtTokens",
-											"Thought Tokens",
-										)}
+										{scanT(t, "scan.field.thoughtTokens", "Thought Tokens")}
 									</div>
 									<div className="font-medium">
 										{formatTokenUsage(t, scanJob.thoughtTokens)}
@@ -439,9 +480,7 @@ export const ScanJobOverviewTab = ({
 								<div className="text-sm text-muted-foreground">
 									{scanT(t, "scan.field.commitWindow", "Commit Window")}
 								</div>
-								<div className="font-medium">
-									k={scanJob.commitWindow}
-								</div>
+								<div className="font-medium">k={scanJob.commitWindow}</div>
 							</div>
 						) : null}
 						<div className="border rounded-lg p-3">
@@ -492,9 +531,7 @@ export const ScanJobOverviewTab = ({
 									type="button"
 									size="sm"
 									disabled={
-										updateNoteMutation.isLoading ||
-										!isNoteDirty ||
-										!scanJob
+										updateNoteMutation.isLoading || !isNoteDirty || !scanJob
 									}
 									onClick={async () => {
 										try {

@@ -4,17 +4,8 @@ import type {
 	ScanJobOutput,
 	ScanRuntimeSettings,
 } from "@vulseek/server/db/schema";
-import { scanJobs, messages, tasks } from "@vulseek/server/db/schema";
-import {
-	and,
-	desc,
-	eq,
-	ilike,
-	inArray,
-	or,
-	type SQL,
-	sql,
-} from "drizzle-orm";
+import { messages, scanJobs, tasks } from "@vulseek/server/db/schema";
+import { and, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
 import {
 	normalizeLegacyVerificationSchema,
 	normalizePipelineDefinitionSnapshot,
@@ -106,6 +97,10 @@ const selectScanJobWithRepositoryTaskStatus = {
 	>`coalesce(${tasks.status}, 'pending')`,
 };
 
+export const deleteScanJobByIdRepo = async (scanJobId: string) => {
+	await db.delete(scanJobs).where(eq(scanJobs.scanJobId, scanJobId));
+};
+
 export const findScanJobByIdRepo = async (scanJobId: string) => {
 	const scanJob = await db
 		.select(selectScanJobWithRepositoryTaskStatus)
@@ -188,18 +183,18 @@ export const cancelScanJobRepo = async (input: {
 				jobStatus: null,
 				tasksToStop: [],
 				stoppedDispatchTaskIds: [],
-				};
-			}
-			if (!CANCELLABLE_JOB_STATUSES.some((status) => status === job.status)) {
-				return {
-					outcome: "already_stopped",
-					jobStatus: job.status,
-					tasksToStop: [],
-					stoppedDispatchTaskIds: [],
-				};
-			}
+			};
+		}
+		if (!CANCELLABLE_JOB_STATUSES.some((status) => status === job.status)) {
+			return {
+				outcome: "already_stopped",
+				jobStatus: job.status,
+				tasksToStop: [],
+				stoppedDispatchTaskIds: [],
+			};
+		}
 
-			const tasksToStop = await tx
+		const tasksToStop = await tx
 			.update(tasks)
 			.set({
 				status: "canceled",
@@ -240,28 +235,28 @@ export const cancelScanJobRepo = async (input: {
 						)
 						.returning({ taskId: messages.sourceTaskId });
 
-			await tx
-				.update(scanJobs)
-				.set({
-					status: "canceled",
-					finishedAt: now,
-					terminationReason: input.terminationReason,
-					errorMessage: input.errorMessage,
-				})
-				.where(
-					and(
-						eq(scanJobs.scanJobId, input.scanJobId),
-						inArray(scanJobs.status, [...CANCELLABLE_JOB_STATUSES]),
-					),
-				)
-				.returning({ scanJobId: scanJobs.scanJobId });
-			return {
-				outcome: "canceled",
-				jobStatus: "canceled",
-				tasksToStop,
-				stoppedDispatchTaskIds: stoppedDispatches.map((row) => row.taskId),
-			};
-		});
+		await tx
+			.update(scanJobs)
+			.set({
+				status: "canceled",
+				finishedAt: now,
+				terminationReason: input.terminationReason,
+				errorMessage: input.errorMessage,
+			})
+			.where(
+				and(
+					eq(scanJobs.scanJobId, input.scanJobId),
+					inArray(scanJobs.status, [...CANCELLABLE_JOB_STATUSES]),
+				),
+			)
+			.returning({ scanJobId: scanJobs.scanJobId });
+		return {
+			outcome: "canceled",
+			jobStatus: "canceled",
+			tasksToStop,
+			stoppedDispatchTaskIds: stoppedDispatches.map((row) => row.taskId),
+		};
+	});
 };
 
 /**
