@@ -28,12 +28,17 @@ import { api } from "@/utils/api";
 import { buildRunPipelineImageWarnings } from "./run-pipeline-image-warnings";
 
 /**
- * Unified "Run Pipeline" entry (Phase 6): replaces the four hardcoded
- * scanType dialogs on application/compose pages.
+ * Unified "Run pipeline" entry: replaces the four hardcoded scanType dialogs
+ * on application/compose pages, and doubles as the run entry from the
+ * pipeline pages.
  *
- * Defaults to the profile's `defaultPipelineId` current version; the advanced
- * section can pick a historical version for this run only — the profile
- * default never changes.
+ * With a `target` prop the dialog runs against that application/compose.
+ * Without one (pipeline pages) it shows a project → application picker; the
+ * selection only chooses where the scan runs and where the job detail page
+ * lives — the pipeline and version are resolved exactly the same way.
+ *
+ * Defaults to `defaultPipelineId`'s current version; the advanced section can
+ * pick a historical version for this run only.
  */
 
 const stripGroupedDigits = (value: string) => value.replace(/,/g, "");
@@ -45,10 +50,20 @@ const formatUsGroupedInteger = (value: string) => {
 	return new Intl.NumberFormat("en-US").format(Number(normalized));
 };
 
+export type RunPipelineDialogTarget =
+	| { type: "application"; applicationId: string }
+	| { type: "compose"; composeId: string };
+
+type ApplicationOption = {
+	projectId: string;
+	projectName: string;
+	environmentId: string;
+	applicationId: string;
+	name: string;
+};
+
 export type RunPipelineDialogProps = {
-	target:
-		| { type: "application"; applicationId: string }
-		| { type: "compose"; composeId: string };
+	target?: RunPipelineDialogTarget;
 	defaultPipelineId?: string | null;
 	triggerClassName?: string;
 };
@@ -64,12 +79,11 @@ export const RunPipelineDialog = ({
 		targetType: "project",
 	});
 	const run = api.pipeline.run.useMutation();
-	const checkoutTarget =
-		target.type === "application"
-			? { applicationId: target.applicationId }
-			: { composeId: target.composeId };
-
 	const [open, setOpen] = React.useState(false);
+	const projects = api.project.all.useQuery(undefined, {
+		enabled: open && !target,
+	});
+	const [selectedApplicationId, setSelectedApplicationId] = React.useState("");
 	const [pipelineId, setPipelineId] = React.useState<string>("");
 	const [versionId, setVersionId] = React.useState<string>("");
 	const [profileId, setProfileId] = React.useState<string>("");
@@ -77,6 +91,45 @@ export const RunPipelineDialog = ({
 	const [targetTag, setTargetTag] = React.useState("");
 	const [tokenBudget, setTokenBudget] = React.useState("");
 	const [timeBudgetSeconds, setTimeBudgetSeconds] = React.useState("");
+
+	const applicationOptions = React.useMemo<ApplicationOption[]>(() => {
+		if (target) return [];
+		return (projects.data ?? []).flatMap((project) =>
+			(project.environments ?? []).flatMap((environment) =>
+				(environment.applications ?? []).map((application) => ({
+					projectId: project.projectId,
+					projectName: project.name,
+					environmentId: environment.environmentId,
+					applicationId: application.applicationId,
+					name: application.name || application.appName,
+				})),
+			),
+		);
+	}, [projects.data, target]);
+
+	const selectedApplication = target
+		? null
+		: (applicationOptions.find(
+				(option) => option.applicationId === selectedApplicationId,
+			) ?? null);
+
+	// With a target prop we run against it directly; otherwise the picked
+	// application becomes the target. All downstream behavior is identical.
+	const effectiveTarget: RunPipelineDialogTarget | null = target
+		? target
+		: selectedApplication
+			? {
+					type: "application",
+					applicationId: selectedApplication.applicationId,
+				}
+			: null;
+
+	const checkoutTarget = effectiveTarget
+		? effectiveTarget.type === "application"
+			? { applicationId: effectiveTarget.applicationId }
+			: { composeId: effectiveTarget.composeId }
+		: { applicationId: "__none__" };
+
 	const versions = api.pipeline.listVersions.useQuery(
 		{ pipelineId: pipelineId || "__none__" },
 		{ enabled: Boolean(pipelineId) },
@@ -91,7 +144,7 @@ export const RunPipelineDialog = ({
 	});
 	const checkoutImageStatus = api.scan.checkoutImageStatus.useQuery(
 		checkoutTarget,
-		{ enabled: open },
+		{ enabled: open && Boolean(effectiveTarget) },
 	);
 
 	// Default to the preferred pipeline's current version when the dialog opens.
@@ -127,7 +180,9 @@ export const RunPipelineDialog = ({
 	const selectedVersion = versions.data?.find(
 		(v) => v.pipelineVersionId === versionId,
 	);
-	const canRun = Boolean(pipelineId && versionId && !run.isLoading);
+	const canRun = Boolean(
+		pipelineId && versionId && effectiveTarget && !run.isLoading,
+	);
 	const imageWarnings = buildRunPipelineImageWarnings({
 		tools: toolsStatus.data,
 		checkout: checkoutImageStatus.data,
@@ -143,11 +198,13 @@ export const RunPipelineDialog = ({
 	};
 
 	const submit = async () => {
-		if (!canRun) return;
+		if (!canRun || !effectiveTarget) return;
 		const parsedTokenBudgetK = parseOptionalPositiveInt(tokenBudget);
 		const parsedTimeBudget = parseOptionalPositiveInt(timeBudgetSeconds);
 		const parsedTokenBudget =
-			parsedTokenBudgetK == null ? parsedTokenBudgetK : parsedTokenBudgetK * 1000;
+			parsedTokenBudgetK == null
+				? parsedTokenBudgetK
+				: parsedTokenBudgetK * 1000;
 		if (
 			tokenBudget.trim() &&
 			(parsedTokenBudgetK == null ||
@@ -185,7 +242,7 @@ export const RunPipelineDialog = ({
 		}
 		try {
 			const scanJob = await run.mutateAsync({
-				target,
+				target: effectiveTarget,
 				pipelineId,
 				pipelineVersionId: versionId || undefined,
 				pipelineProfileId: profileId || undefined,
@@ -196,15 +253,23 @@ export const RunPipelineDialog = ({
 				tokenBudget: parsedTokenBudget,
 				timeBudgetSeconds: parsedTimeBudget,
 			});
-			toast.success("Scan started");
+			toast.success(scanT(t, "scan.dialog.scanStarted", "Scan started"));
 			setTokenBudget("");
 			setTimeBudgetSeconds("");
 			setOpen(false);
-			const currentPath = (
-				router.asPath.split(/[?#]/, 1)[0] ?? router.asPath
-			).replace(/\/$/, "");
+			const scanJobId = encodeURIComponent(scanJob!.scanJobId);
+			if (target) {
+				// Mounted on an application/compose page: the job detail lives
+				// right below the current path.
+				const currentPath = (
+					router.asPath.split(/[?#]/, 1)[0] ?? router.asPath
+				).replace(/\/$/, "");
+				await router.push(`${currentPath}/jobs/${scanJobId}`);
+				return;
+			}
+			if (!selectedApplication) return;
 			await router.push(
-				`${currentPath}/jobs/${encodeURIComponent(scanJob!.scanJobId)}`,
+				`/dashboard/project/${selectedApplication.projectId}/environment/${selectedApplication.environmentId}/services/application/${selectedApplication.applicationId}/jobs/${scanJobId}`,
 			);
 		} catch (error) {
 			toast.error(
@@ -218,12 +283,14 @@ export const RunPipelineDialog = ({
 			<DialogTrigger asChild>
 				<Button className={triggerClassName}>
 					<Play className="size-4" />
-					Run Pipeline
+					{scanT(t, "scan.dialog.runTrigger", "Run pipeline")}
 				</Button>
 			</DialogTrigger>
 			<DialogContent className="sm:max-w-lg">
 				<DialogHeader>
-					<DialogTitle>Run pipeline</DialogTitle>
+					<DialogTitle>
+						{scanT(t, "scan.dialog.title", "Run pipeline")}
+					</DialogTitle>
 					<DialogDescription>
 						Runs a published pipeline version against this target. Choosing a
 						runtime profile applies its stage settings to this scan only.
@@ -257,8 +324,77 @@ export const RunPipelineDialog = ({
 							</AlertDescription>
 						</Alert>
 					) : null}
+					{!target ? (
+						<div className="space-y-1">
+							<Label>{scanT(t, "scan.dialog.projectLabel", "Project")}</Label>
+							<Select
+								value={selectedApplication?.projectId ?? ""}
+								onValueChange={(value) => {
+									const first = applicationOptions.find(
+										(option) => option.projectId === value,
+									);
+									setSelectedApplicationId(first?.applicationId ?? "");
+								}}
+							>
+								<SelectTrigger className="h-9">
+									<SelectValue placeholder="Choose a project…" />
+								</SelectTrigger>
+								<SelectContent>
+									{(projects.data ?? [])
+										.filter((project) =>
+											(project.environments ?? []).some(
+												(environment) =>
+													(environment.applications ?? []).length > 0,
+											),
+										)
+										.map((project) => (
+											<SelectItem
+												key={project.projectId}
+												value={project.projectId}
+											>
+												{project.name}
+											</SelectItem>
+										))}
+								</SelectContent>
+							</Select>
+						</div>
+					) : null}
+					{!target ? (
+						<div className="space-y-1">
+							<Label>
+								{scanT(t, "scan.dialog.applicationLabel", "Application")}
+							</Label>
+							<Select
+								value={selectedApplicationId}
+								onValueChange={setSelectedApplicationId}
+							>
+								<SelectTrigger className="h-9">
+									<SelectValue placeholder="Choose an application…" />
+								</SelectTrigger>
+								<SelectContent>
+									{applicationOptions.map((option) => (
+										<SelectItem
+											key={option.applicationId}
+											value={option.applicationId}
+										>
+											{option.name}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							{projects.isSuccess && applicationOptions.length === 0 ? (
+								<p className="text-xs text-muted-foreground">
+									{scanT(
+										t,
+										"scan.dialog.noApplications",
+										"No applications found. Create an application first.",
+									)}
+								</p>
+							) : null}
+						</div>
+					) : null}
 					<div className="space-y-1">
-						<Label>Pipeline</Label>
+						<Label>{scanT(t, "scan.dialog.pipelineLabel", "Pipeline")}</Label>
 						<Select
 							value={pipelineId}
 							onValueChange={(value) => {
@@ -284,14 +420,16 @@ export const RunPipelineDialog = ({
 					</div>
 
 					<div className="space-y-1">
-						<Label>Profile</Label>
+						<Label>
+							{scanT(t, "scan.dialog.runtimeProfileLabel", "Runtime profile")}
+						</Label>
 						<Select
 							value={profileId}
 							onValueChange={setProfileId}
 							disabled={!pipelineId}
 						>
 							<SelectTrigger className="h-9">
-								<SelectValue placeholder="Select a profile" />
+								<SelectValue placeholder="Select a runtime profile" />
 							</SelectTrigger>
 							<SelectContent>
 								{profiles.data?.map((profile) => (
@@ -308,13 +446,19 @@ export const RunPipelineDialog = ({
 							{profiles.isLoading
 								? "Loading profiles…"
 								: profiles.data?.length
-									? "Applies this profile's model, concurrency, and stage switches to the run."
-									: "No profiles for this pipeline. The run uses YAML defaults."}
+									? "Applies this runtime profile's model, concurrency, and stage switches to the run."
+									: "No runtime profiles for this pipeline. The run uses YAML defaults."}
 						</p>
 					</div>
 
 					<div className="space-y-1">
-						<Label>Version (advanced — this run only)</Label>
+						<Label>
+							{scanT(
+								t,
+								"scan.dialog.versionLabel",
+								"Version (advanced — this run only)",
+							)}
+						</Label>
 						<Select value={versionId} onValueChange={setVersionId}>
 							<SelectTrigger className="h-9">
 								<SelectValue
@@ -345,7 +489,7 @@ export const RunPipelineDialog = ({
 
 					<div className="grid grid-cols-2 gap-3">
 						<div className="space-y-1">
-							<Label>Ref</Label>
+							<Label>{scanT(t, "scan.dialog.ref", "Ref")}</Label>
 							<Input
 								value={targetRef}
 								onChange={(event) => setTargetRef(event.target.value)}
@@ -353,7 +497,7 @@ export const RunPipelineDialog = ({
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label>Tag</Label>
+							<Label>{scanT(t, "scan.dialog.tag", "Tag")}</Label>
 							<Input
 								value={targetTag}
 								onChange={(event) => setTargetTag(event.target.value)}
@@ -365,11 +509,7 @@ export const RunPipelineDialog = ({
 					<div className="grid grid-cols-2 gap-3">
 						<div className="space-y-1">
 							<Label htmlFor="run-pipeline-token-budget">
-								{scanT(
-									t,
-									"scan.dialog.tokenBudget",
-									"Token usage budget (K)",
-								)}
+								{scanT(t, "scan.dialog.tokenBudget", "Token usage budget (K)")}
 							</Label>
 							<div className="relative">
 								<Input
@@ -424,7 +564,9 @@ export const RunPipelineDialog = ({
 
 				<DialogFooter>
 					<Button onClick={() => void submit()} disabled={!canRun}>
-						{run.isLoading ? "Starting…" : "Start scan"}
+						{run.isLoading
+							? scanT(t, "scan.dialog.starting", "Starting…")
+							: scanT(t, "scan.dialog.startScan", "Start scan")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

@@ -27,8 +27,11 @@ const HOME_LABEL: Record<string, string> = {
 };
 
 export const AgentProfilesForm = () => {
-	const { data: agentProfiles, refetch, isLoading } =
-		api.ai.getAgentProfiles.useQuery();
+	const {
+		data: agentProfiles,
+		refetch,
+		isLoading,
+	} = api.ai.getAgentProfiles.useQuery();
 	const { mutateAsync, isLoading: isRemoving } =
 		api.ai.deleteAgentProfile.useMutation();
 
@@ -43,10 +46,13 @@ export const AgentProfilesForm = () => {
 								Agent Profiles
 							</CardTitle>
 							<CardDescription>
-								Manage reusable Codex or Claude Code runtime profiles
+								Configure how Codex, Claude Code, or Grok agents authenticate
+								and run inside scan sandbox containers
 							</CardDescription>
 						</div>
-						{agentProfiles && agentProfiles.length > 0 && <HandleAgentProfile />}
+						{agentProfiles && agentProfiles.length > 0 && (
+							<HandleAgentProfile />
+						)}
 					</CardHeader>
 					<CardContent className="space-y-2 py-8 border-t">
 						{isLoading ? (

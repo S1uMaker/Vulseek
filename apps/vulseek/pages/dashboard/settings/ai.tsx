@@ -1,5 +1,5 @@
-import { validateRequest } from "@vulseek/server";
 import { createServerSideHelpers } from "@trpc/react-query/server";
+import { validateRequest } from "@vulseek/server";
 import type { GetServerSidePropsContext } from "next";
 import type { ReactElement } from "react";
 import superjson from "superjson";
@@ -12,6 +12,19 @@ import { getLocale, serverSideTranslations } from "@/utils/i18n";
 const Page = () => {
 	return (
 		<div className="flex flex-col gap-4 w-full">
+			<div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+				<p className="font-medium text-foreground">
+					How Agent Profiles, Runtime profiles, and Pipelines fit together
+				</p>
+				<p className="mt-1">
+					An Agent Profile (below) defines how an agent authenticates and runs
+					inside a scan sandbox container — provider, credentials, model, and
+					thinking level. Each pipeline's Runtime profiles (configured in the
+					Profiles view of that pipeline) assign an Agent Profile and
+					concurrency to every stage. Starting a scan freezes those choices into
+					the job.
+				</p>
+			</div>
 			<AgentProfilesForm />
 			<AiForm />
 		</div>

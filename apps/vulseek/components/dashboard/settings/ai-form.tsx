@@ -28,7 +28,10 @@ export const AiForm = () => {
 								<BotIcon className="size-6 text-muted-foreground self-center" />
 								AI Settings
 							</CardTitle>
-							<CardDescription>Manage your AI configurations</CardDescription>
+							<CardDescription>
+								Legacy credentials for the project AI template generator. Scan
+								pipeline agents use Agent Profiles instead.
+							</CardDescription>
 						</div>
 						{aiConfigs && aiConfigs?.length > 0 && <HandleAi />}
 					</CardHeader>

@@ -1,5 +1,5 @@
-import * as React from "react";
 import type { PipelineDocumentV3 } from "@vulseek/server/services/scan/pipeline/document-v3";
+import type * as React from "react";
 import { entityCounts } from "@/lib/pipeline-editor/definition-helpers";
 import type { PipelineEditorAction } from "@/lib/pipeline-editor/pipeline-editor-state";
 import {
@@ -7,8 +7,8 @@ import {
 	FieldTemplate,
 	NumberField,
 	SectionHeading,
-	TextField,
 	TextAreaField,
+	TextField,
 } from "./workbench-fields";
 
 /**
@@ -20,7 +20,11 @@ export type OverviewEditorProps = {
 	document: PipelineDocumentV3;
 	dispatch: React.Dispatch<PipelineEditorAction>;
 	readOnly: boolean;
-	draftState: { dirty: boolean; draftRevision: number; publishedVersion: string | null };
+	draftState: {
+		dirty: boolean;
+		draftRevision: number;
+		publishedVersion: string | null;
+	};
 };
 
 export const OverviewEditor = ({
@@ -47,7 +51,11 @@ export const OverviewEditor = ({
 					value={document.name}
 					readOnly={readOnly}
 					onChange={(name) =>
-						dispatch({ type: "patch", ops: [{ op: "updateOverview", overview: { name } }], key: "overview:name" })
+						dispatch({
+							type: "patch",
+							ops: [{ op: "updateOverview", overview: { name } }],
+							key: "overview:name",
+						})
 					}
 				/>
 				<TextAreaField
@@ -58,12 +66,20 @@ export const OverviewEditor = ({
 					onChange={(description) =>
 						dispatch({
 							type: "patch",
-							ops: [{ op: "updateOverview", overview: { description: description || undefined } }],
+							ops: [
+								{
+									op: "updateOverview",
+									overview: { description: description || undefined },
+								},
+							],
 							key: "overview:description",
 						})
 					}
 				/>
-				<FieldTemplate label="Supported targets" description="Which project kinds can run this pipeline.">
+				<FieldTemplate
+					label="Supported targets"
+					description="Which project kinds can run this pipeline."
+				>
 					<div className="space-y-2">
 						{(["project", "evaluation"] as const).map((target) => (
 							<CheckboxField
@@ -77,7 +93,12 @@ export const OverviewEditor = ({
 										: document.supportedTargets.filter((t) => t !== target);
 									dispatch({
 										type: "patch",
-										ops: [{ op: "updateOverview", overview: { supportedTargets: next } }],
+										ops: [
+											{
+												op: "updateOverview",
+												overview: { supportedTargets: next },
+											},
+										],
 										key: "overview:targets",
 									});
 								}}
@@ -85,14 +106,22 @@ export const OverviewEditor = ({
 						))}
 					</div>
 				</FieldTemplate>
-				<FieldTemplate label="Root stage" description="The pipeline always starts here.">
+				<FieldTemplate
+					label="Root stage"
+					description="The pipeline always starts here."
+				>
 					<select
 						value={document.root}
 						disabled={readOnly}
 						onChange={(event) =>
 							dispatch({
 								type: "patch",
-								ops: [{ op: "updateOverview", overview: { root: event.target.value } }],
+								ops: [
+									{
+										op: "updateOverview",
+										overview: { root: event.target.value },
+									},
+								],
 								key: "overview:root",
 							})
 						}
@@ -118,7 +147,15 @@ export const OverviewEditor = ({
 							onChange={(maxTasks) =>
 								dispatch({
 									type: "patch",
-									ops: [{ op: "updateLimits", limits: { maxTasks, maxDurationSeconds: document.limits.maxDurationSeconds } }],
+									ops: [
+										{
+											op: "updateLimits",
+											limits: {
+												maxTasks,
+												maxDurationSeconds: document.limits.maxDurationSeconds,
+											},
+										},
+									],
 									key: "overview:limits",
 								})
 							}
@@ -131,7 +168,15 @@ export const OverviewEditor = ({
 							onChange={(maxDurationSeconds) =>
 								dispatch({
 									type: "patch",
-									ops: [{ op: "updateLimits", limits: { maxTasks: document.limits.maxTasks, maxDurationSeconds } }],
+									ops: [
+										{
+											op: "updateLimits",
+											limits: {
+												maxTasks: document.limits.maxTasks,
+												maxDurationSeconds,
+											},
+										},
+									],
 									key: "overview:limits",
 								})
 							}
@@ -142,8 +187,12 @@ export const OverviewEditor = ({
 				<div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
 					<p className="font-medium text-foreground">Draft state</p>
 					<p className="mt-1">
-						{draftState.dirty ? "Unsaved local changes" : "In sync with the saved draft"}
-						{draftState.publishedVersion ? ` · current published v${draftState.publishedVersion}` : " · no published version"}
+						{draftState.dirty
+							? "Draft (unsaved)"
+							: "In sync with the saved draft"}
+						{draftState.publishedVersion
+							? ` · current published v${draftState.publishedVersion}`
+							: " · no published version"}
 					</p>
 				</div>
 			</div>

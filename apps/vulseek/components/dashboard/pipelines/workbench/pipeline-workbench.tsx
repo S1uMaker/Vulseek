@@ -1,4 +1,8 @@
-import * as React from "react";
+import type { PipelineDiagnostic } from "@vulseek/server/services/scan/pipeline/document-v3";
+import {
+	parsePipelineDocumentV3,
+	validatePipelineDocumentV3,
+} from "@vulseek/server/services/scan/pipeline/document-v3";
 import {
 	AlertTriangle,
 	ChevronLeft,
@@ -7,25 +11,21 @@ import {
 	PanelRightClose,
 	PanelRightOpen,
 } from "lucide-react";
-import type {
-	PipelineDiagnostic,
-	PipelineDocumentV3,
-} from "@vulseek/server/services/scan/pipeline/document-v3";
-import {
-	parsePipelineDocumentV3,
-	validatePipelineDocumentV3,
-} from "@vulseek/server/services/scan/pipeline/document-v3";
+import * as React from "react";
 import { CanvasEditor } from "@/components/dashboard/pipelines/canvas-editor";
 import { DiagnosticsBar } from "@/components/dashboard/pipelines/diagnostics-bar";
 import { PipelineInspector } from "@/components/dashboard/pipelines/pipeline-inspector";
-import { YamlEditor, type YamlEditorHandle } from "@/components/dashboard/pipelines/yaml-editor";
+import {
+	YamlEditor,
+	type YamlEditorHandle,
+} from "@/components/dashboard/pipelines/yaml-editor";
 import { DashboardPageTabs } from "@/components/dashboard/ui-system";
+import { filterVisibleSchemaDiagnostics } from "@/lib/pipeline-editor/definition-helpers";
 import type {
 	PipelineEditorAction,
 	PipelineEditorState,
 } from "@/lib/pipeline-editor/pipeline-editor-state";
 import { validDocument } from "@/lib/pipeline-editor/pipeline-editor-state";
-import { filterVisibleSchemaDiagnostics } from "@/lib/pipeline-editor/definition-helpers";
 import { cn } from "@/lib/utils";
 import { DefinitionView, type DrillLevel } from "./definition-view";
 import { QuickSwitcher } from "./quick-switcher";
@@ -57,7 +57,11 @@ export type PipelineWorkbenchProps = {
 	readOnlyYaml?: string;
 	/** Label shown when viewing a published version (e.g. "v3 · source"). */
 	versionLabel?: string | null;
-	draftState: { dirty: boolean; draftRevision: number; publishedVersion: string | null };
+	draftState: {
+		dirty: boolean;
+		draftRevision: number;
+		publishedVersion: string | null;
+	};
 	/** Raw YAML editor handle, for the page to flush before saving. */
 	onYamlReady?: (handle: YamlEditorHandle | null) => void;
 	initialView?: WorkbenchView;
@@ -89,7 +93,9 @@ export const PipelineWorkbench = ({
 	profilesContent,
 	onViewChange,
 }: PipelineWorkbenchProps) => {
-	const [view, setView] = React.useState<WorkbenchView>(initialView ?? "definition");
+	const [view, setView] = React.useState<WorkbenchView>(
+		initialView ?? "definition",
+	);
 	React.useEffect(() => {
 		if (initialView) setView(initialView);
 	}, [initialView]);
@@ -113,32 +119,38 @@ export const PipelineWorkbench = ({
 			window.localStorage.getItem(INSPECTOR_STORAGE_KEY) ?? "",
 			10,
 		);
-		return Number.isFinite(stored) && stored >= 300 && stored <= 480 ? stored : 360;
+		return Number.isFinite(stored) && stored >= 300 && stored <= 480
+			? stored
+			: 360;
 	});
 	const inspectorRef = React.useRef<HTMLDivElement>(null);
 	const [resizingInspector, setResizingInspector] = React.useState(false);
 
-	const startInspectorResize = React.useCallback((event: React.PointerEvent) => {
-		event.preventDefault();
-		setResizingInspector(true);
-		const startX = event.clientX;
-		const startWidth = inspectorRef.current?.getBoundingClientRect().width ?? 360;
-		const onMove = (moveEvent: PointerEvent) => {
-			const delta = startX - moveEvent.clientX; // drag left = wider
-			setInspectorWidth(Math.min(480, Math.max(300, startWidth + delta)));
-		};
-		const onUp = () => {
-			setResizingInspector(false);
-			window.removeEventListener("pointermove", onMove);
-			window.removeEventListener("pointerup", onUp);
-			window.localStorage.setItem(
-				INSPECTOR_STORAGE_KEY,
-				String(inspectorRef.current?.getBoundingClientRect().width ?? 360),
-			);
-		};
-		window.addEventListener("pointermove", onMove);
-		window.addEventListener("pointerup", onUp);
-	}, []);
+	const startInspectorResize = React.useCallback(
+		(event: React.PointerEvent) => {
+			event.preventDefault();
+			setResizingInspector(true);
+			const startX = event.clientX;
+			const startWidth =
+				inspectorRef.current?.getBoundingClientRect().width ?? 360;
+			const onMove = (moveEvent: PointerEvent) => {
+				const delta = startX - moveEvent.clientX; // drag left = wider
+				setInspectorWidth(Math.min(480, Math.max(300, startWidth + delta)));
+			};
+			const onUp = () => {
+				setResizingInspector(false);
+				window.removeEventListener("pointermove", onMove);
+				window.removeEventListener("pointerup", onUp);
+				window.localStorage.setItem(
+					INSPECTOR_STORAGE_KEY,
+					String(inspectorRef.current?.getBoundingClientRect().width ?? 360),
+				);
+			};
+			window.addEventListener("pointermove", onMove);
+			window.addEventListener("pointerup", onUp);
+		},
+		[],
+	);
 
 	// Ctrl/Cmd+P quick switcher.
 	React.useEffect(() => {
@@ -155,7 +167,8 @@ export const PipelineWorkbench = ({
 	const document = validDocument(state);
 	const staleDocument =
 		state.status.kind === "valid" && state.status.stale && !readOnly;
-	const editable = !readOnly && state.status.kind === "valid" && !state.status.stale;
+	const editable =
+		!readOnly && state.status.kind === "valid" && !state.status.stale;
 	const yamlEditorRef = React.useRef<YamlEditorHandle | null>(null);
 
 	// Read-only mode renders the *version* YAML, never the reducer draft.
@@ -171,15 +184,26 @@ export const PipelineWorkbench = ({
 			yaml: readOnlyYaml,
 		};
 	}, [readOnly, readOnlyYaml]);
-	const viewDocument = readOnly ? (readOnlyAnalysis?.document ?? null) : document;
+	const viewDocument = readOnly
+		? (readOnlyAnalysis?.document ?? null)
+		: document;
 	const rawViewDiagnostics = readOnly
 		? (readOnlyAnalysis?.diagnostics ?? [])
 		: state.diagnostics;
-	const viewDiagnostics = filterVisibleSchemaDiagnostics(viewDocument, rawViewDiagnostics);
-	const viewYaml = readOnly ? (readOnlyAnalysis?.yaml ?? "") : state.rawYamlBuffer;
+	const viewDiagnostics = filterVisibleSchemaDiagnostics(
+		viewDocument,
+		rawViewDiagnostics,
+	);
+	const viewYaml = readOnly
+		? (readOnlyAnalysis?.yaml ?? "")
+		: state.rawYamlBuffer;
 
-	const errorCount = viewDiagnostics.filter((d) => d.severity === "error").length;
-	const warningCount = viewDiagnostics.filter((d) => d.severity === "warning").length;
+	const errorCount = viewDiagnostics.filter(
+		(d) => d.severity === "error",
+	).length;
+	const warningCount = viewDiagnostics.filter(
+		(d) => d.severity === "warning",
+	).length;
 
 	const navigateToDefinition = React.useCallback(() => {
 		setView("definition");
@@ -191,7 +215,10 @@ export const PipelineWorkbench = ({
 		if (entity && entity.type !== "pipeline") {
 			// Focus the referenced entity in the Definition view; the shared
 			// selection also highlights it on the Visual canvas.
-			dispatch({ type: "select", entity: { type: entity.type, id: entity.id } });
+			dispatch({
+				type: "select",
+				entity: { type: entity.type, id: entity.id },
+			});
 			setView("definition");
 			if (narrowDefinition) setDrill("editor");
 			return;
@@ -227,38 +254,39 @@ export const PipelineWorkbench = ({
 				}}
 				trailing={
 					<>
-					{view !== "profiles" && readOnly && versionLabel ? (
-						<span className="text-xs text-muted-foreground">
-							Read-only view of {versionLabel}
-						</span>
-					) : null}
-					{state.canvasTouched && view !== "visual" && view !== "profiles" ? (
-						<span className="text-xs text-muted-foreground">
-							Canvas edits use stable serialization — original comments may be rewritten.
-						</span>
-					) : null}
-					{view !== "profiles" && state.patchError ? (
-						<span
-							className="rounded bg-red-500/10 px-2 py-0.5 text-xs text-red-600"
-							title={state.patchError}
-						>
-							Patch failed: {state.patchError}
-						</span>
-					) : null}
-					{view !== "visual" && view !== "profiles" ? (
-						<button
-							type="button"
-							onClick={() => setInspectorOpen((open) => !open)}
-							className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
-							aria-label={inspectorOpen ? "Hide inspector" : "Show inspector"}
-						>
-							{inspectorOpen ? (
-								<PanelRightClose className="size-4" />
-							) : (
-								<PanelRightOpen className="size-4" />
-							)}
-						</button>
-					) : null}
+						{view !== "profiles" && readOnly && versionLabel ? (
+							<span className="text-xs text-muted-foreground">
+								Read-only view of {versionLabel}
+							</span>
+						) : null}
+						{state.canvasTouched && view !== "visual" && view !== "profiles" ? (
+							<span className="text-xs text-muted-foreground">
+								Canvas edits use stable serialization — original comments may be
+								rewritten.
+							</span>
+						) : null}
+						{view !== "profiles" && state.patchError ? (
+							<span
+								className="rounded bg-red-500/10 px-2 py-0.5 text-xs text-red-600"
+								title={state.patchError}
+							>
+								Patch failed: {state.patchError}
+							</span>
+						) : null}
+						{view !== "visual" && view !== "profiles" ? (
+							<button
+								type="button"
+								onClick={() => setInspectorOpen((open) => !open)}
+								className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
+								aria-label={inspectorOpen ? "Hide inspector" : "Show inspector"}
+							>
+								{inspectorOpen ? (
+									<PanelRightClose className="size-4" />
+								) : (
+									<PanelRightOpen className="size-4" />
+								)}
+							</button>
+						) : null}
 					</>
 				}
 			/>
@@ -285,134 +313,146 @@ export const PipelineWorkbench = ({
 							view === "profiles" ? "" : "h-full min-h-0 flex-1",
 						)}
 					>
-					{view === "definition" && viewDocument ? (
-						<DefinitionView
-							document={viewDocument}
-							state={state}
-							dispatch={dispatch}
-							readOnly={readOnly}
-							draftState={draftState}
-							narrow={narrowDefinition}
-							drill={drill}
-							setDrill={setDrill}
-							onSelect={(entity) => dispatch({ type: "select", entity })}
-							onNavigateToVisual={() => setView("visual")}
-						/>
-					) : null}
-					{view === "definition" && !viewDocument ? (
-						<div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
-							{state.status.kind === "invalid" || state.status.kind === "empty"
-								? "The YAML does not parse yet — fix it in Raw YAML to unlock structured editing."
-								: "Nothing to show yet."}
-						</div>
-					) : null}
+						{view === "definition" && viewDocument ? (
+							<DefinitionView
+								document={viewDocument}
+								state={state}
+								dispatch={dispatch}
+								readOnly={readOnly}
+								draftState={draftState}
+								narrow={narrowDefinition}
+								drill={drill}
+								setDrill={setDrill}
+								onSelect={(entity) => dispatch({ type: "select", entity })}
+								onNavigateToVisual={() => setView("visual")}
+							/>
+						) : null}
+						{view === "definition" && !viewDocument ? (
+							<div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
+								{state.status.kind === "invalid" ||
+								state.status.kind === "empty"
+									? "The YAML does not parse yet — fix it in Raw YAML to unlock structured editing."
+									: "Nothing to show yet."}
+							</div>
+						) : null}
 
-					{view === "visual" && viewDocument ? (
-						<>
-							{staleDocument ? (
-								<div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-600">
-									<AlertTriangle className="size-3.5 shrink-0" />
-									<span>
-										The YAML does not parse — visual edits are disabled. Fix the YAML or
-										undo to restore editing.
-									</span>
-								</div>
-							) : null}
-							<div className="flex h-full min-h-0 overflow-hidden">
-								<div
-									data-testid="pipeline-visual-canvas"
-									className="relative min-h-0 min-w-0 flex-1 overflow-hidden isolate"
-								>
-									<CanvasEditor
-										document={viewDocument}
-										readOnly={readOnly || staleDocument}
-										selection={state.selectedEntity}
-										onChange={(next) =>
-											dispatch({ type: "canvasModified", document: next })
-										}
-										onSelect={(entity) => dispatch({ type: "select", entity: entity as never })}
-									/>
-								</div>
-								{editable && inspectorOpen ? (
-									<aside
-										ref={inspectorRef}
-										className={cn(
-											"shrink-0 border-l bg-background",
-											narrowInspector
-												? "absolute inset-y-0 right-0 z-30 max-w-[85%] shadow-xl"
-												: "relative",
-											resizingInspector && "select-none",
-										)}
-										style={narrowInspector ? undefined : { width: inspectorWidth }}
+						{view === "visual" && viewDocument ? (
+							<>
+								{staleDocument ? (
+									<div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-600">
+										<AlertTriangle className="size-3.5 shrink-0" />
+										<span>
+											The YAML does not parse — visual edits are disabled. Fix
+											the YAML or undo to restore editing.
+										</span>
+									</div>
+								) : null}
+								<div className="flex h-full min-h-0 overflow-hidden">
+									<div
+										data-testid="pipeline-visual-canvas"
+										className="relative min-h-0 min-w-0 flex-1 overflow-hidden isolate"
 									>
-										<div className="flex h-9 items-center justify-between border-b px-3">
-											<span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-												Inspector
-											</span>
-											<div className="flex items-center gap-1">
-												{!narrowInspector ? (
+										<CanvasEditor
+											document={viewDocument}
+											readOnly={readOnly || staleDocument}
+											selection={state.selectedEntity}
+											onChange={(next) =>
+												dispatch({ type: "canvasModified", document: next })
+											}
+											onSelect={(entity) =>
+												dispatch({ type: "select", entity: entity as never })
+											}
+										/>
+									</div>
+									{editable && inspectorOpen ? (
+										<aside
+											ref={inspectorRef}
+											className={cn(
+												"shrink-0 border-l bg-background",
+												narrowInspector
+													? "absolute inset-y-0 right-0 z-30 max-w-[85%] shadow-xl"
+													: "relative",
+												resizingInspector && "select-none",
+											)}
+											style={
+												narrowInspector ? undefined : { width: inspectorWidth }
+											}
+										>
+											<div className="flex h-9 items-center justify-between border-b px-3">
+												<span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+													Inspector
+												</span>
+												<div className="flex items-center gap-1">
+													{!narrowInspector ? (
+														<button
+															type="button"
+															onPointerDown={startInspectorResize}
+															className="h-5 w-4 cursor-ew-resize text-muted-foreground hover:text-foreground"
+															aria-label="Resize inspector"
+														>
+															<GripVertical className="mx-auto size-3.5" />
+														</button>
+													) : null}
 													<button
 														type="button"
-														onPointerDown={startInspectorResize}
-														className="h-5 w-4 cursor-ew-resize text-muted-foreground hover:text-foreground"
-														aria-label="Resize inspector"
+														onClick={() => setInspectorOpen(false)}
+														className="text-muted-foreground hover:text-foreground"
+														aria-label="Collapse inspector"
 													>
-														<GripVertical className="mx-auto size-3.5" />
+														<ChevronRight className="size-4" />
 													</button>
-												) : null}
-												<button
-													type="button"
-													onClick={() => setInspectorOpen(false)}
-													className="text-muted-foreground hover:text-foreground"
-													aria-label="Collapse inspector"
-												>
-													<ChevronRight className="size-4" />
-												</button>
+												</div>
 											</div>
-										</div>
-										<div className="h-[calc(100%-2.25rem)]">
-										<PipelineInspector
-											document={viewDocument}
-											selection={state.selectedEntity as never}
-											showPipelineSchemas={false}
-											onChange={(next) =>
-													dispatch({ type: "canvasModified", document: next })
-												}
-												onSelect={(entity) => {
-													dispatch({
-														type: "select",
-														entity: entity as never,
-													});
-													if (entity.type === "schema") navigateToDefinition();
-												}}
-											/>
-										</div>
-									</aside>
-								) : null}
+											<div className="h-[calc(100%-2.25rem)]">
+												<PipelineInspector
+													document={viewDocument}
+													selection={state.selectedEntity as never}
+													showPipelineSchemas={false}
+													onChange={(next) =>
+														dispatch({ type: "canvasModified", document: next })
+													}
+													onSelect={(entity) => {
+														dispatch({
+															type: "select",
+															entity: entity as never,
+														});
+														if (entity.type === "schema")
+															navigateToDefinition();
+													}}
+												/>
+											</div>
+										</aside>
+									) : null}
+								</div>
+							</>
+						) : null}
+						{view === "visual" && !viewDocument ? (
+							<div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
+								{state.status.kind === "invalid" ||
+								state.status.kind === "empty"
+									? "The YAML does not parse yet — the canvas shows the last valid document in Raw YAML mode only."
+									: "Nothing to render yet."}
 							</div>
-						</>
-					) : null}
-					{view === "visual" && !viewDocument ? (
-						<div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
-							{state.status.kind === "invalid" || state.status.kind === "empty"
-								? "The YAML does not parse yet — the canvas shows the last valid document in Raw YAML mode only."
-								: "Nothing to render yet."}
-						</div>
-					) : null}
+						) : null}
 
-					{view === "raw" ? (
-						<YamlEditor
-							ref={(handle) => {
-								yamlEditorRef.current = handle;
-								onYamlReady?.(handle);
-							}}
-							value={viewYaml}
-							onChange={(yaml) => dispatch({ type: "setBuffer", yaml })}
-							diagnostics={viewDiagnostics}
-							readOnly={readOnly}
-						/>
-					) : null}
-					{view === "profiles" ? profilesContent : null}
+						{view === "raw" ? (
+							<YamlEditor
+								ref={(handle) => {
+									yamlEditorRef.current = handle;
+									onYamlReady?.(handle);
+								}}
+								value={viewYaml}
+								onChange={(yaml) => dispatch({ type: "setBuffer", yaml })}
+								diagnostics={viewDiagnostics}
+								readOnly={readOnly}
+							/>
+						) : null}
+						{/* Keep the profiles editor mounted so unsaved edits survive
+						tab switches; "contents" keeps the layout unchanged while
+						visible, "hidden" just removes it from display. */}
+						<div className={view === "profiles" ? "contents" : "hidden"}>
+							{profilesContent}
+						</div>
 					</div>
 				</div>
 			</div>
@@ -421,7 +461,9 @@ export const PipelineWorkbench = ({
 			{view === "profiles" ? null : readOnly ? (
 				<div className="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
 					Read-only view{versionLabel ? ` of ${versionLabel}` : ""}
-					<span className="ml-auto">Use "Copy to draft" in the header to edit.</span>
+					<span className="ml-auto">
+						Use "Copy to draft" in the header to edit.
+					</span>
 				</div>
 			) : (
 				<div className="shrink-0 border-t">

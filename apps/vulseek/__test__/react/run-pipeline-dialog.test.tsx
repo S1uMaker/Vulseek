@@ -1,12 +1,13 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RunPipelineDialog } from "@/components/dashboard/pipelines/run-pipeline-dialog";
 
 const mocks = vi.hoisted(() => ({
 	push: vi.fn(),
 	mutateAsync: vi.fn(),
 	toast: { success: vi.fn(), error: vi.fn() },
+	projectAll: vi.fn(),
 }));
 
 vi.mock("next/router", () => ({
@@ -17,6 +18,7 @@ vi.mock("next/router", () => ({
 		pathname:
 			"/dashboard/project/[projectId]/environment/[environmentId]/profiles/application/[applicationId]",
 		replace: vi.fn(),
+		events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 	}),
 }));
 
@@ -78,16 +80,32 @@ vi.mock("@/utils/api", () => ({
 				useQuery: () => ({ data: null, isLoading: false }),
 			},
 		},
+		project: {
+			all: { useQuery: mocks.projectAll },
+		},
 	},
 }));
 
 vi.mock("sonner", () => ({ toast: mocks.toast }));
+
+beforeAll(() => {
+	// Radix Select drives pointer-capture APIs that jsdom does not implement.
+	Element.prototype.scrollIntoView = vi.fn();
+	window.HTMLElement.prototype.hasPointerCapture = vi.fn();
+	window.HTMLElement.prototype.releasePointerCapture = vi.fn();
+});
 
 beforeEach(() => {
 	mocks.push.mockReset();
 	mocks.mutateAsync.mockReset();
 	mocks.toast.success.mockReset();
 	mocks.toast.error.mockReset();
+	mocks.projectAll.mockReset();
+	mocks.projectAll.mockReturnValue({
+		data: [],
+		isSuccess: true,
+		isLoading: false,
+	});
 });
 
 const openDialog = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -97,7 +115,7 @@ const openDialog = async (user: ReturnType<typeof userEvent.setup>) => {
 			defaultPipelineId="pipe-1"
 		/>,
 	);
-	await user.click(screen.getByRole("button", { name: /Run Pipeline/i }));
+	await user.click(screen.getByRole("button", { name: /Run pipeline/i }));
 	const dialog = screen.getByRole("dialog");
 	await waitFor(() =>
 		expect(
@@ -105,6 +123,18 @@ const openDialog = async (user: ReturnType<typeof userEvent.setup>) => {
 		).toBeEnabled(),
 	);
 	return dialog;
+};
+
+const chooseSelectOption = async (
+	user: ReturnType<typeof userEvent.setup>,
+	container: HTMLElement,
+	placeholder: RegExp,
+	optionLabel: string,
+) => {
+	await user.click(
+		within(container).getByRole("combobox", { name: placeholder }),
+	);
+	await user.click(await screen.findByRole("option", { name: optionLabel }));
 };
 
 describe("RunPipelineDialog budgets", () => {
@@ -211,5 +241,97 @@ describe("RunPipelineDialog budgets", () => {
 			),
 		);
 		expect(mocks.mutateAsync).not.toHaveBeenCalled();
+	});
+});
+
+describe("RunPipelineDialog target picker", () => {
+	it("keeps Start scan disabled until a project and application are picked", async () => {
+		const user = userEvent.setup();
+		mocks.projectAll.mockReturnValue({
+			data: [
+				{
+					projectId: "p1",
+					name: "Demo project",
+					environments: [
+						{
+							environmentId: "e1",
+							applications: [
+								{
+									applicationId: "app-1",
+									name: "review-api",
+									appName: "review-api",
+								},
+							],
+						},
+					],
+				},
+			],
+			isSuccess: true,
+			isLoading: false,
+		});
+		render(<RunPipelineDialog defaultPipelineId="pipe-1" />);
+		await user.click(screen.getByRole("button", { name: /Run pipeline/i }));
+		const dialog = screen.getByRole("dialog");
+
+		expect(within(dialog).getByText("Project")).toBeInTheDocument();
+		expect(within(dialog).getByText("Application")).toBeInTheDocument();
+		expect(
+			within(dialog).getByRole("button", { name: "Start scan" }),
+		).toBeDisabled();
+	});
+
+	it("runs against the picked application and opens its job detail page", async () => {
+		const user = userEvent.setup();
+		mocks.mutateAsync.mockResolvedValue({ scanJobId: "job-9" });
+		mocks.projectAll.mockReturnValue({
+			data: [
+				{
+					projectId: "p1",
+					name: "Demo project",
+					environments: [
+						{
+							environmentId: "e1",
+							applications: [
+								{
+									applicationId: "app-1",
+									name: "review-api",
+									appName: "review-api",
+								},
+							],
+						},
+					],
+				},
+			],
+			isSuccess: true,
+			isLoading: false,
+		});
+		render(<RunPipelineDialog defaultPipelineId="pipe-1" />);
+		await user.click(screen.getByRole("button", { name: /Run pipeline/i }));
+		const dialog = screen.getByRole("dialog");
+
+		await chooseSelectOption(user, dialog, /Project/i, "Demo project");
+		await chooseSelectOption(user, dialog, /Application/i, "review-api");
+		await waitFor(() =>
+			expect(
+				within(dialog).getByRole("button", { name: "Start scan" }),
+			).toBeEnabled(),
+		);
+		await user.click(
+			within(dialog).getByRole("button", { name: "Start scan" }),
+		);
+
+		await waitFor(() =>
+			expect(mocks.mutateAsync).toHaveBeenCalledWith(
+				expect.objectContaining({
+					target: { type: "application", applicationId: "app-1" },
+					pipelineId: "pipe-1",
+				}),
+			),
+		);
+		await waitFor(() =>
+			expect(mocks.push).toHaveBeenCalledWith(
+				"/dashboard/project/p1/environment/e1/services/application/app-1/jobs/job-9",
+			),
+		);
 	});
 });

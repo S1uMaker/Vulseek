@@ -137,7 +137,7 @@ const ScanJobDetailShell = () => {
 						},
 						{
 							value: "tasks",
-							label: scanT(t, "scan.job.tabs.tasks", "阶段任务"),
+							label: scanT(t, "scan.job.tabs.tasks", "Tasks"),
 						},
 						...jobTabs.map((tab) => ({
 							value: tab.id,
@@ -149,7 +149,7 @@ const ScanJobDetailShell = () => {
 						},
 						{ value: "files", label: scanT(t, "scan.files.title", "Files") },
 					]}
-				onTabChange={handleTabChange}
+					onTabChange={handleTabChange}
 				/>
 				<DashboardPageBody>
 					<DashboardPageTabContent>
@@ -160,7 +160,8 @@ const ScanJobDetailShell = () => {
 						>
 							{unknownTab ? (
 								<p className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-800">
-									This tab is not configured on the job snapshot. Showing Overview.
+									This tab is not configured on the job snapshot. Showing
+									Overview.
 								</p>
 							) : null}
 							<TabsContent value="overview" className="mt-0 pt-0">

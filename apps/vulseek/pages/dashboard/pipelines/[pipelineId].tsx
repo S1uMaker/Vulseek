@@ -1,12 +1,8 @@
-import type {
-	GetServerSidePropsContext,
-	InferGetServerSidePropsType,
-} from "next";
-import { useRouter } from "next/router";
-import * as React from "react";
 import { createServerSideHelpers } from "@trpc/react-query/server";
+import { validateRequest } from "@vulseek/server/lib/auth";
 import {
 	Archive,
+	ArchiveRestore,
 	Copy,
 	FilePenLine,
 	Redo2,
@@ -15,17 +11,23 @@ import {
 	Upload,
 	Workflow,
 } from "lucide-react";
+import type {
+	GetServerSidePropsContext,
+	InferGetServerSidePropsType,
+} from "next";
+import { useRouter } from "next/router";
+import * as React from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
-import { validateRequest } from "@vulseek/server/lib/auth";
+import { PipelineProfilesView } from "@/components/dashboard/pipelines/pipeline-profiles-view";
+import { RunPipelineDialog } from "@/components/dashboard/pipelines/run-pipeline-dialog";
+import { PipelineWorkbench } from "@/components/dashboard/pipelines/workbench/pipeline-workbench";
+import type { YamlEditorHandle } from "@/components/dashboard/pipelines/yaml-editor";
 import {
 	DashboardPage,
 	DashboardPageHeader,
 } from "@/components/dashboard/ui-system";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
-import { PipelineWorkbench } from "@/components/dashboard/pipelines/workbench/pipeline-workbench";
-import { PipelineProfilesView } from "@/components/dashboard/pipelines/pipeline-profiles-view";
-import type { YamlEditorHandle } from "@/components/dashboard/pipelines/yaml-editor";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,10 +44,12 @@ import {
 	pipelineEditorReducer,
 	validDocument,
 } from "@/lib/pipeline-editor/pipeline-editor-state";
-import { api } from "@/utils/api";
 import { appRouter } from "@/server/api/root";
+import { api } from "@/utils/api";
 
-export const getServerSideProps = async (context: GetServerSidePropsContext) => {
+export const getServerSideProps = async (
+	context: GetServerSidePropsContext,
+) => {
 	const { user, session } = await validateRequest(context.req);
 	if (!user || !session) {
 		return { redirect: { destination: "/login", permanent: false } };
@@ -99,9 +103,17 @@ const EditorPage = ({
 	const copyVersionToDraft = api.pipeline.copyVersionToDraft.useMutation();
 	const setCurrentVersion = api.pipeline.setCurrentVersion.useMutation();
 	const archive = api.pipeline.archive.useMutation();
+	const unarchive = api.pipeline.unarchive.useMutation();
+	const utils = api.useUtils();
+	const profileDirtyRef = React.useRef(false);
+	const handleProfileDirtyChange = React.useCallback((value: boolean) => {
+		profileDirtyRef.current = value;
+	}, []);
 
 	const canManage = pipeline.data?.draftYaml !== undefined; // manager-only field presence
-	const [selectedVersionId, setSelectedVersionId] = React.useState<string | null>(null);
+	const [selectedVersionId, setSelectedVersionId] = React.useState<
+		string | null
+	>(null);
 	const [viewingVersion, setViewingVersion] = React.useState(false);
 
 	const draftYaml = pipeline.data?.draftYaml ?? null;
@@ -143,12 +155,9 @@ const EditorPage = ({
 	// The Raw YAML editor lives inside the workbench; keep its handle here so
 	// Save can flush the parse debounce before persisting.
 	const yamlEditorRef = React.useRef<YamlEditorHandle | null>(null);
-	const onYamlReady = React.useCallback(
-		(handle: YamlEditorHandle | null) => {
-			yamlEditorRef.current = handle;
-		},
-		[],
-	);
+	const onYamlReady = React.useCallback((handle: YamlEditorHandle | null) => {
+		yamlEditorRef.current = handle;
+	}, []);
 
 	// When the server draft arrives (or changes): adopt it wholesale when the
 	// local buffer has no unsaved edits (e.g. after copy-version-to-draft);
@@ -163,13 +172,18 @@ const EditorPage = ({
 		// optimistic-lock counter. Resetting this to zero makes every first save
 		// of a pipeline without an existing draft conflict with the server.
 		const revision = pipeline.data?.draftRevision ?? 0;
-		const untouched = stateRef.current.rawYamlBuffer === stateRef.current.savedYaml;
+		const untouched =
+			stateRef.current.rawYamlBuffer === stateRef.current.savedYaml;
 		if (untouched || !draftYaml) {
 			// Adopt wholesale: fresh draft, or the current version as the
 			// starting point when no draft exists yet.
 			dispatch({ type: "reset", yaml: serverYaml, draftRevision: revision });
 		} else {
-			dispatch({ type: "setSavedYaml", yaml: serverYaml, draftRevision: revision });
+			dispatch({
+				type: "setSavedYaml",
+				yaml: serverYaml,
+				draftRevision: revision,
+			});
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [draftYaml, currentVersionYaml, pipeline.data?.draftRevision]);
@@ -186,7 +200,8 @@ const EditorPage = ({
 		// Flush the YAML editor's parse debounce so the saved buffer matches
 		// what the user actually sees.
 		const editorText = yamlEditorRef.current?.getValue();
-		const yamlToSave = editorText !== undefined ? editorText : state.rawYamlBuffer;
+		const yamlToSave =
+			editorText !== undefined ? editorText : state.rawYamlBuffer;
 		if (editorText !== undefined && editorText !== state.rawYamlBuffer) {
 			dispatch({ type: "setBuffer", yaml: editorText });
 		}
@@ -212,22 +227,32 @@ const EditorPage = ({
 					`Draft changed on the server (revision ${cause.draftRevision}). Reload to see the latest, or copy your local YAML before retrying.`,
 				);
 			} else {
-				toast.error(error instanceof Error ? error.message : "Unable to save draft");
+				toast.error(
+					error instanceof Error ? error.message : "Unable to save draft",
+				);
 			}
 		}
 	};
 
 	const handlePublish = async () => {
 		if (!canManage || !canPublish) return;
+		// Flush the YAML editor's parse debounce so the published version
+		// matches what the user actually sees, mirroring handleSave.
+		const editorText = yamlEditorRef.current?.getValue();
+		const yamlToPublish =
+			editorText !== undefined ? editorText : state.rawYamlBuffer;
+		if (editorText !== undefined && editorText !== state.rawYamlBuffer) {
+			dispatch({ type: "setBuffer", yaml: editorText });
+		}
 		try {
 			const result = await publish.mutateAsync({
 				pipelineId,
 				expectedRevision: state.draftRevision,
-				yaml: state.rawYamlBuffer,
+				yaml: yamlToPublish,
 			});
 			dispatch({
 				type: "setSavedYaml",
-				yaml: state.rawYamlBuffer,
+				yaml: yamlToPublish,
 				draftRevision: state.draftRevision + 1,
 			});
 			toast.success(`Published as v${result.versionNumber}`);
@@ -245,8 +270,19 @@ const EditorPage = ({
 
 	const handleCopyVersion = async (versionId: string) => {
 		if (!canManage) return;
+		if (
+			dirty &&
+			!window.confirm(
+				"Discard unsaved draft changes and copy this version to draft?",
+			)
+		) {
+			return;
+		}
 		try {
-			await copyVersionToDraft.mutateAsync({ pipelineId, pipelineVersionId: versionId });
+			await copyVersionToDraft.mutateAsync({
+				pipelineId,
+				pipelineVersionId: versionId,
+			});
 			toast.success("Version copied to draft");
 			setViewingVersion(false);
 			await pipeline.refetch();
@@ -290,10 +326,12 @@ const EditorPage = ({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [dirty, canManage, state.rawYamlBuffer, state.draftRevision]);
 
-	// Dirty-leave guard.
+	// Dirty-leave guard: beforeunload covers browser close/reload;
+	// routeChangeStart covers in-app navigation (sidebar, breadcrumbs).
+	// Both respect the YAML draft buffer and unsaved runtime profile edits.
 	React.useEffect(() => {
 		const handler = (event: BeforeUnloadEvent) => {
-			if (dirty) {
+			if (dirty || profileDirtyRef.current) {
 				event.preventDefault();
 				event.returnValue = "";
 			}
@@ -301,6 +339,22 @@ const EditorPage = ({
 		window.addEventListener("beforeunload", handler);
 		return () => window.removeEventListener("beforeunload", handler);
 	}, [dirty]);
+
+	React.useEffect(() => {
+		const handleRouteChangeStart = () => {
+			if (!dirty && !profileDirtyRef.current) return;
+			const confirmed = window.confirm(
+				"Leave with unsaved changes? Your local edits will be discarded.",
+			);
+			if (!confirmed) {
+				router.events.emit("routeChangeError");
+				// Throwing here aborts the Next.js navigation.
+				throw "Route change aborted: unsaved changes.";
+			}
+		};
+		router.events.on("routeChangeStart", handleRouteChangeStart);
+		return () => router.events.off("routeChangeStart", handleRouteChangeStart);
+	}, [dirty, router]);
 
 	if (pipeline.isLoading || !pipeline.data) {
 		return (
@@ -337,10 +391,10 @@ const EditorPage = ({
 	const selectedProfileName =
 		profileId === "new"
 			? "New profile"
-			: pipelineProfiles.data?.find(
+			: (pipelineProfiles.data?.find(
 					(item) => item.pipelineProfileId === profileId,
 				)?.name ??
-				(profileId ? `Profile ${profileId.slice(0, 6)}` : undefined);
+				(profileId ? `Profile ${profileId.slice(0, 6)}` : undefined));
 	const pipelineHref = `/dashboard/pipelines/${encodeURIComponent(pipelineId)}`;
 	const updateWorkbenchView = (view: typeof workbenchView) => {
 		const query = { ...router.query };
@@ -390,7 +444,9 @@ const EditorPage = ({
 					description={`${data.slug}${data.currentVersion ? ` · v${data.currentVersion.versionNumber} current` : " · no published version"}`}
 					status={
 						<>
-							{data.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}
+							{data.archivedAt ? (
+								<Badge variant="secondary">Archived</Badge>
+							) : null}
 							{isManagerView ? (
 								<Badge
 									variant="outline"
@@ -398,172 +454,208 @@ const EditorPage = ({
 										dirty
 											? "border-amber-500/40 text-amber-600"
 											: "border-emerald-500/40 text-emerald-600"
-										}
+									}
 								>
 									{dirty ? "Draft (unsaved)" : "Draft"}
 								</Badge>
 							) : (
-								<Badge variant="outline" className="border-emerald-500/40 text-emerald-600">
-									Published{selectedVersion ? ` v${selectedVersion.versionNumber}` : ""}
+								<Badge
+									variant="outline"
+									className="border-emerald-500/40 text-emerald-600"
+								>
+									Published
+									{selectedVersion ? ` v${selectedVersion.versionNumber}` : ""}
 								</Badge>
 							)}
 						</>
 					}
 					actions={
 						<div className="flex items-center gap-2">
-						{isManagerView ? (
-							<>
-								<Select
-									value={selectedVersionId ?? ""}
-									onValueChange={(value) => {
-										setSelectedVersionId(value || null);
-										if (value) {
-											setViewingVersion(true);
-										}
-									}}
-								>
-									<SelectTrigger className="h-8 w-40">
-										<SelectValue placeholder="View a version…" />
-									</SelectTrigger>
-									<SelectContent>
-										{versions.data?.map((version) => (
-											<SelectItem
-												key={version.pipelineVersionId}
-												value={version.pipelineVersionId}
+							{isManagerView ? (
+								<>
+									<Select
+										value={selectedVersionId ?? ""}
+										onValueChange={(value) => {
+											setSelectedVersionId(value || null);
+											if (value) {
+												setViewingVersion(true);
+											}
+										}}
+									>
+										<SelectTrigger className="h-8 w-40">
+											<SelectValue placeholder="View a version…" />
+										</SelectTrigger>
+										<SelectContent>
+											{versions.data?.map((version) => (
+												<SelectItem
+													key={version.pipelineVersionId}
+													value={version.pipelineVersionId}
+												>
+													v{version.versionNumber}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+									{selectedVersion ? (
+										<>
+											<Button
+												variant="outline"
+												size="sm"
+												onClick={() =>
+													void handleCopyVersion(
+														selectedVersion.pipelineVersionId,
+													)
+												}
 											>
-												v{version.versionNumber}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-								{selectedVersion ? (
-									<>
-										<Button
-											variant="outline"
-											size="sm"
-											onClick={() => void handleCopyVersion(selectedVersion.pipelineVersionId)}
-										>
-											<Copy className="size-3.5" />
-											Copy to draft
-										</Button>
+												<Copy className="size-3.5" />
+												Copy to draft
+											</Button>
+											<Button
+												variant="outline"
+												size="sm"
+												onClick={() => {
+													void setCurrentVersion
+														.mutateAsync({
+															pipelineId,
+															pipelineVersionId:
+																selectedVersion.pipelineVersionId,
+														})
+														.then(() => {
+															toast.success(
+																`v${selectedVersion.versionNumber} is now current`,
+															);
+															void pipeline.refetch();
+														})
+														.catch((error: unknown) =>
+															toast.error(
+																error instanceof Error
+																	? error.message
+																	: "Switch failed",
+															),
+														);
+												}}
+											>
+												<Upload className="size-3.5" />
+												Set current
+											</Button>
+										</>
+									) : null}
+									<Button
+										variant="ghost"
+										size="icon"
+										className="size-8 text-muted-foreground"
+										onClick={() => dispatch({ type: "undo" })}
+										aria-label="Undo"
+									>
+										<Undo2 className="size-4" />
+									</Button>
+									<Button
+										variant="ghost"
+										size="icon"
+										className="size-8 text-muted-foreground"
+										onClick={() => dispatch({ type: "redo" })}
+										aria-label="Redo"
+									>
+										<Redo2 className="size-4" />
+									</Button>
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={() => void handleSave()}
+										disabled={!dirty || saveDraft.isLoading}
+									>
+										<Save className="size-3.5" />
+										{dirty ? "Save draft" : "Saved"}
+									</Button>
+									<Button
+										size="sm"
+										onClick={() => void handlePublish()}
+										disabled={!canPublish || publish.isLoading}
+									>
+										Publish
+									</Button>
+									{data.currentVersion && !data.archivedAt ? (
+										<RunPipelineDialog
+											defaultPipelineId={pipelineId}
+											triggerClassName="h-8"
+										/>
+									) : null}
+									{data.archivedAt ? (
 										<Button
 											variant="outline"
 											size="sm"
 											onClick={() => {
-												void setCurrentVersion
-													.mutateAsync({
-														pipelineId,
-														pipelineVersionId: selectedVersion.pipelineVersionId,
-													})
+												void unarchive
+													.mutateAsync({ pipelineId })
+													.then(() => toast.success("Pipeline unarchived"))
 													.then(() => {
-														toast.success(`v${selectedVersion.versionNumber} is now current`);
-														void pipeline.refetch();
-													})
-													.catch((error: unknown) =>
-														toast.error(
-															error instanceof Error ? error.message : "Switch failed",
-														),
-													);
+														void utils.pipeline.get.invalidate();
+														void utils.pipeline.list.invalidate();
+													});
 											}}
 										>
-											<Upload className="size-3.5" />
-											Set current
+											<ArchiveRestore className="size-4" />
+											Unarchive
 										</Button>
-									</>
-								) : null}
-								<Button
-									variant="ghost"
-									size="icon"
-									className="size-8 text-muted-foreground"
-									onClick={() => dispatch({ type: "undo" })}
-									aria-label="Undo"
-								>
-									<Undo2 className="size-4" />
-								</Button>
-								<Button
-									variant="ghost"
-									size="icon"
-									className="size-8 text-muted-foreground"
-									onClick={() => dispatch({ type: "redo" })}
-									aria-label="Redo"
-								>
-									<Redo2 className="size-4" />
-								</Button>
-								<Button
-									variant="outline"
-									size="sm"
-									onClick={() => void handleSave()}
-									disabled={!dirty || saveDraft.isLoading}
-								>
-									<Save className="size-3.5" />
-									{dirty ? "Save draft" : "Saved"}
-								</Button>
-								<Button
-									size="sm"
-									onClick={() => void handlePublish()}
-									disabled={!canPublish || publish.isLoading}
-								>
-									Publish
-								</Button>
-								{!data.archivedAt ? (
-									<Button
-										variant="ghost"
-										size="icon"
-										className="size-8 text-muted-foreground hover:text-red-600"
-										onClick={() => {
-											if (
-												window.confirm(
-													"Archive this pipeline? Runs keep their frozen snapshots.",
+									) : (
+										<Button
+											variant="ghost"
+											size="icon"
+											className="size-8 text-muted-foreground hover:text-red-600"
+											onClick={() => {
+												if (
+													window.confirm(
+														"Archive this pipeline? Runs keep their frozen snapshots.",
+													)
+												) {
+													void archive
+														.mutateAsync({ pipelineId })
+														.then(() => toast.success("Pipeline archived"))
+														.then(
+															() => void router.push("/dashboard/pipelines"),
+														);
+												}
+											}}
+											aria-label="Archive pipeline"
+										>
+											<Archive className="size-4" />
+										</Button>
+									)}
+								</>
+							) : (
+								<>
+									{selectedVersion ? (
+										<Button
+											variant="outline"
+											size="sm"
+											onClick={() =>
+												void handleCopyVersion(
+													selectedVersion.pipelineVersionId,
 												)
-											) {
-												void archive
-													.mutateAsync({ pipelineId })
-													.then(() => toast.success("Pipeline archived"))
-													.then(() => void router.push("/dashboard/pipelines"));
 											}
-										}}
-										aria-label="Archive pipeline"
-									>
-										<Archive className="size-4" />
-									</Button>
-								) : null}
-							</>
-						) : (
-							<>
-								{selectedVersion ? (
-									<Button
-										variant="outline"
-										size="sm"
-										onClick={() => void handleCopyVersion(selectedVersion.pipelineVersionId)}
-									>
-										<Copy className="size-3.5" />
-										Copy to draft
-									</Button>
-								) : null}
-								{data.currentVersion ? (
-									<Button
-										variant="outline"
-										size="sm"
-										onClick={() => {
-											// Phase 6 wires the Run dialog here.
-											toast.info("Run dialog lands with the profile integration phase");
-										}}
-									>
-										Run
-									</Button>
-								) : null}
-								{canManage && (
-									<Button
-										variant="outline"
-										size="sm"
-										onClick={() => setViewingVersion(false)}
-									>
-										<FilePenLine className="size-3.5" />
-										{data.draftYaml !== null ? "Edit draft" : "Edit pipeline"}
-									</Button>
-								)}
-							</>
-						)}
+										>
+											<Copy className="size-3.5" />
+											Copy to draft
+										</Button>
+									) : null}
+									{data.currentVersion && !data.archivedAt ? (
+										<RunPipelineDialog
+											defaultPipelineId={pipelineId}
+											triggerClassName="h-8"
+										/>
+									) : null}
+									{canManage && (
+										<Button
+											variant="outline"
+											size="sm"
+											onClick={() => setViewingVersion(false)}
+										>
+											<FilePenLine className="size-3.5" />
+											{data.draftYaml !== null ? "Edit draft" : "Edit pipeline"}
+										</Button>
+									)}
+								</>
+							)}
 						</div>
 					}
 				/>
@@ -573,7 +665,9 @@ const EditorPage = ({
 					state={state}
 					dispatch={dispatch}
 					readOnly={!isManagerView}
-					readOnlyYaml={!isManagerView ? (selectedVersionYaml ?? undefined) : undefined}
+					readOnlyYaml={
+						!isManagerView ? (selectedVersionYaml ?? undefined) : undefined
+					}
 					versionLabel={versionLabel}
 					draftState={{
 						dirty,
@@ -591,6 +685,7 @@ const EditorPage = ({
 							pipelineVersionId={data.currentPublishedVersionId}
 							profileId={profileId}
 							onProfileChange={updateProfileId}
+							onDirtyChange={handleProfileDirtyChange}
 						/>
 					}
 				/>

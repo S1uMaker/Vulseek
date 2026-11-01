@@ -1,9 +1,9 @@
-import * as React from "react";
 import { Plus, Save } from "lucide-react";
+import * as React from "react";
 import { toast } from "sonner";
 import {
-	ScanStageGraphPanel,
 	type ScanRuntimeSettingsDraft,
+	ScanStageGraphPanel,
 	type StageGraph,
 } from "@/components/dashboard/scanning/scan-stage-graph";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,24 @@ type PipelineProfilesViewProps = {
 	pipelineVersionId: string | null;
 	profileId?: string;
 	onProfileChange: (profileId?: string) => void;
+	onDirtyChange?: (dirty: boolean) => void;
+};
+
+// Key-order-insensitive JSON compare: stage settings are merged from dialogs
+// in user-driven order, so a plain stringify would report phantom edits.
+const stableStringify = (value: unknown): string => {
+	if (Array.isArray(value)) {
+		return `[${value.map(stableStringify).join(",")}]`;
+	}
+	if (value && typeof value === "object") {
+		const entries = Object.entries(value as Record<string, unknown>).sort(
+			([a], [b]) => a.localeCompare(b),
+		);
+		return `{${entries
+			.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+			.join(",")}}`;
+	}
+	return JSON.stringify(value);
 };
 
 export const PipelineProfilesView = ({
@@ -25,6 +43,7 @@ export const PipelineProfilesView = ({
 	pipelineVersionId,
 	profileId,
 	onProfileChange,
+	onDirtyChange,
 }: PipelineProfilesViewProps) => {
 	const utils = api.useUtils();
 	const profiles = api.pipeline.profilesList.useQuery({ pipelineId });
@@ -64,30 +83,63 @@ export const PipelineProfilesView = ({
 		}
 	}, [isNew, profile.data]);
 
+	const baseline = profile.data
+		? {
+				name: profile.data.name,
+				description: profile.data.description ?? "",
+				settingsJson: stableStringify(profile.data.settings),
+			}
+		: {
+				name: "",
+				description: "",
+				settingsJson: stableStringify({ stages: {} }),
+			};
+
+	const isDirty =
+		isEditor &&
+		(name !== baseline.name ||
+			description !== baseline.description ||
+			stableStringify(settings) !== baseline.settingsJson);
+
+	React.useEffect(() => {
+		onDirtyChange?.(isDirty);
+	}, [isDirty, onDirtyChange]);
+
 	const save = async () => {
 		if (!profileId || !name.trim() || !versionId) return;
 		try {
 			if (isNew) {
-				await create.mutateAsync({
+				const created = await create.mutateAsync({
 					pipelineId,
 					pipelineVersionId: versionId,
 					name: name.trim(),
 					description: description || null,
 					settings,
 				});
-			} else {
-				await update.mutateAsync({
-					pipelineProfileId: profileId,
-					name: name.trim(),
-					description: description || null,
-					settings,
-				});
+				await utils.pipeline.profilesList.invalidate({ pipelineId });
+				toast.success("Profile saved");
+				// Stay in the editor on the freshly created profile instead of
+				// dropping back to the list.
+				if (created) {
+					onProfileChange(created.pipelineProfileId);
+				}
+				return;
 			}
+			await update.mutateAsync({
+				pipelineProfileId: profileId,
+				name: name.trim(),
+				description: description || null,
+				settings,
+			});
 			await utils.pipeline.profilesList.invalidate({ pipelineId });
+			await utils.pipeline.profilesGet.invalidate({
+				pipelineProfileId: profileId,
+			});
 			toast.success("Profile saved");
-			onProfileChange();
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : "Unable to save profile");
+			toast.error(
+				error instanceof Error ? error.message : "Unable to save profile",
+			);
 		}
 	};
 
@@ -125,14 +177,15 @@ export const PipelineProfilesView = ({
 									{item.description || "No description"}
 								</p>
 								<div className="mt-4 text-xs text-muted-foreground">
-									{Object.keys(item.settings.stages ?? {}).length} stage overrides
+									{Object.keys(item.settings.stages ?? {}).length} stage
+									overrides
 								</div>
 							</button>
 						))}
 					</div>
 				) : (
 					<div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-						No profiles yet. Create one to configure the stage graph.
+						No runtime profiles yet. Create one to configure stage settings.
 					</div>
 				)}
 			</div>
@@ -152,21 +205,34 @@ export const PipelineProfilesView = ({
 				</div>
 				<Button
 					onClick={() => void save()}
-					disabled={!name.trim() || create.isLoading || update.isLoading}
+					disabled={
+						!name.trim() || !versionId || create.isLoading || update.isLoading
+					}
 				>
 					<Save className="mr-2 size-4" />
 					Save profile
 				</Button>
 			</div>
+			{!versionId ? (
+				<p className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-600">
+					This pipeline has no published version yet. Publish the pipeline first
+					— runtime profiles always pin to a published version.
+				</p>
+			) : null}
 			<div className="mb-4 grid min-w-0 gap-2">
 				<Label htmlFor="profile-name">Name</Label>
-				<Input id="profile-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Balanced research" />
+				<Input
+					id="profile-name"
+					value={name}
+					onChange={(event) => setName(event.target.value)}
+					placeholder="Balanced research"
+				/>
 			</div>
 			<ScanStageGraphPanel
 				graph={graph.data as unknown as StageGraph}
 				isLoading={graph.isLoading}
 				error={graph.error}
-				title="Stage runtime profile"
+				title="Stage settings"
 				description="Click a stage to choose its model, concurrency, or disabled state."
 				heightClassName="h-[680px]"
 				scanRuntimeSettings={settings}
@@ -180,7 +246,13 @@ export const PipelineProfilesView = ({
 			/>
 			<div className="mt-4 grid min-w-0 gap-2">
 				<Label htmlFor="profile-description">Description</Label>
-				<Textarea id="profile-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Optional description" rows={3} />
+				<Textarea
+					id="profile-description"
+					value={description}
+					onChange={(event) => setDescription(event.target.value)}
+					placeholder="Optional description"
+					rows={3}
+				/>
 			</div>
 		</div>
 	);

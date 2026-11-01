@@ -1,11 +1,14 @@
-import type { GetServerSidePropsContext, InferGetServerSidePropsType } from "next";
+import { createServerSideHelpers } from "@trpc/react-query/server";
+import { validateRequest } from "@vulseek/server/lib/auth";
+import { Plus, Workflow } from "lucide-react";
+import type {
+	GetServerSidePropsContext,
+	InferGetServerSidePropsType,
+} from "next";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import * as React from "react";
-import { createServerSideHelpers } from "@trpc/react-query/server";
-import { Plus, Workflow } from "lucide-react";
 import superjson from "superjson";
-import { validateRequest } from "@vulseek/server/lib/auth";
 import {
 	CollectionSection,
 	DashboardPage,
@@ -18,12 +21,10 @@ import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api } from "@/utils/api";
 import { appRouter } from "@/server/api/root";
+import { api } from "@/utils/api";
 
-const PIPELINE_FILTERS = [
-	{ value: "archived", label: "Archived" },
-] as const;
+const PIPELINE_FILTERS = [{ value: "archived", label: "Archived" }] as const;
 
 export const getServerSideProps = async (
 	context: GetServerSidePropsContext,
@@ -51,9 +52,10 @@ export const getServerSideProps = async (
 	};
 };
 
-const statusBadge = (
-	row: { archivedAt: string | null; hasDraft?: boolean },
-) => {
+const statusBadge = (row: {
+	archivedAt: string | null;
+	hasDraft?: boolean;
+}) => {
 	if (row.archivedAt) {
 		return (
 			<Badge variant="secondary" className="shrink-0">
@@ -63,7 +65,10 @@ const statusBadge = (
 	}
 	if (row.hasDraft) {
 		return (
-			<Badge variant="outline" className="shrink-0 border-amber-500/40 text-amber-600">
+			<Badge
+				variant="outline"
+				className="shrink-0 border-amber-500/40 text-amber-600"
+			>
 				Draft
 			</Badge>
 		);
@@ -100,23 +105,26 @@ const PipelinesPage = ({
 
 	return (
 		<DashboardLayout hideBreadcrumb>
-			<BreadcrumbSidebar list={[{ name: "Pipelines", href: "/dashboard/pipelines" }]} />
+			<BreadcrumbSidebar
+				list={[{ name: "Pipelines", href: "/dashboard/pipelines" }]}
+			/>
 			<DashboardPage>
 				<DashboardPageHeader
 					icon={<Workflow />}
 					title="Pipelines"
 					description="Organization-wide scan pipelines"
 					actions={
-						<Button onClick={() => void router.push("/dashboard/pipelines/new")}>
+						<Button
+							onClick={() => void router.push("/dashboard/pipelines/new")}
+						>
 							<Plus className="size-4" />
 							New pipeline
 						</Button>
 					}
 				/>
 				<DashboardPageBody>
-					<div
+					<fieldset
 						className="mb-4 flex flex-wrap items-center gap-1.5"
-						role="group"
 						aria-label="Pipeline filters"
 					>
 						{PIPELINE_FILTERS.map((filter) => (
@@ -127,7 +135,7 @@ const PipelinesPage = ({
 								onToggle={() => toggleFilter(filter.value)}
 							/>
 						))}
-					</div>
+					</fieldset>
 
 					<CollectionSection
 						title="All pipelines"
@@ -158,7 +166,7 @@ const PipelinesPage = ({
 										footer={
 											<span className="text-xs text-muted-foreground">
 												{row.currentVersionNumber
-													? `v${row.currentVersionNumber} published`
+													? `Published v${row.currentVersionNumber}`
 													: "No published version"}
 											</span>
 										}
@@ -170,14 +178,15 @@ const PipelinesPage = ({
 
 					<p className="mt-6 text-xs text-muted-foreground">
 						Pipelines are shared across all projects. Drafts are only visible to
-						owners and admins; published versions can be run by every member.{" "}
+						owners and admins; published versions can be run by every member.
+						Use{" "}
 						<Link
 							href="/dashboard/pipelines/new"
 							className="text-primary hover:underline"
 						>
-							Create
+							New pipeline
 						</Link>{" "}
-						a pipeline or duplicate an existing one to get started.
+						or duplicate an existing one to get started.
 					</p>
 				</DashboardPageBody>
 			</DashboardPage>

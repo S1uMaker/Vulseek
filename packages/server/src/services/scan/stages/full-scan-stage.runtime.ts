@@ -338,7 +338,7 @@ export const resolveRepositoryStageRuntime = async (input: {
 	});
 
 	const stageDirPath = path.join(
-		resolveMountedProfileDir(input),
+		await resolveAppProfileDir(input),
 		"jobs",
 		input.scanJobId,
 		resolveTaskRootSegment(
@@ -504,8 +504,11 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 			normalizedRuntimeInput?.stageName || input.stageName;
 		const targetTaskName = normalizedRuntimeInput?.taskName || input.taskName;
 		await resolveScanContextMount(input.base);
+		// The stage dir is written by THIS process (stdout/stdin/bootstrap logs),
+		// so it must resolve through the app-visible root: /scan-context when the
+		// server itself runs inside dev.sh, the host dir on bare `pnpm vulseek:dev`.
 		const defaultStageDirPath = path.join(
-			resolveMountedProfileDir(input.base),
+			await resolveAppProfileDir(input.base),
 			"jobs",
 			input.scanJob.scanJobId,
 			resolveTaskRootSegment(targetStageName, targetTaskName, input.taskId),
@@ -540,7 +543,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 		}
 		await resolveScanContextMount(input.base);
 		const laneDirPath = path.join(
-			resolveMountedProfileDir(input.base),
+			await resolveAppProfileDir(input.base),
 			"jobs",
 			input.scanJob.scanJobId,
 			resolveStageLaneRootSegment(input.stageName, input.laneIndex),

@@ -1,14 +1,14 @@
+import { createServerSideHelpers } from "@trpc/react-query/server";
+import { validateRequest } from "@vulseek/server/lib/auth";
+import { Workflow } from "lucide-react";
 import type {
 	GetServerSidePropsContext,
 	InferGetServerSidePropsType,
 } from "next";
 import { useRouter } from "next/router";
 import * as React from "react";
-import { createServerSideHelpers } from "@trpc/react-query/server";
-import { Workflow } from "lucide-react";
 import { toast } from "sonner";
 import superjson from "superjson";
-import { validateRequest } from "@vulseek/server/lib/auth";
 import {
 	DashboardPage,
 	DashboardPageBody,
@@ -17,12 +17,18 @@ import {
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { api } from "@/utils/api";
 import { appRouter } from "@/server/api/root";
+import { api } from "@/utils/api";
 
 export const getServerSideProps = async (
 	context: GetServerSidePropsContext,
@@ -42,13 +48,17 @@ export const getServerSideProps = async (
 		} as never,
 		transformer: superjson,
 	});
-	await helpers.pipeline.listVersions.prefetch({ pipelineId: "__none__" }).catch(() => {});
+	await helpers.pipeline.listVersions
+		.prefetch({ pipelineId: "__none__" })
+		.catch(() => {});
 	return {
 		props: { trpcState: helpers.dehydrate() },
 	};
 };
 
-const NewPipelinePage = (_: InferGetServerSidePropsType<typeof getServerSideProps>) => {
+const NewPipelinePage = (
+	_: InferGetServerSidePropsType<typeof getServerSideProps>,
+) => {
 	const router = useRouter();
 	const create = api.pipeline.create.useMutation();
 	const templates = api.pipeline.templates.useQuery();
@@ -57,6 +67,23 @@ const NewPipelinePage = (_: InferGetServerSidePropsType<typeof getServerSideProp
 	const [name, setName] = React.useState("");
 	const [description, setDescription] = React.useState("");
 	const [initialYaml, setInitialYaml] = React.useState("");
+
+	// The create form lives purely in local state; warn before losing a
+	// half-written pipeline.
+	const hasInput =
+		slug.trim() !== "" ||
+		name.trim() !== "" ||
+		description.trim() !== "" ||
+		initialYaml.trim() !== "";
+	React.useEffect(() => {
+		const handler = (event: BeforeUnloadEvent) => {
+			if (!hasInput) return;
+			event.preventDefault();
+			event.returnValue = "";
+		};
+		window.addEventListener("beforeunload", handler);
+		return () => window.removeEventListener("beforeunload", handler);
+	}, [hasInput]);
 
 	const createFromScratch = async () => {
 		if (!slug.trim() || !name.trim()) {
@@ -73,11 +100,15 @@ const NewPipelinePage = (_: InferGetServerSidePropsType<typeof getServerSideProp
 			toast.success("Pipeline created");
 			void router.push(`/dashboard/pipelines/${created.pipelineId}`);
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : "Unable to create pipeline");
+			toast.error(
+				error instanceof Error ? error.message : "Unable to create pipeline",
+			);
 		}
 	};
 
-	const loadBuiltinTemplate = (slug: "full" | "delta" | "research" | "tob-goal") => {
+	const loadBuiltinTemplate = (
+		slug: "full" | "delta" | "research" | "tob-goal",
+	) => {
 		const template = templates.data?.find((item) => item.slug === slug);
 		if (!template) {
 			toast.error("Template not loaded yet — try again");
@@ -103,7 +134,10 @@ const NewPipelinePage = (_: InferGetServerSidePropsType<typeof getServerSideProp
 					title="New pipeline"
 					description="Start from scratch, paste YAML, or copy a built-in template"
 					actions={
-						<Button onClick={() => void createFromScratch()} disabled={create.isLoading}>
+						<Button
+							onClick={() => void createFromScratch()}
+							disabled={create.isLoading}
+						>
 							Create pipeline
 						</Button>
 					}
