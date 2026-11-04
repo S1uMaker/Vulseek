@@ -2,6 +2,15 @@
 
 This file provides guidance to AI coding agents (e.g. Claude Code, Codex CLI, ZCode) when working with code in this repository.
 
+## Maintaining This File
+
+AI agents may modify this file dynamically while working, but every change must be one of only two kinds:
+
+- **Very important information** — facts that prevent significant wasted effort or wrong assumptions (e.g. verified machine-specific environment constraints, maintainer workflow rules).
+- **Errata** — corrections of statements in this file that are factually wrong.
+
+Anything else — general documentation, feature explanations, details already evident from the code — does not belong here.
+
 ## Engineering Principles
 
 - Do not optimize for backward compatibility. Remove deprecated code paths directly instead of adding compatibility layers or fallback mechanisms; migrate database data when necessary.
