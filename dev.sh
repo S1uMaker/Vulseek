@@ -522,7 +522,7 @@ start_traefik() {
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly \
         --mount type=volume,source="$TRAEFIK_DATA_VOLUME",target=/etc/traefik \
         --constraint 'node.role==manager' \
-        traefik:v3.5.0 \
+        traefik:v3.6 \
         --api.insecure=true \
         --api.dashboard=true \
         --providers.swarm=true \
