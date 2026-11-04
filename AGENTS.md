@@ -44,6 +44,8 @@ Core upstream: Next.js frontend + tRPC API backend + PostgreSQL + Redis + Docker
 # Development
 pnpm run vulseek:dev          # Start development server (Next.js + API)
 pnpm run vulseek:dev:turbopack # Start with Turbopack
+# NOTE: if dev pages 404 with a Turbopack panic ("CJS module can't be async"),
+# rm -rf apps/vulseek/.next and restart without turbopack.
 pnpm run vulseek:setup         # Initial setup (creates .env, runs migrations)
 pnpm run server:script         # Switch packages/server to dev mode (src imports)
 
@@ -70,6 +72,8 @@ pnpm vitest run __test__/compose/compose.test.ts  # Run a single test file
 pnpm vitest __test__/compose/                     # Watch mode for a directory
 ```
 
+> Known environment limitation: `.tsx` component tests fail with `ERR_REQUIRE_ESM` in this setup (jsdom import chain on Node 20.16). Pre-existing and environmental — don't chase them; the scan contract tests under `packages/server/src/services/scan/` are the reliable suite.
+
 ### Docker Swarm dev environment (`dev.sh`)
 
 An alternative dev workflow runs the whole stack (Vulseek, Postgres, Redis, Traefik) as Docker Swarm services, matching production orchestration more closely than the bare `pnpm run vulseek:dev` flow above:
@@ -88,6 +92,12 @@ An alternative dev workflow runs the whole stack (Vulseek, Postgres, Redis, Trae
 ```
 
 `run.sh` is the equivalent manager for the released GHCR image (`vulseek-*-release` services). Development defaults the scan sandbox host mount to `./vulseek-data-dev`; release uses `./vulseek-data-release`. Override either with `VULSEEK_SCAN_CONTEXT_HOST_PATH`.
+
+### Bare-metal dev on this machine (WSL2 + Docker Desktop)
+
+The operative workflow here is **not** `dev.sh`: `pnpm vulseek:dev` runs against standalone Docker services named `vulseek-postgres`, `vulseek-redis` (swarm services under legacy names that do NOT match the `*-dev` variables in dev.sh) and a standalone `vulseek-traefik` container. Therefore `./dev.sh stop` cannot remove the legacy-named services and `./dev.sh start` would deploy a parallel stack — manage them with `docker service` / `docker` directly. Real connection strings live in `apps/vulseek/.env` (gitignored); a scan run additionally requires `VULSEEK_SCAN_CONTEXT_HOST_PATH`, `VULSEEK_RUNTIME_API_SECRET` and `VULSEEK_RUNTIME_API_URL` (see `.env.example`).
+
+Windows Hyper-V dynamic port exclusions shift across reboots and can swallow fixed ports — postgres 5432 → 25432 and redis 6379 → 26379 both happened on this host. If a port refuses connections from the host while its container is healthy, check `netsh.exe interface ipv4 show excludedportrange protocol=tcp` and republish on a port outside the excluded ranges.
 
 ## Architecture
 
@@ -156,7 +166,7 @@ This is the primary Vulseek contribution — an AI-driven multi-stage vulnerabil
 
 ### Scan Job Lifecycle
 
-Scan jobs progress through states: `pending` → `running` → `completed` / `failed` / `paused` / `canceled`. Jobs support **pause**, **resume**, and **cancel** operations. Scan modes:
+Scan jobs progress through states: `pending` → `running` → `finalizing` → `finished` / `partially_finished`, plus `failed` / `paused` / `canceled` (see `scanJobStatusEnum` in `packages/server/src/db/schema/scan.ts`; there is no `completed` status). The settlement loop moves a converged graph `running` → `finalizing` (`settleScanJobRepo`) → `finished` (`finalizeScanJobRepo`) in `persistence/job-settlement.repo.ts`; only terminal jobs (`finished`, `partially_finished`, `failed`, `canceled`) can be deleted. Jobs support **pause**, **resume**, and **cancel** operations. Scan modes:
 - **Full scan** — complete repository analysis from scratch
 - **Delta scan** — incremental re-scan of changed modules since the last scan
 - **Research** — security research pipeline (`research.yaml`)
@@ -174,6 +184,8 @@ The pipeline topology used to be two parallel branches (a rule/pattern-matching 
   - `schemas/*.yaml` — shared JSON Schema fragments referenced via `$ref: "#/schemas/Name"`
 - **Loading & validation**: `scan-pipeline-definitions.ts` reads and Zod-validates the YAML into `ScanPipelineStageConfig`/`ScanPipelineEdgeConfig`; `scan-pipeline-schema-contracts.ts` resolves `$ref`/`$pathOf` schema references into JSON Schema or Zod contracts.
 - **Execution**: `pipeline-runner.ts` is a generic DAG executor over `StageDefinition`s (`packages/server/src/services/scan/stages/*.stage.ts`) driven by the loaded edges — it doesn't know about specific stages, just how to fan out, map, route, and loop between them.
+
+**These YAML files are seeding templates only.** At startup they seed the built-in pipelines into the DB (`scan_pipelines` / `scan_pipeline_versions` / `scan_pipeline_profiles`); every run executes the **published version** stored in the DB (draft → publish model, with per-pipeline runtime profiles). Editing a definition file does not change what runs until it is re-seeded or the change is made through the pipeline editor/publish flow.
 
 ```
 full:  repository-profile ─(fanOut modules)─► attack-surface-model ─► identify-target ─(fanOut targets)─► scan-target
@@ -297,7 +309,7 @@ upstream adapter does not expose `session/fork`.
 
 ### Commit Messages
 
-Uses **Conventional Commits** via commitlint (`@commitlint/config-conventional`). Format: `type(scope): description`. Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`.
+Uses **Conventional Commits** via commitlint (`@commitlint/config-conventional`). Format: `type(scope): description`. Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`. Work directly on `main` — commit and push without feature branches (maintainer's workflow).
 
 ### Biome Lint Rules (errors that block commits)
 
