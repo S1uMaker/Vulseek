@@ -161,7 +161,10 @@ import {
 	applyCodexRuntimeConfigToml,
 	sanitizeCodexAcpConfigToml,
 } from "./scan/runtime/codex-config-compat";
-import { reconstructTaskInput } from "./scan/runtime/reconstruct-task-input";
+import {
+	reconstructTaskInput,
+	reconstructTaskLaunchInput,
+} from "./scan/runtime/reconstruct-task-input";
 import {
 	persistJobAgentHomeTokenUsage,
 	persistTaskAgentHomeTokenUsage,
@@ -5433,7 +5436,22 @@ const clearTaskArtifactsForRetry = async (scanJobId: string, task: Task) => {
 		stageName: task.stageName,
 		taskName: task.name,
 	});
-	await fs.rm(taskDirPath, { recursive: true, force: true }).catch(() => {});
+	// Inputs are materialized by the dispatch-time edge artifact copies, which
+	// do not re-run for a retried task (the producer message is already
+	// complete). Keep inputs/ so prompt expressions like
+	// $file($input.modulePath) still resolve; everything else is rebuilt.
+	const entries = await fs
+		.readdir(taskDirPath, { withFileTypes: true })
+		.catch(() => []);
+	for (const entry of entries) {
+		if (entry.name === "inputs") {
+			continue;
+		}
+		const entryPath = path.join(taskDirPath, entry.name);
+		await fs
+			.rm(entryPath, { recursive: true, force: true })
+			.catch(() => {});
+	}
 };
 
 const MANUAL_STOP_MESSAGE = "Stopped manually";
@@ -5929,7 +5947,7 @@ export const startCandidateVerification = async (
 		context,
 		latestAnalysisTask,
 	);
-	const analyzeFindingStageInput = (await reconstructTaskInput(
+	const analyzeFindingStageInput = (await reconstructTaskLaunchInput(
 		latestAnalysisTask,
 	).catch(() => null)) as CandidateAnalysisTaskInput | null;
 	const latestAnalysisOutputs = await listMessagesBySourceTaskIdRepo(

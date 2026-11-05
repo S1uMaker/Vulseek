@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-const TASK_ROOT_IN_CONTAINER = "/task";
+export const TASK_ROOT_IN_CONTAINER = "/task";
 
 export const taskArtifactPathSchemaMessage =
 	"Task artifact paths must be absolute paths under /task";

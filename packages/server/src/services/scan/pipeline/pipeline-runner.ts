@@ -52,6 +52,7 @@ import {
 	countActiveTasksByScanJobAndStageRepo,
 	countOpenTasksByScanJobIdRepo,
 	countTasksByScanJobStageAndStatusRepo,
+	createTaskRepo,
 	findTaskByIdRepo,
 	listActiveTasksByScanJobAndStageRepo,
 	listActiveTasksByScanJobIdRepo,
@@ -65,8 +66,10 @@ import {
 import { readCandidateIdFromTaskInputArtifact } from "../persistence/task-artifact-resolver";
 import { AGENT_RUNTIME_FILE_NAMES } from "../runtime/agent-runtime-files";
 import {
+	applyTaskEdgeArtifactInputFields,
 	reconstructTaskInput,
 	reconstructTaskInputFromSource,
+	reconstructTaskLaunchInput,
 } from "../runtime/reconstruct-task-input";
 import { createTaskIdForSource } from "../task-id";
 import { stampResearchFindingsMessageIdRepo } from "../persistence/research-finding.repo";
@@ -2922,7 +2925,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 	};
 	let stepStartedAt = Date.now();
 	const stageCtx = await createStageContextForTask(runtime, task);
-	const input = await reconstructTaskInput(task);
+	const input = await reconstructTaskLaunchInput(task);
 	const { stdoutPath } = await getTaskRuntimePaths(stageCtx);
 	const stdoutContent = await readFileIfExists(stdoutPath);
 	logInspectTiming("load_runtime_logs", stepStartedAt);
@@ -3261,6 +3264,42 @@ const consumePromptQueueJob = async <
 	});
 };
 
+const recordBackfillMaterializeFailure = async (
+	scanJobId: string,
+	stageName: string,
+	parsed: { messageId: string; edgeName: string; itemIndex: number },
+	error: unknown,
+) => {
+	const taskId = createTaskIdForSource({
+		sourceMessageId: parsed.messageId,
+		sourceEdgeName: parsed.edgeName,
+		sourceItemIndex: parsed.itemIndex,
+	});
+	const errorMessage = getErrorMessage(error);
+	const existing = await findTaskByIdRepo(taskId).catch(() => null);
+	if (existing) {
+		await transitionTaskStatusRepo({
+			taskId,
+			from: ["pending"],
+			to: "failed",
+			patch: { errorMessage },
+		}).catch(() => {});
+		return;
+	}
+	await createTaskRepo({
+		taskId,
+		scanJobId,
+		name: `${stageName} materialize-failed #${parsed.itemIndex}`,
+		stageName,
+		lifecycle: "turn",
+		sourceMessageId: parsed.messageId,
+		sourceEdgeName: parsed.edgeName,
+		sourceItemIndex: parsed.itemIndex,
+		status: "failed",
+		errorMessage,
+	}).catch(() => {});
+};
+
 const backfillStageQueue = async <
 	TPipelineContext extends PipelineContext,
 	TInput,
@@ -3350,6 +3389,18 @@ const backfillStageQueue = async <
 				itemIndex: parsed.itemIndex,
 				errorMessage: getErrorMessage(error),
 			});
+			// A failed materialization means this queued item can never become a
+			// task. Record it as a failed task so the failure is visible in the
+			// tasks tab and settlement lands on partially_finished instead of
+			// silently converging to finished with the downstream stage missing.
+			// The waiting queue entry is dropped — it would never materialize.
+			await recordBackfillMaterializeFailure(
+				runtime.ctx.scanJobId,
+				stageState.stageName,
+				parsed,
+				error,
+			).catch(() => {});
+			await waitingJob.remove().catch(() => {});
 			continue;
 		}
 		if (materialized.action === "consumed") {
@@ -3456,7 +3507,7 @@ const launchPendingStageTasks = async <
 		if (!pendingTask || pendingTask.status !== "pending") {
 			continue;
 		}
-		const input = (await reconstructTaskInput(pendingTask).catch(
+		const input = (await reconstructTaskLaunchInput(pendingTask).catch(
 			() => null,
 		)) as TInput | null;
 		if (input == null) {
@@ -3510,7 +3561,7 @@ const materializeOutputQueueExecution = async <
 		if (existing.status !== "pending") {
 			return { action: "consumed" };
 		}
-		const input = (await reconstructTaskInput(existing).catch(
+		const input = (await reconstructTaskLaunchInput(existing).catch(
 			() => null,
 		)) as TInput | null;
 		if (input == null) {
@@ -3561,6 +3612,17 @@ const materializeOutputQueueExecution = async <
 	if (!createdTaskId) {
 		return { action: "wait" };
 	}
+	// The launch input must point at the consumer-side artifact copies that
+	// createTasks just materialized, while `nextInput` (used for the copies
+	// above) keeps the producer-relative paths.
+	const launchInput = await applyTaskEdgeArtifactInputFields({
+		value: nextInput,
+		scanJobId: runtime.ctx.scanJobId,
+		sourceMessageId: job.messageId,
+		sourceEdgeName: job.edgeName,
+		taskId: createdTaskId,
+		assumeMaterialized: true,
+	});
 	await bindDownstreamTaskRuntime(runtime, {
 		fromTaskId: producer.taskId,
 		fromStageName: producer.stageName,
@@ -3572,7 +3634,7 @@ const materializeOutputQueueExecution = async <
 		action: "launch",
 		execution: {
 			taskId: createdTaskId,
-			input: nextInput as TInput,
+			input: launchInput as TInput,
 		},
 	};
 };
@@ -4410,7 +4472,9 @@ const dispatchPipelineMessage = async <
 ) => {
 	const fromTask = await findTaskByIdRepo(output.sourceTaskId);
 	try {
-		const stageInput = await reconstructTaskInput(fromTask);
+		// Launch semantics: hop>=2 artifact copies must source the producer's
+		// own /task/inputs/* copies, which only the rewritten input points at.
+		const stageInput = await reconstructTaskLaunchInput(fromTask);
 		const stage = runtime.stageStates.get(fromTask.stageName)?.stage;
 		await dispatchClaimedMessage({
 			output,
