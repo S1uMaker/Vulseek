@@ -318,7 +318,7 @@ upstream adapter does not expose `session/fork`.
 
 ### Commit Messages
 
-Uses **Conventional Commits** via commitlint (`@commitlint/config-conventional`). Format: `type(scope): description`. Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`. Work directly on `main` — commit and push without feature branches (maintainer's workflow).
+Uses **Conventional Commits** via commitlint (`@commitlint/config-conventional`). Format: `type(scope): description`. Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`. Work directly on `main` — no feature branches. **Commit and push only when the maintainer explicitly asks**; never commit or push on your own initiative.
 
 ### Biome Lint Rules (errors that block commits)
 

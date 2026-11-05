@@ -78,3 +78,6 @@ tmp/ppl-visual-full.png
 
 # ZCode (AI tool) local session state
 /.zcode/
+
+# Python bytecode caches (scan runtime skills)
+__pycache__/
