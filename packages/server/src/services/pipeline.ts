@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, max, sql } from "drizzle-orm";
 import { db } from "@vulseek/server/db";
 import {
+	scanJobs,
 	scanPipelines,
 	scanPipelineVersions,
 } from "@vulseek/server/db/schema";
@@ -593,5 +594,35 @@ export const deletePipelineDraftForOrganization = async (
 			updatedBy: userId,
 		})
 		.where(eq(scanPipelines.pipelineId, pipelineId));
+	return { ok: true };
+};
+
+export const deletePipelineForOrganization = async (
+	input: PipelineManagerInput & { pipelineId: string },
+) => {
+	const { organizationId, pipelineId } = input;
+	await findPipelineForOrganization(organizationId, pipelineId);
+	// scan_jobs.pipelineId is ON DELETE restrict: versions and profiles cascade
+	// with the pipeline, but any scan job (even terminal) keeps it alive.
+	const [job] = await db
+		.select({ scanJobId: scanJobs.scanJobId })
+		.from(scanJobs)
+		.where(eq(scanJobs.pipelineId, pipelineId))
+		.limit(1);
+	if (job) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"Pipeline has scan jobs and cannot be deleted. Delete its scan jobs first, or archive it instead.",
+		});
+	}
+	await db
+		.delete(scanPipelines)
+		.where(
+			and(
+				eq(scanPipelines.pipelineId, pipelineId),
+				eq(scanPipelines.organizationId, organizationId),
+			),
+		);
 	return { ok: true };
 };

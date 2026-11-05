@@ -43,6 +43,7 @@ export const apiDuplicatePipeline = apiPipelineId.extend({
 export const apiArchivePipeline = apiPipelineId;
 export const apiUnarchivePipeline = apiPipelineId;
 export const apiDeletePipelineDraft = apiPipelineId;
+export const apiDeletePipeline = apiPipelineId;
 
 export const apiPipelineProfileId = z.object({
 	pipelineProfileId: z.string().min(1),

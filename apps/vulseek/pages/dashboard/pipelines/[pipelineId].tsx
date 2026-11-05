@@ -7,6 +7,7 @@ import {
 	FilePenLine,
 	Redo2,
 	Save,
+	Trash2,
 	Undo2,
 	Upload,
 	Workflow,
@@ -103,6 +104,7 @@ const EditorPage = ({
 	const setCurrentVersion = api.pipeline.setCurrentVersion.useMutation();
 	const archive = api.pipeline.archive.useMutation();
 	const unarchive = api.pipeline.unarchive.useMutation();
+	const deletePipeline = api.pipeline.delete.useMutation();
 	const utils = api.useUtils();
 	const profileDirtyRef = React.useRef(false);
 	const handleProfileDirtyChange = React.useCallback((value: boolean) => {
@@ -614,6 +616,33 @@ const EditorPage = ({
 											<Archive className="size-4" />
 										</Button>
 									)}
+									<Button
+										variant="ghost"
+										size="icon"
+										className="size-8 text-muted-foreground hover:text-red-600"
+										onClick={() => {
+											if (
+												window.confirm(
+													"Permanently delete this pipeline with all its versions and runtime profiles? This cannot be undone.",
+												)
+											) {
+												void deletePipeline
+													.mutateAsync({ pipelineId })
+													.then(() => toast.success("Pipeline deleted"))
+													.then(() => void router.push("/dashboard/pipelines"))
+													.catch((error: unknown) =>
+														toast.error(
+															error instanceof Error
+																? error.message
+																: "Delete failed",
+														),
+													);
+											}
+										}}
+										aria-label="Delete pipeline"
+									>
+										<Trash2 className="size-4" />
+									</Button>
 								</>
 							) : (
 								<>

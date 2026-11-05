@@ -4,6 +4,7 @@ import {
 	apiCopyVersionToDraft,
 	apiCreatePipeline,
 	apiCreatePipelineRun,
+	apiDeletePipeline,
 	apiDeletePipelineDraft,
 	apiCreatePipelineProfile,
 	apiUpdatePipelineProfile,
@@ -24,6 +25,7 @@ import {
 	copyPipelineVersionToDraftForOrganization,
 	createPipelineForOrganization,
 	deletePipelineDraftForOrganization,
+	deletePipelineForOrganization,
 	duplicatePipelineForOrganization,
 	getPipelineForOrganization,
 	getPipelineVersionForOrganization,
@@ -287,6 +289,16 @@ export const pipelineRouter = createTRPCRouter({
 		.mutation(async ({ ctx, input }) => {
 			requireManager(ctx.user.role);
 			return unarchivePipelineForOrganization({
+				...managerContext(ctx),
+				...input,
+			});
+		}),
+
+	delete: protectedProcedure
+		.input(apiDeletePipeline)
+		.mutation(async ({ ctx, input }) => {
+			requireManager(ctx.user.role);
+			return deletePipelineForOrganization({
 				...managerContext(ctx),
 				...input,
 			});
